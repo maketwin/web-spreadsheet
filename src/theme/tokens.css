@@ -1,0 +1,14 @@
+:root {
+  --ss-bg: #ffffff;
+  --ss-color: #333333;
+  --ss-border: #e0e0e0;
+  --ss-grid: #f0f0f0;
+  --ss-selected: #e8f0ff;
+  --ss-header-bg: #f7f7f7;
+  --ss-toolbar-bg: #ffffff;
+  --ss-text: #333333;
+  --ss-text-light: #666666;
+  --ss-accent: #1677ff;
+  --ss-row-height: 25px;
+  --ss-col-width: 100px;
+}

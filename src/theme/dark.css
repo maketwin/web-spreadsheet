@@ -1,0 +1,11 @@
+:root[data-spreadsheet-theme="dark"] {
+  --ss-bg: #1e1e1e;
+  --ss-color: #d4d4d4;
+  --ss-border: #3c3c3c;
+  --ss-grid: #2d2d2d;
+  --ss-selected: #264f78;
+  --ss-header-bg: #252526;
+  --ss-toolbar-bg: #333333;
+  --ss-text: #d4d4d4;
+  --ss-text-light: #999999;
+}
