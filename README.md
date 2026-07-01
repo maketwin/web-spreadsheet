@@ -11,8 +11,10 @@ engine, and plugin system.
 - [x] TypeScript strict
 - [x] Vite 5 + vitest
 - [x] Dark mode CSS variables
-- [ ] 4-layer architecture (facade/commands/store/renderer)
-- [ ] Command pattern + undo/redo
+- [x] 4-layer architecture (facade/commands/store/renderer)
+- [x] Store (reactive snapshot data layer)
+- [x] EventBus (subscribe + wildcard)
+- [x] Command pattern + undo/redo
 - [ ] Virtual scrolling (60fps for 10k rows)
 - [ ] Formula engine v1 (30 functions)
 - [ ] Plugin system
