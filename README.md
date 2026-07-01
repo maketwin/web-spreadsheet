@@ -32,6 +32,9 @@ engine, and plugin system.
 - [x] Row height / column width drag-resize with min/max constraints
 - [x] Double-click border auto-fits row/column to content
 - [x] Fill handle drag-to-fill with copy/series modes
+- [x] Merge/unmerge cells (Format menu + renderer spanning)
+- [x] Number format (currency/percent/date/time/scientific with NumberFormatter + undo/redo)
+- [x] Chart stub dialog (placeholder for upcoming chart feature)
 
 ## Architecture
 ```
