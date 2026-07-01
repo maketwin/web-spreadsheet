@@ -1,44 +1,70 @@
 # web-spreadsheet v2.0
 
-![version](https://img.shields.io/badge/version-v1.0.0-brightgreen)
+![version](https://img.shields.io/badge/version-v1.1.0-brightgreen)
 
 A modern, lightweight TypeScript spreadsheet SDK with 4-layer architecture.
 Built from scratch based on the original [x-spreadsheet](https://github.com/myliang/x-spreadsheet)
 (MIT, 14.6k ⭐) — but with TypeScript strict, virtual scrolling, formula
 engine, and plugin system.
 
-> **Status:** v1.0 released. See [PLAN.md](./PLAN.md) for the 7-week roadmap.
+> **Status:** v1.1.0 released. See [CHANGELOG.md](./CHANGELOG.md) for release notes.
 
 ## Features
-- [x] TypeScript strict
+
+### Core
+- [x] TypeScript strict (`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`)
 - [x] Vite 5 + vitest
 - [x] Dark mode CSS variables
 - [x] 4-layer architecture (facade/commands/store/renderer)
+
+### Data Layer
 - [x] Store (reactive snapshot data layer)
 - [x] EventBus (subscribe + wildcard)
 - [x] Command pattern + undo/redo
+- [x] Multi-sheet support (add/rename/delete/activate)
+
+### Rendering
 - [x] Virtual scrolling (visible range calculation)
 - [x] Dirty region tracking
-- [x] Canvas renderer + React UI placeholders
-- [x] Formula engine v1 (32 functions)
-- [x] Plugin system
-- [x] Excel-style top menu bar (File/Edit/View/Insert/Format/Tools/Help)
-- [x] File menu with local open/save/import/export actions
-- [x] Edit menu with undo/redo, clipboard, find/replace, select all, clear
-- [x] Insert menu with row/column insert/delete and merge actions
-- [x] Format menu with font, size, color, number format, alignment, wrap
-- [x] View/Tools/Help menus with zoom, options, plugins, about, shortcuts
-- [x] Keyboard shortcut integration for menu actions
-- [x] Row height / column width drag-resize with min/max constraints
-- [x] Double-click border auto-fits row/column to content
-- [x] Fill handle drag-to-fill with copy/series modes
-- [x] Merge/unmerge cells (Format menu + renderer spanning)
-- [x] Number format (currency/percent/date/time/scientific with NumberFormatter + undo/redo)
-- [x] Conditional formatting (data bar, color scale, formula conditions)
+- [x] Canvas renderer + React UI shell
+- [x] Row height / column width drag-resize
+- [x] Double-click auto-fit row/column
+- [x] Freeze panes
+
+### Formula Engine
+- [x] 32 built-in functions (SUM, AVERAGE, IF, VLOOKUP, etc.)
+- [x] Dependency graph with automatic recalculation
 - [x] Cross-sheet formula references (=Sheet2!A1, =SUM(Sheet2!A1:A5))
+
+### UI Components
+- [x] Excel-style top menu bar (File/Edit/View/Insert/Format/Tools/Help)
+- [x] Interaction toolbar (bold/italic/underline/align/zoom/formula/grid)
+- [x] Formula bar with cell reference display
+- [x] Status bar (cell count, selection SUM/AVG, zoom, auto-save indicator)
+- [x] Bottom sheet tabs (sticky at viewport bottom)
+- [x] Context menu
+- [x] Double-click cell edit with IME (Chinese input method) support
+
+### Formatting
+- [x] Cell styles (bold, italic, underline, color, bgcolor, align, font)
+- [x] Number format (currency/percent/date/time/scientific)
+- [x] Conditional formatting (data bar, color scale, formula conditions)
 - [x] Format painter (copy cell styles with brush mode)
-- [x] Multi-sheet workflow (add/rename/delete/activate sheet tabs)
-- [x] Chart stub dialog (placeholder for upcoming chart feature)
+- [x] Merge/unmerge cells
+
+### File I/O
+- [x] Auto-save to IndexedDB (1.5s debounce, restore on startup)
+- [x] Real xlsx import/export (SheetJS)
+- [x] JSON import/export
+- [x] CSV/TSV import
+- [x] File menu save/open/import/export actions
+
+### Other
+- [x] Fill handle drag-to-fill (copy/series modes)
+- [x] Find and replace
+- [x] Plugin system
+- [x] Keyboard shortcut integration
+- [x] Chart stub dialog (placeholder)
 
 ## Architecture
 ```
