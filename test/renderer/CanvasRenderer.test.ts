@@ -1,6 +1,6 @@
 import { fireEvent } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CanvasRenderer, canvasPointToCell } from '../../src/renderer/CanvasRenderer';
+import { CanvasRenderer, canvasPointToCell, canvasPointToHeader } from '../../src/renderer/CanvasRenderer';
 import { Store } from '../../src/store/Store';
 
 function makeCanvas(): HTMLCanvasElement {
@@ -21,11 +21,15 @@ function installCanvasContext(): Partial<CanvasRenderingContext2D> {
     clip: vi.fn(),
     fillRect: vi.fn(),
     fillText: vi.fn(),
+    lineTo: vi.fn(),
+    measureText: vi.fn(() => ({ width: 24 } as TextMetrics)),
+    moveTo: vi.fn(),
     rect: vi.fn(),
     restore: vi.fn(),
     save: vi.fn(),
     scale: vi.fn(),
     setTransform: vi.fn(),
+    stroke: vi.fn(),
     strokeRect: vi.fn(),
   };
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as CanvasRenderingContext2D);
@@ -70,11 +74,23 @@ describe('CanvasRenderer', () => {
     expect(canvasPointToCell(canvas, 10 + 46 + 205, 20 + 25 + 55)).toEqual({ r: 2, c: 2 });
   });
 
+  it('converts zoomed canvas coordinates to cell addresses', () => {
+    const canvas = makeCanvas();
+
+    expect(canvasPointToCell(canvas, 10 + 46 + 205, 20 + 25 + 55, 0, 0, 200)).toEqual({ r: 1, c: 1 });
+  });
+
   it('ignores row and column headers during coordinate conversion', () => {
     const canvas = makeCanvas();
 
     expect(canvasPointToCell(canvas, 40, 50)).toBeNull();
     expect(canvasPointToCell(canvas, 80, 30)).toBeNull();
+  });
+
+  it('converts zoomed header coordinates to column addresses', () => {
+    const canvas = makeCanvas();
+
+    expect(canvasPointToHeader(canvas, 10 + 46 + 205, 20 + 5, 0, 0, 200)).toEqual({ type: 'column', c: 1 });
   });
 
   it('emits mousedown cell clicks with converted coordinates', () => {
@@ -87,6 +103,36 @@ describe('CanvasRenderer', () => {
 
     expect(onCellClick).toHaveBeenCalledWith({ r: 1, c: 1 });
     expect(callbacks.length).toBe(1);
+    renderer.destroy();
+  });
+
+  it('extends column selection while dragging column headers', () => {
+    installCanvasContext();
+    installAnimationFrames();
+    const onColumnSelect = vi.fn();
+    const canvas = makeCanvas();
+    const renderer = new CanvasRenderer({ canvas, store: new Store(), onColumnSelect });
+
+    fireEvent.mouseDown(canvas, { clientX: 10 + 46 + 5, clientY: 20 + 5 });
+    fireEvent.mouseMove(window, { clientX: 10 + 46 + 205, clientY: 20 + 5 });
+
+    expect(onColumnSelect).toHaveBeenNthCalledWith(1, 0, false);
+    expect(onColumnSelect).toHaveBeenNthCalledWith(2, 2, true);
+    renderer.destroy();
+  });
+
+  it('extends row selection while dragging row headers', () => {
+    installCanvasContext();
+    installAnimationFrames();
+    const onRowSelect = vi.fn();
+    const canvas = makeCanvas();
+    const renderer = new CanvasRenderer({ canvas, store: new Store(), onRowSelect });
+
+    fireEvent.mouseDown(canvas, { clientX: 10 + 5, clientY: 20 + 25 + 5 });
+    fireEvent.mouseMove(window, { clientX: 10 + 5, clientY: 20 + 25 + 55 });
+
+    expect(onRowSelect).toHaveBeenNthCalledWith(1, 0, false);
+    expect(onRowSelect).toHaveBeenNthCalledWith(2, 2, true);
     renderer.destroy();
   });
 
@@ -113,6 +159,19 @@ describe('CanvasRenderer', () => {
     expect(ctx.fillRect).toHaveBeenCalledWith(0, 0, 300, 150);
     expect(ctx.fillStyle).toBe('#333');
     document.documentElement.style.removeProperty('--ss-bg');
+    renderer.destroy();
+  });
+
+  it('renders formulas when showFormula is enabled', () => {
+    const ctx = installCanvasContext();
+    const callbacks = installAnimationFrames();
+    const store = new Store();
+    store.setCell(0, 0, { text: '3', formula: '=SUM(1,2)' });
+    const renderer = new CanvasRenderer({ canvas: makeCanvas(), store, showFormula: true });
+
+    callbacks[0]?.(0);
+
+    expect(ctx.fillText).toHaveBeenCalledWith('=SUM(1,2)', expect.any(Number), expect.any(Number));
     renderer.destroy();
   });
 });

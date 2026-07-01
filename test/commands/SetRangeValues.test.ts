@@ -40,4 +40,19 @@ describe('SetRangeValues', () => {
     expect(store.getCell(1, 0)).toBeUndefined();
     expect(store.getCell(1, 1)).toEqual({ text: 'old B2' });
   });
+
+  it('clears stale formulas when text is overwritten', () => {
+    const store = new Store();
+    store.setCell(0, 0, { text: '3', formula: '=SUM(1,2)', value: 3 });
+
+    new SetRangeValues({
+      r1: 0,
+      c1: 0,
+      r2: 0,
+      c2: 0,
+      values: [[{ text: '' }]],
+    }).execute(store);
+
+    expect(store.getCell(0, 0)).toEqual({ text: '' });
+  });
 });

@@ -28,10 +28,9 @@ info.id = 'info';
 info.className = 'demo-info';
 root.parentElement?.insertBefore(info, root.nextSibling);
 updateInfo(ss);
+ss.store.subscribe(() => updateInfo(ss));
 
 function updateInfo(spreadsheet: Spreadsheet): void {
-  window.setTimeout(() => {
-    const total = spreadsheet.store.getCell(1, 5)?.text ?? '';
-    info.textContent = `web-spreadsheet v1.0 demo · 产品A总计 ${total}`;
-  }, 0);
+  const total = spreadsheet.store.getCell(1, 5)?.text ?? '';
+  info.textContent = `web-spreadsheet v1.0 demo · 产品A总计 ${total}`;
 }

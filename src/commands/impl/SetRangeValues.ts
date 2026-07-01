@@ -1,4 +1,5 @@
 import { Command } from '../Command';
+import { cellFromText } from '../../util/cell';
 
 import type { Store } from '../../store/Store';
 import type { Cell } from '../../types';
@@ -27,10 +28,7 @@ export class SetRangeValues extends Command<SetRangeValuesArgs> {
         const newValue = valueRow?.[c - c1];
         row.push(oldCell);
 
-        if (newValue !== undefined) {
-          const text = newValue.text ?? oldCell?.text ?? '';
-          store.setCell(r, c, { ...oldCell, ...newValue, text });
-        }
+        if (newValue !== undefined) store.setCell(r, c, nextCell(oldCell, newValue));
       }
       this.oldValues.push(row);
     }
@@ -43,6 +41,14 @@ export class SetRangeValues extends Command<SetRangeValuesArgs> {
       values: this.oldValues,
     });
   }
+}
+
+function nextCell(oldCell: Cell | undefined, newValue: Partial<Cell>): Cell {
+  const text = newValue.text ?? oldCell?.text ?? '';
+  if (newValue.text !== undefined && newValue.formula === undefined && newValue.value === undefined) {
+    return cellFromText({ ...oldCell, ...newValue, text }, text);
+  }
+  return { ...oldCell, ...newValue, text };
 }
 
 type CellMatrix = Array<Array<Cell | undefined>>;

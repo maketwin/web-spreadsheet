@@ -1,7 +1,7 @@
 import { BarChartOutlined, EditOutlined, FileOutlined, FormatPainterOutlined, QuestionCircleOutlined, SettingOutlined, TableOutlined } from '@ant-design/icons';
-import { Dropdown, Form, InputNumber, Menu, Modal, Switch, message } from 'antd';
+import { Dropdown, Form, InputNumber, Modal, Switch, message } from 'antd';
 import type { MenuProps } from 'antd';
-import { useMemo, useRef, useState, type FC, type ReactElement } from 'react';
+import { useMemo, useRef, useState, type FC, type ReactElement, type ReactNode } from 'react';
 import { ClipboardService } from '../../clipboard/ClipboardService';
 import { DeleteColCommand } from '../../commands/impl/DeleteCol';
 import { DeleteRowCommand } from '../../commands/impl/DeleteRow';
@@ -23,14 +23,8 @@ import { InsertRowDialog, type InsertRowValues } from './dialogs/InsertRowDialog
 import { NumberFormatDialog, type NumberFormatValues } from './dialogs/NumberFormatDialog';
 import { ShortcutsDialog } from './dialogs/ShortcutsDialog';
 import { ZoomDialog, type ZoomValues } from './dialogs/ZoomDialog';
-import { EditMenu } from './EditMenu';
-import { FileMenu } from './FileMenu';
-import { FormatMenu } from './FormatMenu';
-import { HelpMenu } from './HelpMenu';
-import { InsertMenu } from './InsertMenu';
-import { ToolsMenu } from './ToolsMenu';
+import { shortcutLabel } from './shortcutLabel';
 import type { DialogName, MenuActions, MenuContext, ViewState } from './types';
-import { ViewMenu } from './ViewMenu';
 
 export interface MenuBarProps extends MenuContext { readonly view?: Partial<ViewState> }
 
@@ -43,28 +37,122 @@ export const MenuBar: FC<MenuBarProps> = (props) => {
   const view = makeView(props.view, zoom, showFormula, showGrid, setZoom, setShowFormula, setShowGrid);
   const actions = useMemo(() => makeActions(props, setDialog, view, fileInput), [props, view]);
 
-  const items = topItems(actions, view);
-  return <div className="ss-menu-bar">
-    <Menu mode="horizontal" selectable={false} triggerSubMenuAction="click" items={items} />
+  const menus = topMenus(actions, view);
+  return <div className="ss-menu-bar" role="menubar" aria-label="Spreadsheet menu">
+    <div className="ss-menu-strip">
+      {menus.map((menu) => <Dropdown key={menu.key} trigger={['click']} placement="bottomLeft" menu={{ items: menu.items, onClick: ({ key }) => actions.run(String(key)) }}>
+        <button className="ss-menu-trigger" type="button" role="menuitem" aria-haspopup="menu">
+          {menu.icon}<span>{menu.label}</span>
+        </button>
+      </Dropdown>)}
+    </div>
     <input ref={fileInput} hidden type="file" accept=".csv,.tsv,.xlsx,.json" onChange={(e) => openLocalFile(e, props)} />
     <Dialogs dialog={dialog} setDialog={setDialog} props={props} view={view} />
   </div>;
 };
 
-function topItems(actions: MenuActions, view: ViewState): NonNullable<MenuProps['items']> {
+interface TopMenu { readonly key: string; readonly label: string; readonly icon: ReactElement; readonly items: NonNullable<MenuProps['items']> }
+
+function topMenus(actions: MenuActions, view: ViewState): readonly TopMenu[] {
+  void actions;
   return [
-    top('file', '文件(F)', <FileOutlined />, <FileMenu actions={actions} />),
-    top('edit', '编辑(E)', <EditOutlined />, <EditMenu actions={actions} />),
-    top('view', '视图(V)', <TableOutlined />, <ViewMenu actions={actions} view={view} />),
-    top('insert', '插入(I)', <BarChartOutlined />, <InsertMenu actions={actions} />),
-    top('format', '格式(O)', <FormatPainterOutlined />, <FormatMenu actions={actions} />),
-    top('tools', '工具(T)', <SettingOutlined />, <ToolsMenu actions={actions} />),
-    top('help', '帮助(H)', <QuestionCircleOutlined />, <HelpMenu actions={actions} />),
+    { key: 'file', label: '文件(F)', icon: <FileOutlined />, items: fileItems() },
+    { key: 'edit', label: '编辑(E)', icon: <EditOutlined />, items: editItems() },
+    { key: 'view', label: '视图(V)', icon: <TableOutlined />, items: viewItems(view) },
+    { key: 'insert', label: '插入(I)', icon: <BarChartOutlined />, items: insertItems() },
+    { key: 'format', label: '格式(O)', icon: <FormatPainterOutlined />, items: formatItems() },
+    { key: 'tools', label: '工具(T)', icon: <SettingOutlined />, items: toolsItems() },
+    { key: 'help', label: '帮助(H)', icon: <QuestionCircleOutlined />, items: helpItems() },
   ];
 }
 
-function top(key: string, label: string, icon: ReactElement, overlay: ReactElement): NonNullable<MenuProps['items']>[number] {
-  return { key, icon, label: <Dropdown trigger={['click']} popupRender={() => overlay}><span>{label}</span></Dropdown> };
+function fileItems(): NonNullable<MenuProps['items']> {
+  return [
+    item('file:new', shortcutLabel('新建工作簿', 'Ctrl+N')),
+    item('file:open', shortcutLabel('打开...', 'Ctrl+O')),
+    item('file:save', shortcutLabel('保存', 'Ctrl+S')),
+    item('file:saveAs', '另存为...'),
+    divider('file:divider:1'),
+    item('file:import', '导入 CSV/TSV'),
+    item('file:export', '导出 JSON'),
+    divider('file:divider:2'),
+    item('file:close', '关闭演示'),
+  ];
+}
+
+function editItems(): NonNullable<MenuProps['items']> {
+  return [
+    item('edit:undo', shortcutLabel('撤销', 'Ctrl+Z')),
+    item('edit:redo', shortcutLabel('重做', 'Ctrl+Y')),
+    divider('edit:divider:1'),
+    item('edit:cut', shortcutLabel('剪切', 'Ctrl+X')),
+    item('edit:copy', shortcutLabel('复制', 'Ctrl+C')),
+    item('edit:paste', shortcutLabel('粘贴', 'Ctrl+V')),
+    divider('edit:divider:2'),
+    item('edit:clear', '清除内容'),
+    item('edit:selectAll', shortcutLabel('全选', 'Ctrl+A')),
+    divider('edit:divider:3'),
+    item('edit:find', shortcutLabel('查找...', 'Ctrl+F')),
+    item('edit:replace', shortcutLabel('替换...', 'Ctrl+H')),
+  ];
+}
+
+function viewItems(view: ViewState): NonNullable<MenuProps['items']> {
+  return [
+    item('view:zoom100', shortcutLabel('100%', 'Ctrl+0')),
+    item('view:zoom', '缩放级别...'),
+    item('view:zoomIn', shortcutLabel('放大', 'Ctrl++')),
+    item('view:zoomOut', shortcutLabel('缩小', 'Ctrl+-')),
+    divider('view:divider:1'),
+    item('view:formula', <ToggleLabel text="显示公式" checked={view.showFormula} />),
+    item('view:grid', <ToggleLabel text="显示网格线" checked={view.showGrid} />),
+    divider('view:divider:2'),
+    item('view:freeze', '冻结窗格'),
+    item('view:fitWidth', '适应窗口宽度'),
+  ];
+}
+
+function insertItems(): NonNullable<MenuProps['items']> {
+  return [
+    item('insert:row', '插入行...'),
+    item('insert:col', '插入列...'),
+    item('insert:deleteRow', '删除行'),
+    item('insert:deleteCol', '删除列'),
+    divider('insert:divider:1'),
+    item('insert:merge', '合并单元格'),
+    item('insert:unmerge', '取消合并'),
+    divider('insert:divider:2'),
+    item('insert:image', '图片...'),
+    item('insert:chart', '图表...'),
+  ];
+}
+
+function formatItems(): NonNullable<MenuProps['items']> {
+  return [
+    item('format:bold', shortcutLabel('加粗', 'Ctrl+B')),
+    item('format:italic', shortcutLabel('斜体', 'Ctrl+I')),
+    item('format:underline', shortcutLabel('下划线', 'Ctrl+U')),
+    divider('format:divider:1'),
+    { key: 'format:align', label: '对齐', children: [item('format:align:left', '左对齐'), item('format:align:center', '居中'), item('format:align:right', '右对齐')] },
+    item('format:wrap', '自动换行'),
+    item('format:number', '数字格式...'),
+  ];
+}
+
+function toolsItems(): NonNullable<MenuProps['items']> {
+  return [item('tools:macro', '宏...'), item('tools:options', '选项...'), item('tools:plugins', '插件管理...')];
+}
+
+function helpItems(): NonNullable<MenuProps['items']> {
+  return [item('help:docs', '文档'), item('help:shortcuts', '快捷键'), divider('help:divider:1'), item('help:about', '关于')];
+}
+
+function item(key: string, label: ReactNode): NonNullable<MenuProps['items']>[number] {
+  return { key, label };
+}
+
+function divider(key: string): NonNullable<MenuProps['items']>[number] {
+  return { key, type: 'divider' };
 }
 
 function makeActions(ctx: MenuContext, openDialog: (name: DialogName) => void, view: ViewState, fileInput: React.RefObject<HTMLInputElement | null>): MenuActions {
@@ -122,6 +210,8 @@ function runViewAction(key: string, view: ViewState, openDialog: (name: DialogNa
   if (key === 'view:zoom') openDialog('zoom');
   if (key === 'view:zoomIn') view.setZoom(Math.min(200, view.zoom + 10));
   if (key === 'view:zoomOut') view.setZoom(Math.max(50, view.zoom - 10));
+  if (key === 'view:formula') view.setShowFormula(!view.showFormula);
+  if (key === 'view:grid') view.setShowGrid(!view.showGrid);
   if (key === 'view:freeze') message.info('冻结窗格 TODO 已记录');
   if (key === 'view:fitWidth') view.setZoom(120);
 }
@@ -220,6 +310,10 @@ const OptionsDialog: FC<{ readonly open: boolean; readonly onCancel: () => void 
   <Form layout="vertical"><Form.Item label="默认字号"><InputNumber defaultValue={14} min={8} max={72} /></Form.Item><Form.Item label="默认列宽"><InputNumber defaultValue={100} min={40} max={400} /></Form.Item><Form.Item label="启用网格线"><Switch defaultChecked /></Form.Item></Form>
 </Modal>;
 const PluginsDialog: FC<{ readonly open: boolean; readonly onCancel: () => void }> = ({ open, onCancel }) => <Modal title="插件管理" open={open} onCancel={onCancel} onOk={onCancel}>已装插件：csv-import <Switch size="small" defaultChecked /></Modal>;
+
+const ToggleLabel: FC<{ readonly text: string; readonly checked: boolean }> = ({ text, checked }) => (
+  <span className="ss-menu-label"><span>{text}</span><Switch size="small" checked={checked} style={{ pointerEvents: 'none' }} /></span>
+);
 
 function makeView(partial: Partial<ViewState> | undefined, zoom: number, showFormula: boolean, showGrid: boolean, setZoom: (v: number) => void, setShowFormula: (v: boolean) => void, setShowGrid: (v: boolean) => void): ViewState {
   return { zoom: partial?.zoom ?? zoom, showFormula: partial?.showFormula ?? showFormula, showGrid: partial?.showGrid ?? showGrid, setZoom: partial?.setZoom ?? setZoom, setShowFormula: partial?.setShowFormula ?? setShowFormula, setShowGrid: partial?.setShowGrid ?? setShowGrid };
