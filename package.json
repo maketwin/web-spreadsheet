@@ -1,74 +1,60 @@
 {
-  "name": "x-data-spreadsheet",
-  "version": "1.1.8",
-  "description": "a javascript xpreadsheet",
-  "types": "src/index.d.ts",
-  "main": "src/index.js",
+  "name": "web-spreadsheet",
+  "version": "0.0.1",
+  "description": "A modern TypeScript spreadsheet SDK with 4-layer architecture",
+  "type": "module",
+  "main": "./dist/web-spreadsheet.umd.js",
+  "module": "./dist/web-spreadsheet.es.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/web-spreadsheet.es.js",
+      "require": "./dist/web-spreadsheet.umd.js"
+    }
+  },
   "files": [
-    "assets",
     "dist",
-    "src"
+    "src",
+    "README.md"
   ],
-  "author": "myliang <liangyuliang0335@gmail.com>",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "coverage": "vitest run --coverage",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
+    "typecheck:js": "tsc --noEmit -p tsconfig.checkjs.json"
+  },
+  "keywords": [
+    "spreadsheet",
+    "excel",
+    "canvas",
+    "typescript",
+    "sdk"
+  ],
+  "author": "sunxin <boss@sunxin.local>",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/myliang/x-spreadsheet.git"
+    "url": "git+https://github.com/maketwin/web-spreadsheet.git"
   },
-  "nyc": {
-    "all": true,
-    "include": [
-      "src/core/*.js",
-      "src/locale/locale.js"
-    ],
-    "exclude": [
-      "**/*.spec.js"
-    ]
-  },
-  "scripts": {
-    "dev": "webpack-dev-server --open --config build/webpack.dev.js",
-    "build": "webpack --config build/webpack.prod.js",
-    "build-locale": "webpack --config build/webpack.locale.js",
-    "lint": "./node_modules/eslint/bin/eslint.js src",
-    "test": "mocha --require @babel/register --recursive test",
-    "coverage": "nyc --reporter=lcov --reporter=text-summary mocha --require @babel/register --recursive test"
-  },
-  "keywords": [
-    "javascript",
-    "spreadsheet",
-    "canvas"
-  ],
+  "dependencies": {},
   "devDependencies": {
-    "@babel/core": "^7.3.4",
-    "@babel/plugin-proposal-class-properties": "^7.4.4",
-    "@babel/preset-env": "^7.3.4",
-    "@babel/register": "^7.0.0",
-    "babel-loader": "^8.0.5",
-    "clean-webpack-plugin": "^0.1.19",
-    "codecov": "^3.3.0",
-    "css-loader": "^1.0.0",
-    "eslint": "^6.8.0",
-    "eslint-config-airbnb-base": "^13.1.0",
-    "eslint-plugin-import": "^2.14.0",
-    "file-loader": "^2.0.0",
-    "html-webpack-plugin": "^3.2.0",
-    "less": "^3.8.1",
-    "less-loader": "^4.1.0",
-    "mini-css-extract-plugin": "^0.4.4",
-    "mocha": "^5.2.0",
-    "nyc": "^13.3.0",
-    "style-loader": "^0.23.0",
-    "webpack": "^4.29.6",
-    "webpack-cli": "^3.1.0",
-    "webpack-dev-server": "^3.10.2",
-    "webpack-merge": "^4.1.4"
-  },
-  "dependencies": {
-    "opencollective": "^1.0.3",
-    "opencollective-postinstall": "^2.0.2"
-  },
-  "collective": {
-    "type": "opencollective",
-    "url": "https://opencollective.com/x-spreadsheet"
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.0.0",
+    "@typescript-eslint/parser": "^8.0.0",
+    "@vitejs/plugin-react": "^4.3.3",
+    "@vitest/coverage-v8": "^2.0.0",
+    "eslint": "^9.0.0",
+    "jsdom": "^25.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0",
+    "vite-plugin-dts": "^4.0.0",
+    "vitest": "^2.0.0"
   }
 }

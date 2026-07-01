@@ -1,6 +1,7 @@
 node_modules
 .pnpm-store
-yarn.lock
-
-.nyc_output/*
 dist
+.vite
+*.tsbuildinfo
+coverage
+.DS_Store
