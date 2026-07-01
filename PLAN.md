@@ -150,6 +150,39 @@ rm -rf dist
 }
 ```
 
+**Create:** `tsconfig.checkjs.json`（应急兜底，仅在重写过程中临时使用）
+
+```json
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx", "src/**/*.js", "test/**/*.ts"]
+}
+```
+
+> **使用场景**：仅当某个老 .js 文件临时未迁移到 .ts 时使用 `pnpm typecheck:js` 跑此配置做软约束检查。
+> **正常使用**：Week 1 起所有新代码都用 .ts，主配置 `tsconfig.json` 足以类型检查。
+> 完成后此文件可删。
+
+**Modify:** `package.json` scripts（加 checkjs 命令）
+
+```diff
+   "scripts": {
+     "dev": "vite",
+     "build": "tsc --noEmit && vite build",
+     "test": "vitest run",
+     "test:watch": "vitest",
+     "coverage": "vitest run --coverage",
+     "lint": "eslint src",
+     "typecheck": "tsc --noEmit",
++    "typecheck:js": "tsc --noEmit -p tsconfig.checkjs.json"
+   },
+```
+
 **Create:** `vite.config.ts`
 
 ```ts
@@ -2168,6 +2201,22 @@ Commit: `chore(release): v1.0.0`
 - ❌ 兼容性 shim
 - ❌ 协同 / 图表 / 条件格式（Week 8+）
 - ❌ 招人 / 商业化
+
+## 代码质量门槛（强约束）
+
+| 规则 | 阈值 | 工具 |
+|---|---|---|
+| 文件最大行数 | 300 行（超过要拆） | eslint `max-lines: 300` |
+| 函数最大行数 | 50 行（超过要拆） | eslint `max-lines-per-function: 50` |
+| 函数参数最大数 | 4 个（多了用对象） | TS 类型推断 |
+| any 使用 | **0 个**（必须用 `unknown` + 类型守卫） | `@typescript-eslint/no-explicit-any: error` |
+| 类型覆盖率 | 100%（strict + noUncheckedIndexedAccess） | `tsc --noEmit` 0 错 |
+| 测试覆盖率 | Store/Command 80%+，UI 60%+ | vitest --coverage |
+| 每个文件必须测试 | 是（除非纯 type 定义） | 人工 review |
+| 任何 `as` cast | 必须注释说明原因 | `@typescript-eslint/consistent-type-assertions` |
+| 任何 `// @ts-ignore` | 禁止（用 `// @ts-expect-error` + 注释） | TS 编译 |
+
+> **目的**：避免重蹈覆辙——这次不能又写出 8000 行没人维护的代码。质量门槛是硬性 commit 门槛，PR review 不通过不能合并。
 
 ## 给老板的话
 
