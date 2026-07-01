@@ -19,7 +19,18 @@ export interface CanvasRendererOptions {
   canvas: HTMLCanvasElement;
   store: Store;
   selectedCell?: CellAddress;
+  onCellClick?: (cell: CellAddress) => void;
   devicePixelRatio?: number;
+}
+
+interface CanvasTheme {
+  readonly bg: string;
+  readonly text: string;
+  readonly grid: string;
+  readonly selected: string;
+  readonly headerBg: string;
+  readonly accent: string;
+  readonly fontFamily: string;
 }
 
 export class CanvasRenderer {
@@ -27,6 +38,7 @@ export class CanvasRenderer {
   private readonly scroller: VirtualScroller;
   private readonly dirty = new DirtyRegionTracker();
   private readonly unsubscribe: () => void;
+  private selectedCell: CellAddress | undefined;
   private rafId: number | null = null;
 
   public constructor(private readonly opts: CanvasRendererOptions) {
@@ -34,6 +46,7 @@ export class CanvasRenderer {
     if (ctx === null) throw new Error('Canvas 2D context not available');
 
     this.ctx = ctx;
+    this.selectedCell = opts.selectedCell;
     this.scroller = new VirtualScroller({
       totalRows: TOTAL_ROWS,
       totalCols: TOTAL_COLS,
@@ -42,32 +55,50 @@ export class CanvasRenderer {
       viewportW: this.getGridWidth(),
       viewportH: this.getGridHeight(),
     });
-    this.unsubscribe = opts.store.subscribe(() => this.onStoreChange());
+    this.unsubscribe = opts.store.subscribe(() => this.invalidateAll());
     this.setupCanvas();
-    this.dirty.invalidateAll();
-    this.scheduleRender();
+    this.bindEvents();
+    this.invalidateAll();
   }
 
   public destroy(): void {
     if (this.rafId !== null) window.cancelAnimationFrame(this.rafId);
     this.rafId = null;
     this.unsubscribe();
+    this.unbindEvents();
   }
 
-  private setupCanvas(): void {
-    const dpr = this.opts.devicePixelRatio ?? window.devicePixelRatio ?? 1;
-    const width = this.getViewportWidth();
-    const height = this.getViewportHeight();
-
-    this.opts.canvas.width = Math.floor(width * dpr);
-    this.opts.canvas.height = Math.floor(height * dpr);
-    this.ctx.scale(dpr, dpr);
+  public setSelectedCell(cell: CellAddress | undefined): void {
+    this.selectedCell = cell;
+    this.invalidateAll();
   }
 
-  private onStoreChange(): void {
+  public invalidateAll(): void {
     this.dirty.invalidateAll();
     this.scheduleRender();
   }
+
+  private bindEvents(): void {
+    if (!this.opts.canvas.hasAttribute('tabindex')) this.opts.canvas.tabIndex = 0;
+    this.opts.canvas.addEventListener('mousedown', this.handleMouseDown);
+    window.addEventListener('ss:theme-changed', this.handleThemeChanged);
+  }
+
+  private unbindEvents(): void {
+    this.opts.canvas.removeEventListener('mousedown', this.handleMouseDown);
+    window.removeEventListener('ss:theme-changed', this.handleThemeChanged);
+  }
+
+  private readonly handleMouseDown = (event: MouseEvent): void => {
+    const cell = this.pointerCell(event.clientX, event.clientY);
+    if (cell === null) return;
+
+    this.opts.canvas.focus();
+    this.setSelectedCell(cell);
+    this.opts.onCellClick?.(cell);
+  };
+
+  private readonly handleThemeChanged = (): void => this.invalidateAll();
 
   private scheduleRender(): void {
     if (this.rafId !== null) return;
@@ -82,9 +113,9 @@ export class CanvasRenderer {
     if (this.dirty.isEmpty()) return;
 
     this.syncViewport();
-    const regions = this.dirty.drain();
+    const theme = readCanvasTheme();
     const range = this.scroller.getVisibleRange();
-    regions.forEach((region) => this.paintRegion(region, range));
+    this.dirty.drain().forEach((region) => this.paintRegion(region, range, theme));
   }
 
   private syncViewport(): void {
@@ -92,33 +123,45 @@ export class CanvasRenderer {
     this.scroller.setViewport(this.getGridWidth(), this.getGridHeight());
   }
 
-  private paintRegion(region: Rect, range: VisibleRange): void {
+  private setupCanvas(): void {
+    const dpr = this.opts.devicePixelRatio ?? window.devicePixelRatio ?? 1;
+    const width = this.getViewportWidth();
+    const height = this.getViewportHeight();
+
+    this.opts.canvas.width = Math.floor(width * dpr);
+    this.opts.canvas.height = Math.floor(height * dpr);
+    if (typeof this.ctx.setTransform === 'function') this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    else this.ctx.scale(dpr, dpr);
+  }
+
+  private paintRegion(region: Rect, range: VisibleRange, theme: CanvasTheme): void {
     this.ctx.save();
     this.ctx.beginPath();
     this.ctx.rect(region.x, region.y, region.w, region.h);
     this.ctx.clip();
-    this.paintBackground();
-    this.paintHeaders(range);
-    this.paintGrid(range);
-    this.paintCellTexts(range);
-    this.paintSelection();
+    this.paintBackground(theme);
+    this.paintHeaders(range, theme);
+    this.paintGrid(range, theme);
+    this.paintSelectionFill(theme);
+    this.paintCellTexts(range, theme);
+    this.paintSelectionBorder(theme);
     this.ctx.restore();
   }
 
-  private paintBackground(): void {
-    this.ctx.fillStyle = getCssVar('--ss-bg', '#fff');
+  private paintBackground(theme: CanvasTheme): void {
+    this.ctx.fillStyle = theme.bg;
     this.ctx.fillRect(0, 0, this.getViewportWidth(), this.getViewportHeight());
   }
 
-  private paintHeaders(range: VisibleRange): void {
-    this.ctx.fillStyle = getCssVar('--ss-header-bg', '#f7f7f7');
+  private paintHeaders(range: VisibleRange, theme: CanvasTheme): void {
+    this.ctx.fillStyle = theme.headerBg;
     this.ctx.fillRect(0, 0, this.getViewportWidth(), COL_HEADER_HEIGHT);
     this.ctx.fillRect(0, 0, ROW_HEADER_WIDTH, this.getViewportHeight());
-    this.ctx.strokeStyle = getCssVar('--ss-grid', '#f0f0f0');
-    this.ctx.fillStyle = getCssVar('--ss-text', '#333');
+    this.ctx.strokeStyle = theme.grid;
+    this.ctx.fillStyle = theme.text;
     this.ctx.textAlign = 'center';
     this.ctx.textBaseline = 'middle';
-    this.ctx.font = `12px ${getCssVar('--ss-font-family', 'sans-serif')}`;
+    this.ctx.font = `12px ${theme.fontFamily}`;
     this.paintColumnHeaders(range);
     this.paintRowHeaders(range);
   }
@@ -139,8 +182,8 @@ export class CanvasRenderer {
     }
   }
 
-  private paintGrid(range: VisibleRange): void {
-    this.ctx.strokeStyle = getCssVar('--ss-grid', '#f0f0f0');
+  private paintGrid(range: VisibleRange, theme: CanvasTheme): void {
+    this.ctx.strokeStyle = theme.grid;
     for (let r = range.startRow; r < range.endRow; r += 1) {
       for (let c = range.startCol; c < range.endCol; c += 1) this.strokeCell(r, c);
     }
@@ -151,11 +194,18 @@ export class CanvasRenderer {
     this.ctx.strokeRect(x, y, COL_WIDTH, ROW_HEIGHT);
   }
 
-  private paintCellTexts(range: VisibleRange): void {
-    this.ctx.fillStyle = getCssVar('--ss-text', '#333');
+  private paintSelectionFill(theme: CanvasTheme): void {
+    const rect = this.selectedRect();
+    if (rect === null) return;
+    this.ctx.fillStyle = theme.selected;
+    this.ctx.fillRect(rect.x + 1, rect.y + 1, COL_WIDTH - 2, ROW_HEIGHT - 2);
+  }
+
+  private paintCellTexts(range: VisibleRange, theme: CanvasTheme): void {
+    this.ctx.fillStyle = theme.text;
     this.ctx.textAlign = 'left';
     this.ctx.textBaseline = 'middle';
-    this.ctx.font = `14px ${getCssVar('--ss-font-family', 'sans-serif')}`;
+    this.ctx.font = `14px ${theme.fontFamily}`;
 
     for (let r = range.startRow; r < range.endRow; r += 1) {
       for (let c = range.startCol; c < range.endCol; c += 1) this.paintCellText(r, c);
@@ -175,15 +225,22 @@ export class CanvasRenderer {
     this.ctx.restore();
   }
 
-  private paintSelection(): void {
-    const selected = this.opts.selectedCell;
-    if (selected === undefined) return;
-
-    const { x, y } = this.cellToViewport(selected.r, selected.c);
-    this.ctx.strokeStyle = getCssVar('--ss-accent', '#1677ff');
+  private paintSelectionBorder(theme: CanvasTheme): void {
+    const rect = this.selectedRect();
+    if (rect === null) return;
+    this.ctx.strokeStyle = theme.accent;
     this.ctx.lineWidth = 2;
-    this.ctx.strokeRect(x + 1, y + 1, COL_WIDTH - 2, ROW_HEIGHT - 2);
+    this.ctx.strokeRect(rect.x + 1, rect.y + 1, COL_WIDTH - 2, ROW_HEIGHT - 2);
     this.ctx.lineWidth = 1;
+  }
+
+  private selectedRect(): { x: number; y: number } | null {
+    if (this.selectedCell === undefined) return null;
+    return this.cellToViewport(this.selectedCell.r, this.selectedCell.c);
+  }
+
+  private pointerCell(clientX: number, clientY: number): CellAddress | null {
+    return canvasPointToCell(this.opts.canvas, clientX, clientY, this.scroller.scrollLeft, this.scroller.scrollTop);
   }
 
   private cellToViewport(r: number, c: number): { x: number; y: number } {
@@ -208,9 +265,27 @@ export class CanvasRenderer {
   }
 }
 
-function getCssVar(name: string, fallback: string): string {
-  if (typeof document === 'undefined') return fallback;
+export function canvasPointToCell(canvas: HTMLCanvasElement, clientX: number, clientY: number, scrollLeft = 0, scrollTop = 0): CellAddress | null {
+  const rect = canvas.getBoundingClientRect();
+  const x = clientX - rect.left - ROW_HEADER_WIDTH + scrollLeft;
+  const y = clientY - rect.top - COL_HEADER_HEIGHT + scrollTop;
+  if (x < 0 || y < 0) return null;
+  return { r: Math.floor(y / ROW_HEIGHT), c: Math.floor(x / COL_WIDTH) };
+}
 
-  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return value || fallback;
+function readCanvasTheme(): CanvasTheme {
+  const styles = typeof document === 'undefined' ? null : getComputedStyle(document.documentElement);
+  return {
+    bg: cssVar(styles, '--ss-bg', '#fff'),
+    text: cssVar(styles, '--ss-text', '#333'),
+    grid: cssVar(styles, '--ss-grid', '#f0f0f0'),
+    selected: cssVar(styles, '--ss-selected', '#e8f0ff'),
+    headerBg: cssVar(styles, '--ss-header-bg', '#f7f7f7'),
+    accent: cssVar(styles, '--ss-accent', '#1677ff'),
+    fontFamily: cssVar(styles, '--ss-font-family', 'sans-serif'),
+  };
+}
+
+function cssVar(styles: CSSStyleDeclaration | null, name: string, fallback: string): string {
+  return styles?.getPropertyValue(name).trim() || fallback;
 }
