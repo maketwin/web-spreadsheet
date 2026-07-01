@@ -18,7 +18,7 @@ engine, and plugin system.
 - [x] Virtual scrolling (visible range calculation)
 - [x] Dirty region tracking
 - [x] Canvas renderer + React UI placeholders
-- [ ] Formula engine v1 (30 functions)
+- [x] Formula engine v1 (30 functions)
 - [ ] Plugin system
 
 ## Architecture
