@@ -41,8 +41,9 @@
     "type": "git",
     "url": "git+https://github.com/maketwin/web-spreadsheet.git"
   },
-  "dependencies": {},
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^22.0.0",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
