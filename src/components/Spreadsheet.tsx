@@ -126,7 +126,16 @@ export class Spreadsheet {
 }
 
 interface EditorOverlayProps { readonly refEl: RefObject<HTMLInputElement | null>; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly commit: (value: string) => void; readonly zoom: number }
-const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editing, setEditing, commit, zoom }) => <input ref={refEl} className="ss-editor-overlay" style={editorStyle(editing, zoom)} value={editing.value} onChange={(e) => setEditing({ ...editing, value: e.target.value })} onBlur={(e) => commit(e.target.value)} onKeyDown={(e) => handleEditorKey(e, commit, () => setEditing(null))} aria-label="Cell editor" />;
+const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editing, setEditing, commit, zoom }) => {
+  const composing = useRef(false);
+  return <input ref={refEl} className="ss-editor-overlay" style={editorStyle(editing, zoom)} value={editing.value}
+    onChange={(e) => setEditing({ ...editing, value: e.target.value })}
+    onCompositionStart={() => { composing.current = true; }}
+    onCompositionEnd={() => { composing.current = false; }}
+    onBlur={() => commit(refEl.current?.value ?? editing.value)}
+    onKeyDown={(e) => { if (composing.current) return; handleEditorKey(e, () => commit(refEl.current?.value ?? editing.value), () => setEditing(null)); }}
+    aria-label="Cell editor" />;
+};
 
 function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick: (cell: CellAddress, shift: boolean) => void, onSelectionChange: (selection: Selection) => void, view: ViewState, cmdManager?: CommandManager): { canvasRef: RefObject<HTMLCanvasElement | null>; rendererRef: RefObject<CanvasRenderer | null> } {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -201,7 +210,7 @@ function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selec
   else handleClipboardAction(action.type, store, cmdManager, range);
 }
 
-function handleEditorKey(event: ReactKeyboardEvent<HTMLInputElement>, commit: (value: string) => void, cancel: () => void): void { if (event.key === 'Enter') commit(event.currentTarget.value); if (event.key === 'Escape') cancel(); }
+function handleEditorKey(event: ReactKeyboardEvent<HTMLInputElement>, commit: () => void, cancel: () => void): void { if (event.key === 'Enter') { event.preventDefault(); commit(); } if (event.key === 'Escape') cancel(); }
 function editFromPointer(canvas: HTMLCanvasElement, x: number, y: number, startEditing: (cell: CellAddress) => void, zoom: number): void { const cell = canvasPointToCell(canvas, x, y, 0, 0, zoom); if (cell !== null) startEditing(cell); }
 function editorStyle(cell: CellAddress, zoom: number): CSSProperties {
   const scale = zoom / 100;
