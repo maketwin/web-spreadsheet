@@ -30,7 +30,7 @@ export function stringAt(index) {
  */
 export function indexAt(str) {
   let ret = 0;
-  for(let i = 0; i !== str.length; ++i) ret = 26 * ret + str.charCodeAt(i) - 64;
+  for (let i = 0; i !== str.length; i += 1) ret = 26 * ret + str.charCodeAt(i) - 64;
   return ret - 1;
 }
 

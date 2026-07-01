@@ -337,7 +337,8 @@ function paste(what, evt) {
     const eventTrigger = (rows) => {
       this.trigger('pasted-clipboard', rows);
     };
-    // pastFromSystemClipboard is async operation, need to tell it how to reset sheet and trigger event after it finishes
+    // pastFromSystemClipboard is async operation, need to tell it how to reset
+    // sheet and trigger event after it finishes
     // pasting content from system clipboard
     data.pasteFromSystemClipboard(resetSheet, eventTrigger);
   } else if (data.paste(what, msg => xtoast('Tip', msg))) {
