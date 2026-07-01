@@ -22,6 +22,13 @@ engine, and plugin system.
 - [x] Canvas renderer + React UI placeholders
 - [x] Formula engine v1 (32 functions)
 - [x] Plugin system
+- [x] Excel-style top menu bar (File/Edit/View/Insert/Format/Tools/Help)
+- [x] File menu with local open/save/import/export actions
+- [x] Edit menu with undo/redo, clipboard, find/replace, select all, clear
+- [x] Insert menu with row/column insert/delete and merge actions
+- [x] Format menu with font, size, color, number format, alignment, wrap
+- [x] View/Tools/Help menus with zoom, options, plugins, about, shortcuts
+- [x] Keyboard shortcut integration for menu actions
 
 ## Architecture
 ```
