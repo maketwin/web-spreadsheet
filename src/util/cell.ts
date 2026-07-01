@@ -65,23 +65,29 @@ export function formulaDependencies(formula: string): string[] {
 }
 
 function addDependencyMatch(deps: Set<string>, expr: string): void {
-  const unscoped = expr.includes('!') ? expr.slice(expr.indexOf('!') + 1) : expr;
+  const bangIndex = expr.indexOf('!');
+  const sheetName = bangIndex > 0 ? expr.slice(0, bangIndex).replace(/^'|'$/g, '') : undefined;
+  const unscoped = bangIndex > 0 ? expr.slice(bangIndex + 1) : expr;
   const parts = unscoped.split(':');
   const start = parts[0];
   const end = parts[1];
   if (start === undefined) return;
   if (end === undefined) {
-    deps.add(exprToCellId(start));
+    const id = exprToCellId(start);
+    deps.add(sheetName !== undefined ? `${sheetName}:${id}` : id);
     return;
   }
-  addRangeDependencies(deps, start, end);
+  addRangeDependencies(deps, start, end, sheetName);
 }
 
-function addRangeDependencies(deps: Set<string>, start: string, end: string): void {
+function addRangeDependencies(deps: Set<string>, start: string, end: string, sheetName?: string): void {
   const a = exprToCoords(start);
   const b = exprToCoords(end);
   for (let r = Math.min(a.r, b.r); r <= Math.max(a.r, b.r); r += 1) {
-    for (let c = Math.min(a.c, b.c); c <= Math.max(a.c, b.c); c += 1) deps.add(cellId(r, c));
+    for (let c = Math.min(a.c, b.c); c <= Math.max(a.c, b.c); c += 1) {
+      const id = cellId(r, c);
+      deps.add(sheetName !== undefined ? `${sheetName}:${id}` : id);
+    }
   }
 }
 

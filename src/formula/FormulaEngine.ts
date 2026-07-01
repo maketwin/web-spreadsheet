@@ -11,44 +11,89 @@ export class FormulaEngine {
 
   constructor(private store: Store) {}
 
-  setFormula(cellId: string, formula: string, dependsOn: string[]): void {
-    this.graph.setDependencies(cellId, dependsOn);
-    this.formulas.set(cellId, formula);
-    this.recalculate(cellId);
+  setActiveSheetId(_sheetId: string): void {
+    /* reserved for sheet-scoped recalc control */
   }
 
-  removeFormula(cellId: string): void {
-    this.graph.clearDependencies(cellId);
-    this.formulas.delete(cellId);
+  setFormula(cellId: string, formula: string, dependsOn: string[], sheetId?: string): void {
+    const scopedId = scopedKey(cellId, sheetId ?? this.store.getActiveSheetId());
+    const scopedDeps = dependsOn.map((d) => scopeDep(d, sheetId ?? this.store.getActiveSheetId()));
+    this.graph.setDependencies(scopedId, scopedDeps);
+    this.formulas.set(scopedId, formula);
+    this.recalculate(scopedId);
   }
 
-  recalculate(cellId: string): void {
-    const formula = this.formulas.get(cellId);
-    if (!formula) return;
+  removeFormula(cellId: string, sheetId?: string): void {
+    const scopedId = scopedKey(cellId, sheetId ?? this.store.getActiveSheetId());
+    this.graph.clearDependencies(scopedId);
+    this.formulas.delete(scopedId);
+  }
+
+  recalculate(scopedId: string): void {
+    const formula = this.formulas.get(scopedId);
+    if (formula === undefined) return;
     const ast = this.parser.parse(formula);
-    if (!ast) return;
+    if (ast === null) return;
 
+    const { sheetId, r, c } = parseScopedKey(scopedId);
     try {
       const value = scalar(evaluate(ast, (x, y, sheetName) => this.resolveCell(x, y, sheetName)));
-      const coords = parseCellId(cellId);
-      if (!coords) return;
-      const existing = this.store.getCell(coords.r, coords.c);
-      this.store.setCell(coords.r, coords.c, { ...existing, text: String(value ?? ''), value });
+      const existing = this.store.getCell(r, c, sheetId);
+      this.store.setCell(r, c, { ...existing, text: String(value ?? ''), value }, sheetId);
     } catch (err) {
-      console.error(`Formula error at ${cellId}:`, err);
+      console.error(`Formula error at ${scopedId}:`, err);
     }
   }
 
-  onCellChanged(cellId: string): void {
-    const affected = this.graph.getAffected(cellId);
+  onCellChanged(cellId: string, sheetId?: string): void {
+    const sid = sheetId ?? this.store.getActiveSheetId();
+    const scopedId = scopedKey(cellId, sid);
+    const affected = this.graph.getAffected(scopedId);
+
+    // Also look up cross-sheet deps keyed by sheet name
+    const sheetName = this.sheetNameForId(sid);
+    if (sheetName !== undefined) {
+      const crossKey = `${sheetName}:${cellId}`;
+      for (const id of this.graph.getAffected(crossKey)) {
+        if (!affected.includes(id)) affected.push(id);
+      }
+    }
+
     for (const id of affected) this.recalculate(id);
   }
 
   private resolveCell(x: number, y: number, sheetName?: string): FormulaValue {
-    const cell = sheetName === undefined ? this.store.getCell(y, x) : this.store.getCellBySheetName(sheetName, y, x);
-    if (!cell) return null;
+    const cell = sheetName === undefined
+      ? this.store.getCell(y, x)
+      : this.store.getCellBySheetName(sheetName, y, x);
+    if (cell === undefined) return null;
     return cell.value ?? cell.text;
   }
+
+  private sheetNameForId(sheetId: string): string | undefined {
+    for (const { id, name } of this.store.getSheets()) {
+      if (id === sheetId) return name;
+    }
+    return undefined;
+  }
+}
+
+function scopedKey(cellId: string, sheetId: string): string {
+  return `${sheetId}:${cellId}`;
+}
+
+function scopeDep(dep: string, sheetId: string): string {
+  // Cross-sheet deps already have a ":" prefix (e.g. "Sheet2:0,0")
+  if (dep.includes(':')) return dep;
+  return `${sheetId}:${dep}`;
+}
+
+function parseScopedKey(scopedId: string): { sheetId: string; r: number; c: number } {
+  const colonIndex = scopedId.indexOf(':');
+  if (colonIndex < 0) return { sheetId: 'sheet-1', r: 0, c: 0 };
+  const sheetId = scopedId.slice(0, colonIndex);
+  const coords = parseCellId(scopedId.slice(colonIndex + 1));
+  return { sheetId, r: coords?.r ?? 0, c: coords?.c ?? 0 };
 }
 
 function scalar(value: FormulaArgument): FormulaValue {
@@ -66,7 +111,6 @@ function parseCellId(cellId: string): { r: number; c: number } | null {
   const row = parts[0];
   const col = parts[1];
   if (row === undefined || col === undefined) return null;
-
   const r = Number(row);
   const c = Number(col);
   if (!Number.isFinite(r) || !Number.isFinite(c)) return null;
