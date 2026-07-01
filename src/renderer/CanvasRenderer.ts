@@ -2,17 +2,16 @@ import { num2alpha } from '../util/alphabet';
 import type { SelectionKind } from '../selection/Selection';
 import { Range, type RangeAddress } from '../selection/Range';
 import type { Store } from '../store/Store';
+import { TOTAL_ROWS, TOTAL_COLS, ROW_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, COL_HEADER_HEIGHT, type CellAddress, canvasPointToCell, canvasPointToHeader, canvasPointToColumn, canvasPointToRow } from './coordinate';
 import { DirtyRegionTracker, type Rect } from './DirtyRegionTracker';
+import { FillHandle } from '../fill/FillHandle';
+import { ResizeHandler } from './ResizeHandler';
 import { VirtualScroller, type VisibleRange } from './VirtualScroller';
+import type { StoreEvent } from '../types';
 
-export const TOTAL_ROWS = 1_000;
-export const TOTAL_COLS = 26;
-export const ROW_HEIGHT = 25;
-export const COL_WIDTH = 100;
-export const ROW_HEADER_WIDTH = 46;
-export const COL_HEADER_HEIGHT = 25;
+// Re-export for backward compatibility
+export { TOTAL_ROWS, TOTAL_COLS, ROW_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, COL_HEADER_HEIGHT, canvasPointToCell, canvasPointToHeader, canvasPointToColumn, canvasPointToRow, type CellAddress };
 
-export interface CellAddress { readonly r: number; readonly c: number }
 export interface CanvasRendererOptions {
   canvas: HTMLCanvasElement;
   store: Store;
@@ -27,6 +26,11 @@ export interface CanvasRendererOptions {
   onColumnSelect?: (c: number, shiftKey: boolean) => void;
   onRowSelect?: (r: number, shiftKey: boolean) => void;
   onSheetSelect?: () => void;
+  onRowResize?: (r: number, height: number) => void;
+  onColResize?: (c: number, width: number) => void;
+  onRowDblClick?: (r: number) => void;
+  onColDblClick?: (c: number) => void;
+  onFill?: (source: RangeAddress, target: RangeAddress, ctrlKey: boolean) => void;
   devicePixelRatio?: number;
 }
 
@@ -35,14 +39,14 @@ interface CanvasTheme {
   readonly headerBg: string; readonly accent: string; readonly fontFamily: string; readonly border: string;
 }
 
-type HeaderHit = { type: 'sheet' } | { type: 'column'; c: number } | { type: 'row'; r: number } | null;
 type DragAnchor = { type: 'cell'; r: number; c: number } | { type: 'column'; c: number } | { type: 'row'; r: number };
 
-// CanvasRenderer is kept in one file because it owns event binding and paint order.
 export class CanvasRenderer {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly scroller: VirtualScroller;
   private readonly dirty = new DirtyRegionTracker();
+  private readonly resizeHandler: ResizeHandler;
+  private readonly fillHandle: FillHandle;
   private readonly unsubscribe: () => void;
   private selectedRange: RangeAddress | undefined;
   private selectionKind: SelectionKind | undefined;
@@ -57,8 +61,24 @@ export class CanvasRenderer {
     this.selectedRange = opts.selectedRange;
     this.selectionKind = opts.selectionKind;
     this.activeCell = opts.activeCell;
-    this.scroller = new VirtualScroller({ totalRows: TOTAL_ROWS, totalCols: TOTAL_COLS, defaultRowHeight: this.rowHeight(), defaultColWidth: this.colWidth(), viewportW: this.getGridWidth(), viewportH: this.getGridHeight() });
-    this.unsubscribe = opts.store.subscribe(() => this.invalidateAll());
+    this.scroller = new VirtualScroller({
+      totalRows: TOTAL_ROWS, totalCols: TOTAL_COLS,
+      defaultRowHeight: this.defaultRowHeight(), defaultColWidth: this.defaultColWidth(),
+      viewportW: this.gridW(), viewportH: this.gridH(),
+    });
+    this.syncSizesFromStore();
+    this.resizeHandler = new ResizeHandler({
+      canvas: opts.canvas, scroller: this.scroller, store: opts.store, zoom: () => this.zoom(),
+      onRowResize: opts.onRowResize, onColResize: opts.onColResize,
+      onRowDblClick: opts.onRowDblClick, onColDblClick: opts.onColDblClick,
+      invalidate: () => this.invalidateAll(),
+    });
+    this.fillHandle = new FillHandle({
+      canvas: opts.canvas, scroller: this.scroller,
+      selectedRange: () => this.selectedRange,
+      onFill: opts.onFill, invalidate: () => this.invalidateAll(),
+    });
+    this.unsubscribe = opts.store.subscribe((e: StoreEvent) => this.onStoreEvent(e));
     this.setupCanvas();
     this.bindEvents();
     this.invalidateAll();
@@ -67,82 +87,89 @@ export class CanvasRenderer {
   public destroy(): void {
     if (this.rafId !== null) window.cancelAnimationFrame(this.rafId);
     this.rafId = null;
+    this.resizeHandler.destroy();
+    this.fillHandle.destroy();
     this.unsubscribe();
     this.unbindEvents();
   }
 
-  public setSelectedRange(range: RangeAddress | undefined): void {
-    this.selectedRange = range;
-    this.invalidateAll();
-  }
-
+  public setSelectedRange(range: RangeAddress | undefined): void { this.selectedRange = range; this.invalidateAll(); }
   public setSelection(range: RangeAddress | undefined, kind: SelectionKind | undefined, activeCell?: CellAddress): void {
-    this.selectedRange = range;
-    this.selectionKind = kind;
-    this.activeCell = activeCell;
-    this.invalidateAll();
+    this.selectedRange = range; this.selectionKind = kind; this.activeCell = activeCell; this.invalidateAll();
   }
-
   public setSelectedCell(cell: CellAddress | undefined): void {
     this.setSelection(cell === undefined ? undefined : Range.single(cell.r, cell.c).toAddress(), cell === undefined ? undefined : 'cell', cell);
   }
-
-  public invalidateAll(): void {
-    this.dirty.invalidateAll();
-    this.scheduleRender();
-  }
+  public invalidateAll(): void { this.dirty.invalidateAll(); this.scheduleRender(); }
 
   private bindEvents(): void {
     if (!this.opts.canvas.hasAttribute('tabindex')) this.opts.canvas.tabIndex = 0;
-    this.opts.canvas.addEventListener('mousedown', this.handleMouseDown);
+    const c = this.opts.canvas;
+    c.addEventListener('mousedown', this.handleMouseDown);
+    c.addEventListener('dblclick', this.handleDblClick);
     window.addEventListener('mousemove', this.handleMouseMove);
     window.addEventListener('mouseup', this.handleMouseUp);
     window.addEventListener('ss:theme-changed', this.handleThemeChanged);
   }
 
   private unbindEvents(): void {
-    this.opts.canvas.removeEventListener('mousedown', this.handleMouseDown);
+    const c = this.opts.canvas;
+    c.removeEventListener('mousedown', this.handleMouseDown);
+    c.removeEventListener('dblclick', this.handleDblClick);
     window.removeEventListener('mousemove', this.handleMouseMove);
     window.removeEventListener('mouseup', this.handleMouseUp);
     window.removeEventListener('ss:theme-changed', this.handleThemeChanged);
   }
 
-  private readonly handleMouseDown = (event: MouseEvent): void => {
-    const header = canvasPointToHeader(this.opts.canvas, event.clientX, event.clientY, this.scroller.scrollLeft, this.scroller.scrollTop, this.opts.zoom);
-    if (header?.type === 'sheet') { this.opts.canvas.focus(); this.dragAnchor = null; this.opts.onSheetSelect?.(); return; }
-    if (header?.type === 'column') { this.opts.canvas.focus(); this.dragAnchor = { type: 'column', c: header.c }; this.opts.onColumnSelect?.(header.c, event.shiftKey); return; }
-    if (header?.type === 'row') { this.opts.canvas.focus(); this.dragAnchor = { type: 'row', r: header.r }; this.opts.onRowSelect?.(header.r, event.shiftKey); return; }
-    const cell = this.pointerCell(event.clientX, event.clientY);
+  private readonly handleMouseDown = (ev: MouseEvent): void => {
+    if (this.resizeHandler.onMouseDown(ev)) return;
+    if (this.fillHandle.onMouseDown(ev)) { this.dragAnchor = null; return; }
+    const h = canvasPointToHeader(this.opts.canvas, ev.clientX, ev.clientY, this.scroller.scrollLeft, this.scroller.scrollTop, this.opts.zoom);
+    if (h?.type === 'sheet') { this.opts.canvas.focus(); this.dragAnchor = null; this.opts.onSheetSelect?.(); return; }
+    if (h?.type === 'column') { this.opts.canvas.focus(); this.dragAnchor = { type: 'column', c: h.c }; this.opts.onColumnSelect?.(h.c, ev.shiftKey); return; }
+    if (h?.type === 'row') { this.opts.canvas.focus(); this.dragAnchor = { type: 'row', r: h.r }; this.opts.onRowSelect?.(h.r, ev.shiftKey); return; }
+    const cell = this.pointerCell(ev.clientX, ev.clientY);
     if (cell === null) return;
     this.opts.canvas.focus();
     this.dragAnchor = { type: 'cell', ...cell };
     this.setSelectedCell(cell);
-    if (event.shiftKey) this.opts.onCellClick?.(cell, true);
-    else this.opts.onCellClick?.(cell);
+    ev.shiftKey ? this.opts.onCellClick?.(cell, true) : this.opts.onCellClick?.(cell);
   };
 
-  private readonly handleMouseMove = (event: MouseEvent): void => {
+  private readonly handleMouseMove = (ev: MouseEvent): void => {
+    if (this.resizeHandler.isResizing()) { this.resizeHandler.onMouseMove(ev); return; }
+    if (this.fillHandle.isDragging()) { this.fillHandle.onMouseMove(ev); return; }
+    this.resizeHandler.onMouseMove(ev);
+    this.fillHandle.onMouseMove(ev);
     if (this.dragAnchor === null) return;
     if (this.dragAnchor.type === 'column') {
-      const c = canvasPointToColumn(this.opts.canvas, event.clientX, this.scroller.scrollLeft, this.opts.zoom);
+      const c = canvasPointToColumn(this.opts.canvas, ev.clientX, this.scroller.scrollLeft, this.opts.zoom);
       if (c !== null) this.opts.onColumnSelect?.(c, true);
       return;
     }
     if (this.dragAnchor.type === 'row') {
-      const r = canvasPointToRow(this.opts.canvas, event.clientY, this.scroller.scrollTop, this.opts.zoom);
+      const r = canvasPointToRow(this.opts.canvas, ev.clientY, this.scroller.scrollTop, this.opts.zoom);
       if (r !== null) this.opts.onRowSelect?.(r, true);
       return;
     }
-    const cell = this.pointerCell(event.clientX, event.clientY);
+    const cell = this.pointerCell(ev.clientX, ev.clientY);
     if (cell === null) return;
     const range = new Range({ r1: this.dragAnchor.r, c1: this.dragAnchor.c, r2: cell.r, c2: cell.c }).toAddress();
     this.setSelection(range, 'range', cell);
     this.opts.onSelectionChange?.(range, cell, { r: this.dragAnchor.r, c: this.dragAnchor.c });
   };
 
-  private readonly handleMouseUp = (): void => { this.dragAnchor = null; };
-  private readonly handleThemeChanged = (): void => this.invalidateAll();
+  private readonly handleMouseUp = (): void => {
+    if (this.resizeHandler.isResizing()) { this.resizeHandler.onMouseUp(); return; }
+    if (this.fillHandle.isDragging()) { this.fillHandle.onMouseUp(); return; }
+    this.dragAnchor = null;
+  };
 
+  private readonly handleDblClick = (ev: MouseEvent): void => {
+    if (this.resizeHandler.onDblClick(ev)) { ev.stopPropagation(); }
+  };
+
+  private readonly handleThemeChanged = (): void => this.invalidateAll();
   private scheduleRender(): void {
     if (this.rafId !== null) return;
     this.rafId = window.requestAnimationFrame(() => { this.rafId = null; this.render(); });
@@ -152,289 +179,166 @@ export class CanvasRenderer {
     if (this.dirty.isEmpty()) return;
     this.syncViewport();
     const theme = readCanvasTheme();
-    const range = this.scroller.getVisibleRange();
-    this.dirty.drain().forEach((region) => this.paintRegion(region, range, theme));
+    const vis = this.scroller.getVisibleRange();
+    this.dirty.drain().forEach((r) => this.paintRegion(r, vis, theme));
   }
 
-  private syncViewport(): void {
-    this.setupCanvas();
-    this.scroller.setViewport(this.getGridWidth(), this.getGridHeight());
-  }
-
+  private syncViewport(): void { this.setupCanvas(); this.scroller.setViewport(this.gridW(), this.gridH()); }
   private setupCanvas(): void {
     const dpr = this.opts.devicePixelRatio ?? window.devicePixelRatio ?? 1;
-    const width = this.getViewportWidth();
-    const height = this.getViewportHeight();
-    this.opts.canvas.width = Math.floor(width * dpr);
-    this.opts.canvas.height = Math.floor(height * dpr);
+    this.opts.canvas.width = Math.floor(this.vpW() * dpr);
+    this.opts.canvas.height = Math.floor(this.vpH() * dpr);
     if (typeof this.ctx.setTransform === 'function') this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     else this.ctx.scale(dpr, dpr);
   }
 
-  private paintRegion(region: Rect, range: VisibleRange, theme: CanvasTheme): void {
+  private paintRegion(region: Rect, vis: VisibleRange, theme: CanvasTheme): void {
     this.ctx.save();
-    this.ctx.beginPath();
-    this.ctx.rect(region.x, region.y, region.w, region.h);
-    this.ctx.clip();
-    this.paintBackground(theme);
-    this.paintHeaders(range, theme);
-    this.paintCellBackgrounds(range);
-    this.paintGrid(range, theme);
-    this.paintSelectionFill(range, theme);
-    this.paintCellTexts(range);
-    this.paintSelectionBorder(theme);
+    this.ctx.beginPath(); this.ctx.rect(region.x, region.y, region.w, region.h); this.ctx.clip();
+    this.ctx.fillStyle = theme.bg; this.ctx.fillRect(0, 0, this.vpW(), this.vpH());
+    this.paintHeaders(vis, theme);
+    this.paintCells(vis, theme);
+    this.paintSelection(theme);
+    this.paintOverlays(theme);
     this.ctx.restore();
   }
 
-  private paintBackground(theme: CanvasTheme): void {
-    this.ctx.fillStyle = theme.bg;
-    this.ctx.fillRect(0, 0, this.getViewportWidth(), this.getViewportHeight());
-  }
-
-  private paintHeaders(range: VisibleRange, theme: CanvasTheme): void {
+  private paintHeaders(vis: VisibleRange, theme: CanvasTheme): void {
     this.ctx.fillStyle = theme.headerBg;
-    this.ctx.fillRect(0, 0, this.getViewportWidth(), COL_HEADER_HEIGHT);
-    this.ctx.fillRect(0, 0, ROW_HEADER_WIDTH, this.getViewportHeight());
-    this.ctx.strokeStyle = theme.border;
-    this.ctx.fillStyle = theme.text;
-    this.ctx.textAlign = 'center';
-    this.ctx.textBaseline = 'middle';
+    this.ctx.fillRect(0, 0, this.vpW(), COL_HEADER_HEIGHT);
+    this.ctx.fillRect(0, 0, ROW_HEADER_WIDTH, this.vpH());
+    this.ctx.strokeStyle = theme.border; this.ctx.fillStyle = theme.text;
+    this.ctx.textAlign = 'center'; this.ctx.textBaseline = 'middle';
     this.ctx.font = `${Math.max(12, Math.round(12 * this.zoom()))}px ${theme.fontFamily}`;
-    this.paintColumnHeaders(range, theme);
-    this.paintRowHeaders(range, theme);
-  }
-
-  private paintColumnHeaders(range: VisibleRange, theme: CanvasTheme): void {
-    for (let c = range.startCol; c < range.endCol; c += 1) {
-      const x = ROW_HEADER_WIDTH + c * this.colWidth() - this.scroller.scrollLeft;
-      if (this.isHighlightedColumn(c)) {
-        this.ctx.fillStyle = headerSelectionColor(theme);
-        this.ctx.fillRect(x + 1, 1, this.colWidth() - 2, COL_HEADER_HEIGHT - 2);
-        this.ctx.fillStyle = theme.text;
-      }
-      this.ctx.strokeRect(x, 0, this.colWidth(), COL_HEADER_HEIGHT);
-      this.ctx.fillText(num2alpha(c), x + this.colWidth() / 2, COL_HEADER_HEIGHT / 2);
+    let x = ROW_HEADER_WIDTH - this.scroller.scrollLeft;
+    for (let i = 0; i < vis.startCol; i += 1) x += this.scroller.getColWidth(i);
+    for (let c = vis.startCol; c < vis.endCol; c += 1) {
+      const w = this.scroller.getColWidth(c);
+      if (this.isHighCol(c)) { this.ctx.fillStyle = headerColor(theme); this.ctx.fillRect(x + 1, 1, w - 2, COL_HEADER_HEIGHT - 2); this.ctx.fillStyle = theme.text; }
+      this.ctx.strokeRect(x, 0, w, COL_HEADER_HEIGHT);
+      this.ctx.fillText(num2alpha(c), x + w / 2, COL_HEADER_HEIGHT / 2);
+      x += w;
+    }
+    let y = COL_HEADER_HEIGHT - this.scroller.scrollTop;
+    for (let i = 0; i < vis.startRow; i += 1) y += this.scroller.getRowHeight(i);
+    for (let r = vis.startRow; r < vis.endRow; r += 1) {
+      const h = this.scroller.getRowHeight(r);
+      if (this.isHighRow(r)) { this.ctx.fillStyle = headerColor(theme); this.ctx.fillRect(1, y + 1, ROW_HEADER_WIDTH - 2, h - 2); this.ctx.fillStyle = theme.text; }
+      this.ctx.strokeRect(0, y, ROW_HEADER_WIDTH, h);
+      this.ctx.fillText(String(r + 1), ROW_HEADER_WIDTH / 2, y + h / 2);
+      y += h;
     }
   }
 
-  private paintRowHeaders(range: VisibleRange, theme: CanvasTheme): void {
-    for (let r = range.startRow; r < range.endRow; r += 1) {
-      const y = COL_HEADER_HEIGHT + r * this.rowHeight() - this.scroller.scrollTop;
-      if (this.isHighlightedRow(r)) {
-        this.ctx.fillStyle = headerSelectionColor(theme);
-        this.ctx.fillRect(1, y + 1, ROW_HEADER_WIDTH - 2, this.rowHeight() - 2);
-        this.ctx.fillStyle = theme.text;
-      }
-      this.ctx.strokeRect(0, y, ROW_HEADER_WIDTH, this.rowHeight());
-      this.ctx.fillText(String(r + 1), ROW_HEADER_WIDTH / 2, y + this.rowHeight() / 2);
-    }
-  }
-
-  private paintGrid(range: VisibleRange, theme: CanvasTheme): void {
-    if (this.opts.showGrid === false) return;
-    this.ctx.strokeStyle = theme.grid;
-    for (let r = range.startRow; r < range.endRow; r += 1) {
-      for (let c = range.startCol; c < range.endCol; c += 1) this.strokeCell(r, c);
-    }
-  }
-
-  private paintCellBackgrounds(range: VisibleRange): void {
-    for (let r = range.startRow; r < range.endRow; r += 1) {
-      for (let c = range.startCol; c < range.endCol; c += 1) this.paintCellBackground(r, c);
-    }
-  }
-
-  private paintCellBackground(r: number, c: number): void {
-    const style = this.cellStyle(r, c);
-    if (style?.bgcolor === undefined) return;
-    const { x, y } = this.cellToViewport(r, c);
-    this.ctx.fillStyle = style.bgcolor;
-    this.ctx.fillRect(x + 1, y + 1, this.colWidth() - 2, this.rowHeight() - 2);
-  }
-
-  private strokeCell(r: number, c: number): void {
-    const { x, y } = this.cellToViewport(r, c);
-    this.ctx.strokeRect(x, y, this.colWidth(), this.rowHeight());
-  }
-
-  private paintSelectionFill(visible: VisibleRange, theme: CanvasTheme): void {
-    if (this.selectedRange === undefined) return;
-    this.ctx.fillStyle = theme.selected;
-    const range = new Range(this.selectedRange);
-    for (let r = Math.max(range.r1, visible.startRow); r <= Math.min(range.r2, visible.endRow - 1); r += 1) {
-      for (let c = Math.max(range.c1, visible.startCol); c <= Math.min(range.c2, visible.endCol - 1); c += 1) {
-        if (this.isActiveCell(r, c) && this.selectionKind !== 'row' && this.selectionKind !== 'column' && this.selectionKind !== 'sheet') continue;
-        const { x, y } = this.cellToViewport(r, c);
-        this.ctx.fillRect(x + 1, y + 1, this.colWidth() - 2, this.rowHeight() - 2);
+  private paintCells(vis: VisibleRange, theme: CanvasTheme): void {
+    for (let r = vis.startRow; r < vis.endRow; r += 1) {
+      for (let c = vis.startCol; c < vis.endCol; c += 1) {
+        const { x, y } = this.cellVP(r, c);
+        const cw = this.scroller.getColWidth(c);
+        const rh = this.scroller.getRowHeight(r);
+        const style = this.cellStyle(r, c);
+        if (style?.bgcolor !== undefined) { this.ctx.fillStyle = style.bgcolor; this.ctx.fillRect(x + 1, y + 1, cw - 2, rh - 2); }
+        if (this.opts.showGrid !== false) { this.ctx.strokeStyle = theme.grid; this.ctx.strokeRect(x, y, cw, rh); }
+        if (this.isSelFill(r, c, vis)) { this.ctx.fillStyle = theme.selected; this.ctx.fillRect(x + 1, y + 1, cw - 2, rh - 2); }
+        this.paintText(r, c, x, y, cw, rh, theme);
       }
     }
   }
 
-  private paintCellTexts(range: VisibleRange): void {
-    for (let r = range.startRow; r < range.endRow; r += 1) {
-      for (let c = range.startCol; c < range.endCol; c += 1) this.paintCellText(r, c);
-    }
-  }
-
-  private paintCellText(r: number, c: number): void {
+  private paintText(r: number, c: number, x: number, y: number, cw: number, rh: number, theme: CanvasTheme): void {
     const cell = this.opts.store.getCell(r, c);
     if (cell === undefined || cell.text.length === 0) return;
     const style = this.cellStyle(r, c);
     const fontSize = Math.max(10, Math.round((style?.fontSize ?? 14) * this.zoom()));
-    const fontFamily = style?.fontFamily ?? readCanvasTheme().fontFamily;
+    const fontFamily = style?.fontFamily ?? theme.fontFamily;
     const text = this.opts.showFormula === true && cell.formula !== undefined ? cell.formula : cell.text;
     const align = style?.align ?? 'left';
-    const { x, y } = this.cellToViewport(r, c);
     this.ctx.save();
-    this.ctx.beginPath();
-    this.ctx.rect(x + 1, y + 1, this.colWidth() - 2, this.rowHeight() - 2);
-    this.ctx.clip();
-    this.ctx.fillStyle = style?.color ?? readCanvasTheme().text;
-    this.ctx.textBaseline = 'middle';
-    this.ctx.textAlign = align;
+    this.ctx.beginPath(); this.ctx.rect(x + 1, y + 1, cw - 2, rh - 2); this.ctx.clip();
+    this.ctx.fillStyle = style?.color ?? theme.text; this.ctx.textBaseline = 'middle'; this.ctx.textAlign = align;
     this.ctx.font = `${style?.italic === true ? 'italic ' : ''}${style?.bold === true ? 'bold ' : ''}${fontSize}px ${fontFamily}`;
-    const textX = align === 'center' ? x + this.colWidth() / 2 : align === 'right' ? x + this.colWidth() - 6 : x + 6;
-    const textY = y + this.rowHeight() / 2;
-    this.ctx.fillText(text, textX, textY);
-    if (style?.underline === true) this.paintUnderline(text, textX, textY, align, fontSize);
+    const tx = align === 'center' ? x + cw / 2 : align === 'right' ? x + cw - 6 : x + 6;
+    this.ctx.fillText(text, tx, y + rh / 2);
+    if (style?.underline === true) { const w = typeof this.ctx.measureText === 'function' ? this.ctx.measureText(text).width : text.length * fontSize * 0.6; const s = align === 'center' ? tx - w / 2 : align === 'right' ? tx - w : tx; this.ctx.beginPath(); this.ctx.moveTo(s, y + rh / 2 + fontSize * 0.38); this.ctx.lineTo(s + w, y + rh / 2 + fontSize * 0.38); this.ctx.strokeStyle = String(this.ctx.fillStyle); this.ctx.lineWidth = 1; this.ctx.stroke(); }
     this.ctx.restore();
   }
 
-  private paintUnderline(text: string, x: number, y: number, align: 'left' | 'center' | 'right', fontSize: number): void {
-    const width = typeof this.ctx.measureText === 'function' ? this.ctx.measureText(text).width : text.length * fontSize * 0.6;
-    const start = align === 'center' ? x - width / 2 : align === 'right' ? x - width : x;
-    this.ctx.beginPath();
-    this.ctx.moveTo(start, y + fontSize * 0.38);
-    this.ctx.lineTo(start + width, y + fontSize * 0.38);
-    this.ctx.strokeStyle = String(this.ctx.fillStyle);
-    this.ctx.lineWidth = 1;
-    this.ctx.stroke();
-  }
-
-  private paintSelectionBorder(theme: CanvasTheme): void {
+  private paintSelection(theme: CanvasTheme): void {
     if (this.selectedRange === undefined) return;
-    const topLeft = this.cellToViewport(this.selectedRange.r1, this.selectedRange.c1);
-    const w = (this.selectedRange.c2 - this.selectedRange.c1 + 1) * this.colWidth();
-    const h = (this.selectedRange.r2 - this.selectedRange.r1 + 1) * this.rowHeight();
-    this.ctx.strokeStyle = theme.accent;
-    this.ctx.lineWidth = 2;
-    this.ctx.strokeRect(topLeft.x + 1, topLeft.y + 1, w - 2, h - 2);
-    this.paintActiveCellBorder(theme);
-    this.ctx.fillStyle = theme.accent;
-    this.ctx.fillRect(topLeft.x + w - 5, topLeft.y + h - 5, 7, 7);
-    this.ctx.lineWidth = 1;
+    const tl = this.cellVP(this.selectedRange.r1, this.selectedRange.c1);
+    let w = 0; for (let c = this.selectedRange.c1; c <= this.selectedRange.c2; c += 1) w += this.scroller.getColWidth(c);
+    let h = 0; for (let r = this.selectedRange.r1; r <= this.selectedRange.r2; r += 1) h += this.scroller.getRowHeight(r);
+    this.ctx.strokeStyle = theme.accent; this.ctx.lineWidth = 2;
+    this.ctx.strokeRect(tl.x + 1, tl.y + 1, w - 2, h - 2);
+    if (this.activeCell !== undefined && new Range(this.selectedRange).contains(this.activeCell.r, this.activeCell.c) && this.selectionKind !== 'row' && this.selectionKind !== 'column' && this.selectionKind !== 'sheet') {
+      const ac = this.cellVP(this.activeCell.r, this.activeCell.c);
+      this.ctx.strokeRect(ac.x + 1, ac.y + 1, this.scroller.getColWidth(this.activeCell.c) - 2, this.scroller.getRowHeight(this.activeCell.r) - 2);
+    }
+    this.ctx.fillStyle = theme.accent; this.ctx.fillRect(tl.x + w - 5, tl.y + h - 5, 7, 7); this.ctx.lineWidth = 1;
   }
 
-  private paintActiveCellBorder(theme: CanvasTheme): void {
-    if (this.activeCell === undefined || this.selectedRange === undefined) return;
-    if (!new Range(this.selectedRange).contains(this.activeCell.r, this.activeCell.c)) return;
-    if (this.selectionKind === 'row' || this.selectionKind === 'column' || this.selectionKind === 'sheet') return;
-    const { x, y } = this.cellToViewport(this.activeCell.r, this.activeCell.c);
-    this.ctx.strokeStyle = theme.accent;
-    this.ctx.lineWidth = 2;
-    this.ctx.strokeRect(x + 1, y + 1, this.colWidth() - 2, this.rowHeight() - 2);
+  private paintOverlays(theme: CanvasTheme): void {
+    const indicator = this.resizeHandler.getIndicator();
+    if (indicator !== null) {
+      this.ctx.save(); this.ctx.setLineDash([4, 3]); this.ctx.strokeStyle = theme.accent; this.ctx.lineWidth = 1;
+      this.ctx.beginPath();
+      if (indicator.type === 'row') { this.ctx.moveTo(0, indicator.position); this.ctx.lineTo(this.vpW(), indicator.position); }
+      else { this.ctx.moveTo(indicator.position, 0); this.ctx.lineTo(indicator.position, this.vpH()); }
+      this.ctx.stroke(); this.ctx.setLineDash([]); this.ctx.restore();
+    }
+    const ft = this.fillHandle.getFillTarget();
+    if (ft !== undefined) {
+      const tl = this.cellVP(ft.r1, ft.c1); let w = 0; for (let c = ft.c1; c <= ft.c2; c += 1) w += this.scroller.getColWidth(c);
+      let h = 0; for (let r = ft.r1; r <= ft.r2; r += 1) h += this.scroller.getRowHeight(r);
+      this.ctx.save(); this.ctx.setLineDash([3, 3]); this.ctx.strokeStyle = theme.accent; this.ctx.lineWidth = 1.5;
+      this.ctx.strokeRect(tl.x, tl.y, w, h); this.ctx.setLineDash([]); this.ctx.restore();
+    }
   }
 
-  private isHighlightedColumn(c: number): boolean {
+  private isHighCol(c: number): boolean { return this.selectedRange !== undefined && this.selectionKind !== 'row' && c >= this.selectedRange.c1 && c <= this.selectedRange.c2; }
+  private isHighRow(r: number): boolean { return this.selectedRange !== undefined && this.selectionKind !== 'column' && r >= this.selectedRange.r1 && r <= this.selectedRange.r2; }
+  private isSelFill(r: number, c: number, _vis: VisibleRange): boolean {
     if (this.selectedRange === undefined) return false;
-    if (this.selectionKind === 'row') return false;
-    return c >= this.selectedRange.c1 && c <= this.selectedRange.c2;
+    const sr = this.selectedRange;
+    if (r < sr.r1 || r > sr.r2 || c < sr.c1 || c > sr.c2) return false;
+    if (this.isActiveCell(r, c) && this.selectionKind !== 'row' && this.selectionKind !== 'column' && this.selectionKind !== 'sheet') return false;
+    return true;
+  }
+  private isActiveCell(r: number, c: number): boolean { return this.activeCell !== undefined && this.activeCell.r === r && this.activeCell.c === c; }
+  private pointerCell(cx: number, cy: number): CellAddress | null { return canvasPointToCell(this.opts.canvas, cx, cy, this.scroller.scrollLeft, this.scroller.scrollTop, this.opts.zoom); }
+  private cellVP(r: number, c: number): { x: number; y: number } { const p = this.scroller.cellToPixel(r, c); return { x: ROW_HEADER_WIDTH + p.x - this.scroller.scrollLeft, y: COL_HEADER_HEIGHT + p.y - this.scroller.scrollTop }; }
+  private cellStyle(r: number, c: number) { const cell = this.opts.store.getCell(r, c); return cell?.styleId === undefined ? undefined : this.opts.store.getStyle(cell.styleId); }
+  private zoom(): number { return (this.opts.zoom ?? 100) / 100; }
+  private defaultRowHeight(): number { return ROW_HEIGHT * this.zoom(); }
+  private defaultColWidth(): number { return COL_WIDTH * this.zoom(); }
+  private gridW(): number { return Math.max(0, this.vpW() - ROW_HEADER_WIDTH); }
+  private gridH(): number { return Math.max(0, this.vpH() - COL_HEADER_HEIGHT); }
+  private vpW(): number { return this.opts.canvas.clientWidth || this.opts.canvas.width || 300; }
+  private vpH(): number { return this.opts.canvas.clientHeight || this.opts.canvas.height || 150; }
+
+  private syncSizesFromStore(): void {
+    const z = this.zoom();
+    for (let r = 0; r < TOTAL_ROWS; r += 1) { const h = this.opts.store.getRow(r)?.height; if (h !== undefined) this.scroller.setRowHeight(r, h * z); }
+    for (let c = 0; c < TOTAL_COLS; c += 1) { const w = this.opts.store.getCol(c)?.width; if (w !== undefined) this.scroller.setColWidth(c, w * z); }
   }
 
-  private isHighlightedRow(r: number): boolean {
-    if (this.selectedRange === undefined) return false;
-    if (this.selectionKind === 'column') return false;
-    return r >= this.selectedRange.r1 && r <= this.selectedRange.r2;
+  private onStoreEvent(e: StoreEvent): void {
+    const z = this.zoom();
+    if (e.type === 'row') { const h = e.meta?.height; this.scroller.setRowHeight(e.r, h !== undefined ? h * z : this.defaultRowHeight()); }
+    if (e.type === 'col') { const w = e.meta?.width; this.scroller.setColWidth(e.c, w !== undefined ? w * z : this.defaultColWidth()); }
+    this.invalidateAll();
   }
-
-  private isActiveCell(r: number, c: number): boolean {
-    return this.activeCell !== undefined && this.activeCell.r === r && this.activeCell.c === c;
-  }
-
-  private pointerCell(clientX: number, clientY: number): CellAddress | null {
-    return canvasPointToCell(this.opts.canvas, clientX, clientY, this.scroller.scrollLeft, this.scroller.scrollTop, this.opts.zoom);
-  }
-
-  private cellToViewport(r: number, c: number): { x: number; y: number } {
-    const pos = this.scroller.cellToPixel(r, c);
-    return { x: ROW_HEADER_WIDTH + pos.x - this.scroller.scrollLeft, y: COL_HEADER_HEIGHT + pos.y - this.scroller.scrollTop };
-  }
-
-  private cellStyle(r: number, c: number) {
-    const cell = this.opts.store.getCell(r, c);
-    return cell?.styleId === undefined ? undefined : this.opts.store.getStyle(cell.styleId);
-  }
-
-  private zoom(): number {
-    return (this.opts.zoom ?? 100) / 100;
-  }
-
-  private rowHeight(): number {
-    return ROW_HEIGHT * this.zoom();
-  }
-
-  private colWidth(): number {
-    return COL_WIDTH * this.zoom();
-  }
-
-  private getGridWidth(): number { return Math.max(0, this.getViewportWidth() - ROW_HEADER_WIDTH); }
-  private getGridHeight(): number { return Math.max(0, this.getViewportHeight() - COL_HEADER_HEIGHT); }
-  private getViewportWidth(): number { return this.opts.canvas.clientWidth || this.opts.canvas.width || 300; }
-  private getViewportHeight(): number { return this.opts.canvas.clientHeight || this.opts.canvas.height || 150; }
-}
-
-export function canvasPointToCell(canvas: HTMLCanvasElement, clientX: number, clientY: number, scrollLeft = 0, scrollTop = 0, zoom = 100): CellAddress | null {
-  const rect = canvas.getBoundingClientRect();
-  const x = clientX - rect.left - ROW_HEADER_WIDTH + scrollLeft;
-  const y = clientY - rect.top - COL_HEADER_HEIGHT + scrollTop;
-  const scale = zoom / 100;
-  if (x < 0 || y < 0) return null;
-  return { r: Math.floor(y / (ROW_HEIGHT * scale)), c: Math.floor(x / (COL_WIDTH * scale)) };
-}
-
-export function canvasPointToHeader(canvas: HTMLCanvasElement, clientX: number, clientY: number, scrollLeft = 0, scrollTop = 0, zoom = 100): HeaderHit {
-  const rect = canvas.getBoundingClientRect();
-  const x = clientX - rect.left;
-  const y = clientY - rect.top;
-  const c = canvasPointToColumn(canvas, clientX, scrollLeft, zoom);
-  const r = canvasPointToRow(canvas, clientY, scrollTop, zoom);
-  if (x >= 0 && x < ROW_HEADER_WIDTH && y >= 0 && y < COL_HEADER_HEIGHT) return { type: 'sheet' };
-  if (y >= 0 && y < COL_HEADER_HEIGHT && c !== null) return { type: 'column', c };
-  if (x >= 0 && x < ROW_HEADER_WIDTH && r !== null) return { type: 'row', r };
-  return null;
-}
-
-export function canvasPointToColumn(canvas: HTMLCanvasElement, clientX: number, scrollLeft = 0, zoom = 100): number | null {
-  const rect = canvas.getBoundingClientRect();
-  const x = clientX - rect.left - ROW_HEADER_WIDTH + scrollLeft;
-  const scale = zoom / 100;
-  if (x < 0) return null;
-  return clamp(Math.floor(x / (COL_WIDTH * scale)), 0, TOTAL_COLS - 1);
-}
-
-export function canvasPointToRow(canvas: HTMLCanvasElement, clientY: number, scrollTop = 0, zoom = 100): number | null {
-  const rect = canvas.getBoundingClientRect();
-  const y = clientY - rect.top - COL_HEADER_HEIGHT + scrollTop;
-  const scale = zoom / 100;
-  if (y < 0) return null;
-  return clamp(Math.floor(y / (ROW_HEIGHT * scale)), 0, TOTAL_ROWS - 1);
 }
 
 function readCanvasTheme(): CanvasTheme {
-  const styles = typeof document === 'undefined' ? null : getComputedStyle(document.documentElement);
-  return { bg: cssVar(styles, '--ss-bg', '#fff'), text: cssVar(styles, '--ss-text', '#333'), grid: cssVar(styles, '--ss-grid', '#f0f0f0'), selected: cssVar(styles, '--ss-selected', '#e8f0ff'), headerBg: cssVar(styles, '--ss-header-bg', '#f7f7f7'), accent: cssVar(styles, '--ss-accent', '#1677ff'), fontFamily: cssVar(styles, '--ss-font-family', 'sans-serif'), border: cssVar(styles, '--ss-border', '#d9d9d9') };
+  const s = typeof document === 'undefined' ? null : getComputedStyle(document.documentElement);
+  return {
+    bg: cssV(s, '--ss-bg', '#fff'), text: cssV(s, '--ss-text', '#333'), grid: cssV(s, '--ss-grid', '#f0f0f0'),
+    selected: cssV(s, '--ss-selected', '#e8f0ff'), headerBg: cssV(s, '--ss-header-bg', '#f7f7f7'),
+    accent: cssV(s, '--ss-accent', '#1677ff'), fontFamily: cssV(s, '--ss-font-family', 'sans-serif'), border: cssV(s, '--ss-border', '#d9d9d9'),
+  };
 }
-
-function headerSelectionColor(theme: CanvasTheme): string {
-  return typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && CSS.supports('color', 'color-mix(in srgb, #000 10%, white)')
-    ? `color-mix(in srgb, ${theme.accent} 14%, ${theme.headerBg})`
-    : theme.selected;
+function headerColor(theme: CanvasTheme): string {
+  return typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && CSS.supports('color', 'color-mix(in srgb, #000 10%, white)') ? `color-mix(in srgb, ${theme.accent} 14%, ${theme.headerBg})` : theme.selected;
 }
-
-function cssVar(styles: CSSStyleDeclaration | null, name: string, fallback: string): string {
-  return styles?.getPropertyValue(name).trim() || fallback;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
+function cssV(s: CSSStyleDeclaration | null, n: string, f: string): string { return s?.getPropertyValue(n).trim() || f; }
