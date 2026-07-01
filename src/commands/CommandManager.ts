@@ -11,6 +11,10 @@ export class CommandManager {
     private readonly events?: EventBus,
   ) {}
 
+  public get activeSheetId(): string {
+    return this.store.getActiveSheetId();
+  }
+
   public execute(cmd: Command): void {
     cmd.execute(this.store);
     this.undoStack.push(cmd);
