@@ -10,6 +10,7 @@ import { InsertRowCommand } from '../../commands/impl/InsertRow';
 import { SetMerge } from '../../commands/impl/SetMerge';
 import { SetRangeStyleCommand } from '../../commands/impl/SetRangeStyle';
 import { SetRangeValues } from '../../commands/impl/SetRangeValues';
+import { SetNumberFormatCommand } from '../../commands/impl/SetNumberFormat';
 import { TOTAL_COLS, TOTAL_ROWS } from '../../renderer/CanvasRenderer';
 import { Range, type RangeAddress } from '../../selection/Range';
 import { Store } from '../../store/Store';
@@ -17,6 +18,7 @@ import type { Command } from '../../commands/Command';
 import type { Cell, Style } from '../../types';
 import { xy2expr } from '../../util/alphabet';
 import { AboutDialog } from './dialogs/AboutDialog';
+import { ChartStubDialog } from './dialogs/ChartStubDialog';
 import { FindReplaceDialog, type FindReplaceValues } from './dialogs/FindReplaceDialog';
 import { InsertColDialog, type InsertColValues } from './dialogs/InsertColDialog';
 import { InsertRowDialog, type InsertRowValues } from './dialogs/InsertRowDialog';
@@ -119,9 +121,6 @@ function insertItems(): NonNullable<MenuProps['items']> {
     item('insert:deleteRow', '删除行'),
     item('insert:deleteCol', '删除列'),
     divider('insert:divider:1'),
-    item('insert:merge', '合并单元格'),
-    item('insert:unmerge', '取消合并'),
-    divider('insert:divider:2'),
     item('insert:image', '图片...'),
     item('insert:chart', '图表...'),
   ];
@@ -135,6 +134,10 @@ function formatItems(): NonNullable<MenuProps['items']> {
     divider('format:divider:1'),
     { key: 'format:align', label: '对齐', children: [item('format:align:left', '左对齐'), item('format:align:center', '居中'), item('format:align:right', '右对齐')] },
     item('format:wrap', '自动换行'),
+    divider('format:divider:2'),
+    item('format:merge', '合并单元格'),
+    item('format:unmerge', '取消合并'),
+    divider('format:divider:3'),
     item('format:number', '数字格式...'),
   ];
 }
@@ -194,14 +197,15 @@ function runInsertAction(key: string, ctx: MenuContext, openDialog: (name: Dialo
   if (key === 'insert:col') openDialog('insertCol');
   if (key === 'insert:deleteRow') execute(ctx, new DeleteRowCommand({ r: ctx.selected?.r1 ?? 0, count: selectedRows(ctx.selected) }));
   if (key === 'insert:deleteCol') execute(ctx, new DeleteColCommand({ c: ctx.selected?.c1 ?? 0, count: selectedCols(ctx.selected) }));
-  if (key === 'insert:merge') execute(ctx, new SetMerge({ range: rangeName(ctx.selected), active: true }));
-  if (key === 'insert:unmerge') execute(ctx, new SetMerge({ range: rangeName(ctx.selected), active: false }));
-  if (key === 'insert:image' || key === 'insert:chart') message.info(`${key.endsWith('image') ? '图片' : '图表'}入口已触发，渲染层待接入`);
+  if (key === 'insert:image') message.info('图片入口已触发，渲染层待接入');
+  if (key === 'insert:chart') openDialog('chart');
 }
 
 function runFormatAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void): void {
   const map: Record<string, Partial<Style>> = { 'format:bold': { bold: true }, 'format:italic': { italic: true }, 'format:underline': { underline: true }, 'format:wrap': { wrap: true }, 'format:align:left': { align: 'left' }, 'format:align:center': { align: 'center' }, 'format:align:right': { align: 'right' } };
   if (key === 'format:number') openDialog('numberFormat');
+  else if (key === 'format:merge') execute(ctx, new SetMerge({ range: rangeName(ctx.selected), active: true }));
+  else if (key === 'format:unmerge') execute(ctx, new SetMerge({ range: rangeName(ctx.selected), active: false }));
   else applyStyle(ctx, map[key] ?? {});
 }
 
@@ -295,6 +299,7 @@ function Dialogs({ dialog, setDialog, props, view }: { readonly dialog: DialogNa
     <NumberFormatDialog open={dialog === 'numberFormat'} onCancel={close} onSubmit={(v) => submitNumber(v, props, close)} />
     <AboutDialog open={dialog === 'about'} onCancel={close} />
     <ShortcutsDialog open={dialog === 'shortcuts'} onCancel={close} />
+    <ChartStubDialog open={dialog === 'chart'} onCancel={close} />
     <OptionsDialog open={dialog === 'options'} onCancel={close} />
     <PluginsDialog open={dialog === 'plugins'} onCancel={close} />
   </>;
@@ -304,7 +309,11 @@ function submitFind(values: FindReplaceValues, close: () => void): void { messag
 function submitRow(values: InsertRowValues, ctx: MenuContext, close: () => void): void { execute(ctx, new InsertRowCommand({ r: ctx.selected?.r1 ?? 0, count: values.count, position: values.position })); close(); }
 function submitCol(values: InsertColValues, ctx: MenuContext, close: () => void): void { execute(ctx, new InsertColCommand({ c: ctx.selected?.c1 ?? 0, count: values.count, position: values.position })); close(); }
 function submitZoom(values: ZoomValues, view: ViewState, close: () => void): void { view.setZoom(values.zoom); close(); }
-function submitNumber(values: NumberFormatValues, ctx: MenuContext, close: () => void): void { applyStyle(ctx, { numberFormat: values.numberFormat }); close(); }
+function submitNumber(values: NumberFormatValues, ctx: MenuContext, close: () => void): void {
+  const sel = ctx.selected ?? Range.single(0, 0).toAddress();
+  execute(ctx, new SetNumberFormatCommand({ r1: sel.r1, c1: sel.c1, r2: sel.r2, c2: sel.c2, numberFormat: values.numberFormat }));
+  close();
+}
 
 const OptionsDialog: FC<{ readonly open: boolean; readonly onCancel: () => void }> = ({ open, onCancel }) => <Modal title="选项" open={open} onCancel={onCancel} onOk={onCancel}>
   <Form layout="vertical"><Form.Item label="默认字号"><InputNumber defaultValue={14} min={8} max={72} /></Form.Item><Form.Item label="默认列宽"><InputNumber defaultValue={100} min={40} max={400} /></Form.Item><Form.Item label="启用网格线"><Switch defaultChecked /></Form.Item></Form>
