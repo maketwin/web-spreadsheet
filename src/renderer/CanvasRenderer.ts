@@ -5,6 +5,7 @@ import type { Store } from '../store/Store';
 import { TOTAL_ROWS, TOTAL_COLS, ROW_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, COL_HEADER_HEIGHT, type CellAddress, canvasPointToCell, canvasPointToHeader, canvasPointToColumn, canvasPointToRow, type CanvasTheme, readCanvasTheme, headerSelectionColor } from './coordinate';
 import { DirtyRegionTracker, type Rect } from './DirtyRegionTracker';
 import { FillHandle } from '../fill/FillHandle';
+import { FreezeManager } from '../freeze/FreezeManager';
 import { ResizeHandler } from './ResizeHandler';
 import { VirtualScroller, type VisibleRange } from './VirtualScroller';
 import type { StoreEvent } from '../types';
@@ -16,6 +17,7 @@ export { TOTAL_ROWS, TOTAL_COLS, ROW_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, COL_HE
 export interface CanvasRendererOptions {
   canvas: HTMLCanvasElement; store: Store; selectedRange?: RangeAddress; selectionKind?: SelectionKind;
   activeCell?: CellAddress; zoom?: number; showGrid?: boolean; showFormula?: boolean;
+  frozenRows?: number; frozenCols?: number;
   onCellClick?: (cell: CellAddress, shiftKey?: boolean) => void;
   onSelectionChange?: (range: RangeAddress, activeCell?: CellAddress, anchorCell?: CellAddress) => void;
   onColumnSelect?: (c: number, shiftKey: boolean) => void; onRowSelect?: (r: number, shiftKey: boolean) => void;
@@ -30,6 +32,7 @@ export class CanvasRenderer {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly scroller: VirtualScroller;
   private readonly dirty = new DirtyRegionTracker();
+  private readonly freeze: FreezeManager;
   private readonly resizeHandler: ResizeHandler;
   private readonly fillHandle: FillHandle;
   private readonly unsubscribe: () => void;
@@ -38,6 +41,7 @@ export class CanvasRenderer {
   private activeCell: CellAddress | undefined;
   private dragAnchor: DragAnchor | null = null;
   private rafId: number | null = null;
+  private highlightMatches: readonly CellAddress[] = [];
 
   public constructor(private readonly opts: CanvasRendererOptions) {
     const ctx = opts.canvas.getContext('2d');
@@ -45,6 +49,8 @@ export class CanvasRenderer {
     this.ctx = ctx;
     this.selectedRange = opts.selectedRange; this.selectionKind = opts.selectionKind; this.activeCell = opts.activeCell;
     this.scroller = new VirtualScroller({ totalRows: TOTAL_ROWS, totalCols: TOTAL_COLS, defaultRowHeight: this.defaultRowHeight(), defaultColWidth: this.defaultColWidth(), viewportW: this.gridW(), viewportH: this.gridH() });
+    this.freeze = new FreezeManager({ totalRows: TOTAL_ROWS, totalCols: TOTAL_COLS });
+    if ((opts.frozenRows ?? 0) > 0 || (opts.frozenCols ?? 0) > 0) this.freeze.freezeAt(opts.frozenRows ?? 0, opts.frozenCols ?? 0);
     this.syncSizesFromStore();
     this.resizeHandler = new ResizeHandler({ canvas: opts.canvas, scroller: this.scroller, store: opts.store, zoom: () => this.zoom(), onRowResize: opts.onRowResize, onColResize: opts.onColResize, onRowDblClick: opts.onRowDblClick, onColDblClick: opts.onColDblClick, invalidate: () => this.invalidateAll() });
     this.fillHandle = new FillHandle({ canvas: opts.canvas, scroller: this.scroller, selectedRange: () => this.selectedRange, onFill: opts.onFill, invalidate: () => this.invalidateAll() });
@@ -60,6 +66,8 @@ export class CanvasRenderer {
   public setSelection(range: RangeAddress | undefined, kind: SelectionKind | undefined, activeCell?: CellAddress): void { this.selectedRange = range; this.selectionKind = kind; this.activeCell = activeCell; this.invalidateAll(); }
   public setSelectedCell(cell: CellAddress | undefined): void { this.setSelection(cell === undefined ? undefined : Range.single(cell.r, cell.c).toAddress(), cell === undefined ? undefined : 'cell', cell); }
   public invalidateAll(): void { this.dirty.invalidateAll(); this.scheduleRender(); }
+  public setFreeze(rows: number, cols: number): void { this.freeze.freezeAt(rows, cols); this.invalidateAll(); }
+  public setHighlightMatches(cells: readonly CellAddress[]): void { this.highlightMatches = cells; this.invalidateAll(); }
 
   private bindEvents(): void {
     if (!this.opts.canvas.hasAttribute('tabindex')) this.opts.canvas.tabIndex = 0;
@@ -110,6 +118,7 @@ export class CanvasRenderer {
     this.ctx.save(); this.ctx.beginPath(); this.ctx.rect(region.x, region.y, region.w, region.h); this.ctx.clip();
     this.ctx.fillStyle = theme.bg; this.ctx.fillRect(0, 0, this.vpW(), this.vpH());
     this.paintHeaders(vis, theme); this.paintCells(vis, theme); this.paintSelection(theme); this.paintOverlays(theme);
+    if (this.freeze.isFrozen()) this.paintFrozenPanes(vis, theme);
     this.ctx.restore();
   }
 
@@ -181,6 +190,86 @@ export class CanvasRenderer {
     if (indicator !== null) { this.ctx.save(); this.ctx.setLineDash([4, 3]); this.ctx.strokeStyle = theme.accent; this.ctx.lineWidth = 1; this.ctx.beginPath(); if (indicator.type === 'row') { this.ctx.moveTo(0, indicator.position); this.ctx.lineTo(this.vpW(), indicator.position); } else { this.ctx.moveTo(indicator.position, 0); this.ctx.lineTo(indicator.position, this.vpH()); } this.ctx.stroke(); this.ctx.setLineDash([]); this.ctx.restore(); }
     const ft = this.fillHandle.getFillTarget();
     if (ft !== undefined) { const { x, y, w, h } = this.rangeRect(ft); this.ctx.save(); this.ctx.setLineDash([3, 3]); this.ctx.strokeStyle = theme.accent; this.ctx.lineWidth = 1.5; this.ctx.strokeRect(x, y, w, h); this.ctx.setLineDash([]); this.ctx.restore(); }
+    this.paintHighlights(theme);
+  }
+
+  /** Paint find-match highlight cells with light yellow background. */
+  private paintHighlights(_theme: CanvasTheme): void {
+    if (this.highlightMatches.length === 0) return;
+    this.ctx.save();
+    for (const cell of this.highlightMatches) {
+      const { x, y } = this.cellVP(cell.r, cell.c);
+      this.ctx.fillStyle = 'rgba(255,255,0,0.3)';
+      this.ctx.fillRect(x + 1, y + 1, this.scroller.getColWidth(cell.c) - 2, this.scroller.getRowHeight(cell.r) - 2);
+    }
+    this.ctx.restore();
+  }
+
+  /** Paint frozen rows/cols on top of the scrollable area — they don't scroll. */
+  private paintFrozenPanes(vis: VisibleRange, theme: CanvasTheme): void {
+    const fr = this.freeze.getFrozenRows();
+    const fc = this.freeze.getFrozenCols();
+    if (fr === 0 && fc === 0) return;
+
+    // Paint frozen cells (scroll offset = 0)
+    for (let r = 0; r < Math.min(fr, vis.endRow); r += 1) {
+      for (let c = 0; c < Math.min(fc, vis.endCol); c += 1) {
+        const { x, y } = this.frozenCellVP(r, c);
+        this.paintCellBg(r, c, x, y, this.scroller.getColWidth(c), this.scroller.getRowHeight(r), theme);
+      }
+    }
+
+    // Paint frozen row strip (full width, no vertical scroll)
+    if (fr > 0) {
+      for (let r = 0; r < Math.min(fr, vis.endRow); r += 1) {
+        for (let c = vis.startCol; c < vis.endCol; c += 1) {
+          const { x, y } = this.frozenCellVP(r, c);
+          this.paintCellBg(r, c, x, y, this.scroller.getColWidth(c), this.scroller.getRowHeight(r), theme);
+        }
+      }
+    }
+
+    // Paint frozen col strip (full height, no horizontal scroll)
+    if (fc > 0) {
+      for (let r = vis.startRow; r < vis.endRow; r += 1) {
+        for (let c = 0; c < Math.min(fc, vis.endCol); c += 1) {
+          const { x, y } = this.frozenCellVP(r, c);
+          this.paintCellBg(r, c, x, y, this.scroller.getColWidth(c), this.scroller.getRowHeight(r), theme);
+        }
+      }
+    }
+
+    // Draw freeze separator lines
+    this.ctx.save();
+    this.ctx.strokeStyle = theme.accent;
+    this.ctx.lineWidth = 2;
+    if (fc > 0) {
+      const x = this.frozenColEdge(fc);
+      this.ctx.beginPath(); this.ctx.moveTo(x, COL_HEADER_HEIGHT); this.ctx.lineTo(x, this.vpH()); this.ctx.stroke();
+    }
+    if (fr > 0) {
+      const y = this.frozenRowEdge(fr);
+      this.ctx.beginPath(); this.ctx.moveTo(ROW_HEADER_WIDTH, y); this.ctx.lineTo(this.vpW(), y); this.ctx.stroke();
+    }
+    this.ctx.restore();
+  }
+
+  /** Viewport position for a cell in the frozen zone (no scroll offset). */
+  private frozenCellVP(r: number, c: number): { x: number; y: number } {
+    const p = this.scroller.cellToPixel(r, c);
+    return { x: ROW_HEADER_WIDTH + p.x, y: COL_HEADER_HEIGHT + p.y };
+  }
+
+  private frozenColEdge(col: number): number {
+    let x = ROW_HEADER_WIDTH;
+    for (let c = 0; c < col; c += 1) x += this.scroller.getColWidth(c);
+    return x;
+  }
+
+  private frozenRowEdge(row: number): number {
+    let y = COL_HEADER_HEIGHT;
+    for (let r = 0; r < row; r += 1) y += this.scroller.getRowHeight(r);
+    return y;
   }
 
   private rangeRect(range: RangeAddress): { x: number; y: number; w: number; h: number } {

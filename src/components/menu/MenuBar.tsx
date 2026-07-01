@@ -35,8 +35,10 @@ export const MenuBar: FC<MenuBarProps> = (props) => {
   const [zoom, setZoom] = useState(props.view?.zoom ?? 100);
   const [showFormula, setShowFormula] = useState(props.view?.showFormula ?? false);
   const [showGrid, setShowGrid] = useState(props.view?.showGrid ?? true);
+  const [frozenRows, setFrozenRows] = useState(props.view?.frozenRows ?? 0);
+  const [frozenCols, setFrozenCols] = useState(props.view?.frozenCols ?? 0);
   const fileInput = useRef<HTMLInputElement>(null);
-  const view = makeView(props.view, zoom, showFormula, showGrid, setZoom, setShowFormula, setShowGrid);
+  const view = makeView(props.view, zoom, showFormula, showGrid, frozenRows, frozenCols, setZoom, setShowFormula, setShowGrid, setFrozenRows, setFrozenCols);
   const actions = useMemo(() => makeActions(props, setDialog, view, fileInput), [props, view]);
 
   const menus = topMenus(actions, view);
@@ -109,7 +111,7 @@ function viewItems(view: ViewState): NonNullable<MenuProps['items']> {
     item('view:formula', <ToggleLabel text="显示公式" checked={view.showFormula} />),
     item('view:grid', <ToggleLabel text="显示网格线" checked={view.showGrid} />),
     divider('view:divider:2'),
-    item('view:freeze', '冻结窗格'),
+    item('view:freeze', view.frozenRows > 0 || view.frozenCols > 0 ? '取消冻结窗格' : '冻结窗格'),
     item('view:fitWidth', '适应窗口宽度'),
   ];
 }
@@ -216,7 +218,10 @@ function runViewAction(key: string, view: ViewState, openDialog: (name: DialogNa
   if (key === 'view:zoomOut') view.setZoom(Math.max(50, view.zoom - 10));
   if (key === 'view:formula') view.setShowFormula(!view.showFormula);
   if (key === 'view:grid') view.setShowGrid(!view.showGrid);
-  if (key === 'view:freeze') message.info('冻结窗格 TODO 已记录');
+  if (key === 'view:freeze') {
+    if (view.frozenRows > 0 || view.frozenCols > 0) view.setFreeze(0, 0);
+    else view.setFreeze(1, 1);
+  }
   if (key === 'view:fitWidth') view.setZoom(120);
 }
 
@@ -324,8 +329,13 @@ const ToggleLabel: FC<{ readonly text: string; readonly checked: boolean }> = ({
   <span className="ss-menu-label"><span>{text}</span><Switch size="small" checked={checked} style={{ pointerEvents: 'none' }} /></span>
 );
 
-function makeView(partial: Partial<ViewState> | undefined, zoom: number, showFormula: boolean, showGrid: boolean, setZoom: (v: number) => void, setShowFormula: (v: boolean) => void, setShowGrid: (v: boolean) => void): ViewState {
-  return { zoom: partial?.zoom ?? zoom, showFormula: partial?.showFormula ?? showFormula, showGrid: partial?.showGrid ?? showGrid, setZoom: partial?.setZoom ?? setZoom, setShowFormula: partial?.setShowFormula ?? setShowFormula, setShowGrid: partial?.setShowGrid ?? setShowGrid };
+function makeView(partial: Partial<ViewState> | undefined, zoom: number, showFormula: boolean, showGrid: boolean, frozenRows: number, frozenCols: number, setZoom: (v: number) => void, setShowFormula: (v: boolean) => void, setShowGrid: (v: boolean) => void, setFrozenRows: (v: number) => void, setFrozenCols: (v: number) => void): ViewState {
+  return {
+    zoom: partial?.zoom ?? zoom, showFormula: partial?.showFormula ?? showFormula, showGrid: partial?.showGrid ?? showGrid,
+    frozenRows: partial?.frozenRows ?? frozenRows, frozenCols: partial?.frozenCols ?? frozenCols,
+    setZoom: partial?.setZoom ?? setZoom, setShowFormula: partial?.setShowFormula ?? setShowFormula, setShowGrid: partial?.setShowGrid ?? setShowGrid,
+    setFreeze: partial?.setFreeze ?? ((rows: number, cols: number) => { setFrozenRows(rows); setFrozenCols(cols); }),
+  };
 }
 function selectedRows(range: RangeAddress | null): number { return range === null ? 1 : range.r2 - range.r1 + 1; }
 function selectedCols(range: RangeAddress | null): number { return range === null ? 1 : range.c2 - range.c1 + 1; }

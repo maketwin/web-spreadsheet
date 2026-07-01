@@ -21,9 +21,12 @@ export interface ViewState {
   readonly zoom: number;
   readonly showFormula: boolean;
   readonly showGrid: boolean;
+  readonly frozenRows: number;
+  readonly frozenCols: number;
   readonly setZoom: (zoom: number) => void;
   readonly setShowFormula: (value: boolean) => void;
   readonly setShowGrid: (value: boolean) => void;
+  readonly setFreeze: (rows: number, cols: number) => void;
 }
 
 export interface MenuActions {
