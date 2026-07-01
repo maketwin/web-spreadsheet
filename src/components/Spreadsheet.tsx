@@ -1,5 +1,5 @@
 import { Button, Divider, Select, Space, Switch, Tooltip, message } from 'antd';
-import { AlignCenterOutlined, AlignLeftOutlined, AlignRightOutlined, BoldOutlined, ClearOutlined, ItalicOutlined, SelectOutlined, UnderlineOutlined, ZoomInOutlined, ZoomOutOutlined } from '@ant-design/icons';
+import { AlignCenterOutlined, AlignLeftOutlined, AlignRightOutlined, BoldOutlined, ClearOutlined, FormatPainterOutlined, ItalicOutlined, SelectOutlined, UnderlineOutlined, ZoomInOutlined, ZoomOutOutlined } from '@ant-design/icons';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type Dispatch, type FC, type KeyboardEvent as ReactKeyboardEvent, type RefObject, type SetStateAction } from 'react';
@@ -41,6 +41,8 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const [findDialogOpen, setFindDialogOpen] = useState<import('./menu/types').DialogName | null>(null);
   const [storeVersion, setStoreVersion] = useState(0);
   const [formulaValue, setFormulaValue] = useState('');
+  const [painting, setPainting] = useState(false);
+  const [sourceStyle, setSourceStyle] = useState<Style | undefined>(undefined);
   const inputRef = useRef<HTMLInputElement>(null);
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
@@ -51,7 +53,17 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     setEditing(null);
   }, []);
   const selectRange = useCallback((range: RangeAddress) => selectSelection(rangeSelection(range)), [selectSelection]);
-  const onCellClick = useCallback((cell: CellAddress, shift: boolean) => selectSelection(shift && selectedRef.current ? extendSelection(selectedRef.current, cell) : cellSelection(cell.r, cell.c)), [selectSelection]);
+  const onCellClick = useCallback((cell: CellAddress, shift: boolean) => {
+    if (painting && sourceStyle !== undefined) {
+      const range = Range.single(cell.r, cell.c).toAddress();
+      const cmd = new SetRangeStyleCommand({ ...range, style: sourceStyle });
+      if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store);
+      setPainting(false);
+      setSourceStyle(undefined);
+      return;
+    }
+    selectSelection(shift && selectedRef.current ? extendSelection(selectedRef.current, cell) : cellSelection(cell.r, cell.c));
+  }, [painting, sourceStyle, selectSelection, cmdManager, store]);
   const { canvasRef, rendererRef } = useCanvasRenderer(store, selected, onCellClick, selectSelection, view, cmdManager);
   const startEditing = (cell: CellAddress, value = cellEditValue(store, cell)): void => {
     const next = cellSelection(cell.r, cell.c);
@@ -70,7 +82,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
 
   return <div className="ss-root">
     <MenuBar {...menuBarProps(store, cmdManager, selected, selectRange, () => selectSelection(sheetSelection(allSheetRange())), onClose)} view={{ ...view, setZoom: (zoom) => setView((current) => ({ ...current, zoom })), setShowFormula: (showFormula) => setView((current) => ({ ...current, showFormula })), setShowGrid: (showGrid) => setView((current) => ({ ...current, showGrid })), setFreeze: (frozenRows, frozenCols) => setView((current) => ({ ...current, frozenRows, frozenCols })) }} onFindNavigate={(cell) => selectSelection(cellSelection(cell.r, cell.c))} onFindHighlight={(cells) => rendererRef.current?.setHighlightMatches(cells)} openDialogKey={findDialogOpen} />
-    <InteractionToolbar selected={selected} store={store} cmdManager={cmdManager} view={view} setView={setView} selectAll={() => selectSelection(sheetSelection(allSheetRange()))} />
+    <InteractionToolbar selected={selected} store={store} cmdManager={cmdManager} view={view} setView={setView} selectAll={() => selectSelection(sheetSelection(allSheetRange()))} painting={painting} onTogglePainter={() => { if (painting) { setPainting(false); setSourceStyle(undefined); } else { const cell = selected?.active; const s = cell === undefined ? undefined : store.getCell(cell.r, cell.c)?.styleId === undefined ? undefined : store.getStyle(store.getCell(cell.r, cell.c)!.styleId!); setSourceStyle(s); setPainting(true); } }} />
     <FormulaBar selected={selected} value={formulaValue} onChange={setFormulaValue} onCommit={() => commitFormulaValue(selected, formulaValue, store, cmdManager)} />
     <div className="ss-canvas-wrap"><canvas ref={canvasRef} className="ss-canvas" tabIndex={0} onKeyDown={(e) => handleCanvasKeyDown(e, selectedRef.current, store, cmdManager, startEditing, selectSelection, selectRange, setView, setFindDialogOpen)} onDoubleClick={(e) => editFromPointer(e.currentTarget, e.clientX, e.clientY, startEditing, view.zoom)} />
       {editing !== null && <EditorOverlay refEl={inputRef} editing={editing} setEditing={setEditing} commit={commitEditing} zoom={view.zoom} />}</div>
@@ -230,7 +242,7 @@ const FormulaBar: FC<{ readonly selected: Selection | null; readonly value: stri
   </div>;
 };
 
-const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly store: Store; readonly cmdManager: CommandManager | undefined; readonly view: ViewState; readonly setView: Dispatch<SetStateAction<ViewState>>; readonly selectAll: () => void }> = ({ selected, store, cmdManager, view, setView, selectAll }) => {
+const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly store: Store; readonly cmdManager: CommandManager | undefined; readonly view: ViewState; readonly setView: Dispatch<SetStateAction<ViewState>>; readonly selectAll: () => void; readonly painting: boolean; readonly onTogglePainter: () => void }> = ({ selected, store, cmdManager, view, setView, selectAll, painting, onTogglePainter }) => {
   const range = selected?.range;
   const style = (next: Partial<Style>): void => { if (range !== undefined) applyShortcutStyle(store, cmdManager, range, next); };
   const setZoom = (zoom: number): void => setView((current) => ({ ...current, zoom }));
@@ -238,6 +250,8 @@ const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly sto
     <Space size={4} wrap>
       <Tooltip title="全选"><Button size="small" icon={<SelectOutlined />} aria-label="Select all" onClick={selectAll} /></Tooltip>
       <Tooltip title="清除内容"><Button size="small" icon={<ClearOutlined />} aria-label="Clear contents" onClick={() => { if (range !== undefined) clearRange(store, cmdManager, range); }} /></Tooltip>
+      <Divider type="vertical" />
+      <Tooltip title={painting ? '退出格式刷' : '格式刷'}><Button size="small" type={painting ? 'primary' : 'default'} icon={<FormatPainterOutlined />} aria-label="Format painter" onClick={onTogglePainter} /></Tooltip>
       <Divider type="vertical" />
       <Tooltip title="加粗"><Button size="small" icon={<BoldOutlined />} aria-label="Bold" onClick={() => style({ bold: true })} /></Tooltip>
       <Tooltip title="斜体"><Button size="small" icon={<ItalicOutlined />} aria-label="Italic" onClick={() => style({ italic: true })} /></Tooltip>
