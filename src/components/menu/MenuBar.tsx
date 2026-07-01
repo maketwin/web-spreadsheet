@@ -20,6 +20,8 @@ import type { Command } from '../../commands/Command';
 import type { Cell, Style } from '../../types';
 import { xy2expr } from '../../util/alphabet';
 import { saveWorkbook as saveToDB, DEFAULT_ID } from '../../db/WorkbookDB';
+import { exportXlsx } from '../../io/XlsxExporter';
+import { importXlsx } from '../../io/XlsxImporter';
 import { AboutDialog } from './dialogs/AboutDialog';
 import { ChartStubDialog } from './dialogs/ChartStubDialog';
 import { FindReplaceDialog } from './dialogs/FindReplaceDialog';
@@ -47,8 +49,9 @@ export const MenuBar: FC<MenuBarProps> = (props) => {
   const [frozenCols, setFrozenCols] = useState(props.view?.frozenCols ?? 0);
   const findService = useRef(new FindReplaceService());
   const fileInput = useRef<HTMLInputElement>(null);
+  const xlsxInput = useRef<HTMLInputElement>(null);
   const view = makeView(props.view, zoom, showFormula, showGrid, frozenRows, frozenCols, setZoom, setShowFormula, setShowGrid, setFrozenRows, setFrozenCols);
-  const actions = useMemo(() => makeActions(props, setDialog, view, fileInput), [props, view]);
+  const actions = useMemo(() => makeActions(props, setDialog, view, fileInput, xlsxInput), [props, view]);
   useEffect(() => { if (props.openDialogKey !== undefined && props.openDialogKey !== null) setDialog(props.openDialogKey); }, [props.openDialogKey]);
 
   const menus = topMenus(actions, view);
@@ -61,6 +64,7 @@ export const MenuBar: FC<MenuBarProps> = (props) => {
       </Dropdown>)}
     </div>
     <input ref={fileInput} hidden type="file" accept=".csv,.tsv,.xlsx,.json" onChange={(e) => openLocalFile(e, props)} />
+    <input ref={xlsxInput} hidden type="file" accept=".xlsx" onChange={(e) => openXlsxFile(e, props)} />
     <Dialogs dialog={dialog} setDialog={setDialog} props={props} view={view} findService={findService.current} />
   </div>;
 };
@@ -88,7 +92,9 @@ function fileItems(): NonNullable<MenuProps['items']> {
     item('file:saveAs', '另存为...'),
     divider('file:divider:1'),
     item('file:import', '导入 CSV/TSV'),
+    item('file:importXlsx', '导入 xlsx'),
     item('file:export', '导出 JSON'),
+    item('file:exportXlsx', '导出 xlsx'),
     divider('file:divider:2'),
     item('file:close', '关闭演示'),
   ];
@@ -172,12 +178,12 @@ function divider(key: string): NonNullable<MenuProps['items']>[number] {
   return { key, type: 'divider' };
 }
 
-function makeActions(ctx: MenuContext, openDialog: (name: DialogName) => void, view: ViewState, fileInput: React.RefObject<HTMLInputElement | null>): MenuActions {
-  return { run: (key) => runMenuAction(String(key), ctx, openDialog, view, fileInput), openDialog, applyStyle: (style) => applyStyle(ctx, style) };
+function makeActions(ctx: MenuContext, openDialog: (name: DialogName) => void, view: ViewState, fileInput: React.RefObject<HTMLInputElement | null>, xlsxInput: React.RefObject<HTMLInputElement | null>): MenuActions {
+  return { run: (key) => runMenuAction(String(key), ctx, openDialog, view, fileInput, xlsxInput), openDialog, applyStyle: (style) => applyStyle(ctx, style) };
 }
 
-function runMenuAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void, view: ViewState, fileInput: React.RefObject<HTMLInputElement | null>): void {
-  if (key.startsWith('file:')) runFileAction(key, ctx, fileInput);
+function runMenuAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void, view: ViewState, fileInput: React.RefObject<HTMLInputElement | null>, xlsxInput: React.RefObject<HTMLInputElement | null>): void {
+  if (key.startsWith('file:')) runFileAction(key, ctx, fileInput, xlsxInput);
   else if (key.startsWith('edit:')) runEditAction(key, ctx, openDialog);
   else if (key.startsWith('insert:')) runInsertAction(key, ctx, openDialog);
   else if (key.startsWith('format:')) runFormatAction(key, ctx, openDialog);
@@ -186,11 +192,13 @@ function runMenuAction(key: string, ctx: MenuContext, openDialog: (name: DialogN
   else if (key.startsWith('help:')) runHelpAction(key, openDialog);
 }
 
-function runFileAction(key: string, ctx: MenuContext, fileInput: React.RefObject<HTMLInputElement | null>): void {
+function runFileAction(key: string, ctx: MenuContext, fileInput: React.RefObject<HTMLInputElement | null>, xlsxInput: React.RefObject<HTMLInputElement | null>): void {
   if (key === 'file:new') confirmNew(ctx);
   if (key === 'file:open' || key === 'file:import') fileInput.current?.click();
+  if (key === 'file:importXlsx') xlsxInput.current?.click();
   if (key === 'file:save') saveWorkbook(ctx.store);
   if (key === 'file:saveAs' || key === 'file:export') downloadWorkbook(ctx.store);
+  if (key === 'file:exportXlsx') downloadXlsx(ctx.store);
   if (key === 'file:close') ctx.closeDemo?.();
 }
 
@@ -294,6 +302,14 @@ function downloadWorkbook(store: Store): void {
   message.success('已导出 workbook JSON');
 }
 
+function downloadXlsx(store: Store): void {
+  const blob = exportXlsx(store);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'workbook.xlsx'; a.click(); URL.revokeObjectURL(url);
+  message.success('已导出 xlsx');
+}
+
 function openLocalFile(event: React.ChangeEvent<HTMLInputElement>, ctx: MenuContext): void {
   const file = event.currentTarget.files?.[0];
   if (file === undefined) return;
@@ -301,9 +317,32 @@ function openLocalFile(event: React.ChangeEvent<HTMLInputElement>, ctx: MenuCont
   event.currentTarget.value = '';
 }
 
+function openXlsxFile(event: React.ChangeEvent<HTMLInputElement>, ctx: MenuContext): void {
+  const file = event.currentTarget.files?.[0];
+  if (file === undefined) return;
+  void file.arrayBuffer().then((buf) => {
+    const result = importXlsx(buf);
+    const first = result.sheets[0];
+    if (first === undefined) { message.info('xlsx 文件为空'); return; }
+    const values = first.cells;
+    execute(ctx, new SetRangeValues({ r1: 0, c1: 0, r2: values.length - 1, c2: (values[0]?.length ?? 1) - 1, values }));
+    message.success(`已导入 xlsx (${result.sheets.length} 个工作表)`);
+  });
+  event.currentTarget.value = '';
+}
+
 function importText(text: string, ctx: MenuContext): void {
-  const cells = text.trim().startsWith('{') ? [] : ClipboardService.parseText(text.replaceAll(',', '\t'));
-  if (cells.length === 0) { message.info('当前打开入口已触发；xlsx 解析器待接入'); return; }
+  if (text.trim().startsWith('{')) {
+    try {
+      const data = JSON.parse(text) as import('../../store/Store').SerializedStore;
+      const restored = Store.deserialize(data);
+      restored.getCells().forEach(([key, cell]) => { const [r, c] = key.split(',').map(Number); ctx.store.setCell(r ?? 0, c ?? 0, cell); });
+      message.success('已导入 JSON 工作簿');
+    } catch { message.error('JSON 解析失败'); }
+    return;
+  }
+  const cells = ClipboardService.parseText(text.replaceAll(',', '\t'));
+  if (cells.length === 0) { message.info('文件内容为空'); return; }
   const values: readonly (readonly Partial<Cell>[])[] = cells;
   execute(ctx, new SetRangeValues({ r1: 0, c1: 0, r2: values.length - 1, c2: (values[0]?.length ?? 1) - 1, values }));
 }
