@@ -1,35 +1,41 @@
+import { fireEvent } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CanvasRenderer } from '../../src/renderer/CanvasRenderer';
+import { CanvasRenderer, canvasPointToCell } from '../../src/renderer/CanvasRenderer';
 import { Store } from '../../src/store/Store';
 
 function makeCanvas(): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   Object.defineProperty(canvas, 'clientWidth', { configurable: true, value: 300 });
   Object.defineProperty(canvas, 'clientHeight', { configurable: true, value: 150 });
+  Object.defineProperty(canvas, 'getBoundingClientRect', {
+    configurable: true,
+    value: () => ({ left: 10, top: 20, width: 300, height: 150, right: 310, bottom: 170, x: 10, y: 20, toJSON: () => ({}) }),
+  });
+  document.body.append(canvas);
   return canvas;
 }
 
-function installCanvasContext(): void {
+function installCanvasContext(): Partial<CanvasRenderingContext2D> {
   const ctx: Partial<CanvasRenderingContext2D> = {
     beginPath: vi.fn(),
     clip: vi.fn(),
     fillRect: vi.fn(),
     fillText: vi.fn(),
-    strokeRect: vi.fn(),
     rect: vi.fn(),
     restore: vi.fn(),
     save: vi.fn(),
     scale: vi.fn(),
+    setTransform: vi.fn(),
+    strokeRect: vi.fn(),
   };
-  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
-    // Vitest jsdom has no real canvas context; this mock implements the methods used by CanvasRenderer.
-    ctx as CanvasRenderingContext2D,
-  );
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx as CanvasRenderingContext2D);
+  return ctx;
 }
 
 describe('CanvasRenderer', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    document.body.innerHTML = '';
   });
 
   it('instantiates and destroys', () => {
@@ -46,23 +52,77 @@ describe('CanvasRenderer', () => {
 
   it('renders after store subscription without throwing', () => {
     installCanvasContext();
-    const callbacks: FrameRequestCallback[] = [];
-    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
-      callbacks.push(callback);
-      return callbacks.length;
-    });
-    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => undefined);
+    const callbacks = installAnimationFrames();
     const store = new Store();
     const renderer = new CanvasRenderer({ canvas: makeCanvas(), store });
 
-    const initial = callbacks[0];
-    expect(initial).toBeDefined();
-    initial?.(0);
+    callbacks[0]?.(0);
     store.setCell(0, 0, { text: 'A1' });
-    const next = callbacks[1];
-    expect(next).toBeDefined();
-    expect(() => next?.(16)).not.toThrow();
 
+    expect(() => callbacks[1]?.(16)).not.toThrow();
+    renderer.destroy();
+  });
+
+  it('converts canvas coordinates to cell addresses', () => {
+    const canvas = makeCanvas();
+
+    expect(canvasPointToCell(canvas, 10 + 46 + 5, 20 + 25 + 5)).toEqual({ r: 0, c: 0 });
+    expect(canvasPointToCell(canvas, 10 + 46 + 205, 20 + 25 + 55)).toEqual({ r: 2, c: 2 });
+  });
+
+  it('ignores row and column headers during coordinate conversion', () => {
+    const canvas = makeCanvas();
+
+    expect(canvasPointToCell(canvas, 40, 50)).toBeNull();
+    expect(canvasPointToCell(canvas, 80, 30)).toBeNull();
+  });
+
+  it('emits mousedown cell clicks with converted coordinates', () => {
+    installCanvasContext();
+    const callbacks = installAnimationFrames();
+    const onCellClick = vi.fn();
+    const renderer = new CanvasRenderer({ canvas: makeCanvas(), store: new Store(), onCellClick });
+
+    fireEvent.mouseDown(document.querySelector('canvas') as HTMLCanvasElement, { clientX: 10 + 46 + 130, clientY: 20 + 25 + 30 });
+
+    expect(onCellClick).toHaveBeenCalledWith({ r: 1, c: 1 });
+    expect(callbacks.length).toBe(1);
+    renderer.destroy();
+  });
+
+  it('theme change event schedules invalidation and repaint', () => {
+    installCanvasContext();
+    const callbacks = installAnimationFrames();
+    const renderer = new CanvasRenderer({ canvas: makeCanvas(), store: new Store() });
+    callbacks[0]?.(0);
+
+    window.dispatchEvent(new CustomEvent('ss:theme-changed'));
+
+    expect(callbacks[1]).toBeDefined();
+    renderer.destroy();
+  });
+
+  it('reads CSS variables for each paint', () => {
+    const ctx = installCanvasContext();
+    const callbacks = installAnimationFrames();
+    document.documentElement.style.setProperty('--ss-bg', '#101010');
+    const renderer = new CanvasRenderer({ canvas: makeCanvas(), store: new Store() });
+
+    callbacks[0]?.(0);
+
+    expect(ctx.fillRect).toHaveBeenCalledWith(0, 0, 300, 150);
+    expect(ctx.fillStyle).toBe('#333');
+    document.documentElement.style.removeProperty('--ss-bg');
     renderer.destroy();
   });
 });
+
+function installAnimationFrames(): FrameRequestCallback[] {
+  const callbacks: FrameRequestCallback[] = [];
+  vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => {
+    callbacks.push(callback);
+    return callbacks.length;
+  });
+  vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => undefined);
+  return callbacks;
+}
