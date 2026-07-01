@@ -21,7 +21,7 @@ export const BottomBar: FC<BottomBarProps> = ({
   onRenameSheet,
   onDeleteSheet,
 }) => (
-  <div className="ss-bottom-bar" role="tablist" aria-label="Spreadsheet sheets">
+  <div className="ss-bottom-bar" role="tablist" aria-label="Spreadsheet sheets" style={{ position: 'sticky', bottom: 0 }}>
     {sheets.map((sheet) => {
       const info = sheetInfo(sheet);
       const active = activeSheetId === undefined ? info.name === activeSheet : info.id === activeSheetId;

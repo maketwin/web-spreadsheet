@@ -27,7 +27,7 @@
     .ss-formula-input { width: 100%; height: 32px; padding: 0 10px; color: var(--ss-text); background: var(--ss-bg); border: 1px solid var(--ss-border); border-radius: 6px; outline: none; box-sizing: border-box; }
     .ss-formula-input:focus { border-color: var(--ss-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ss-accent) 15%, transparent); }
     .ss-toolbar, .ss-bottom-bar { display: flex; gap: 8px; padding: 8px; background: var(--ss-toolbar-bg); border-bottom: 1px solid var(--ss-border); }
-    .ss-bottom-bar { border-top: 1px solid var(--ss-border); border-bottom: 0; }
+    .ss-bottom-bar { border-top: 1px solid var(--ss-border); border-bottom: 0; z-index: 1; background: var(--ss-toolbar-bg); }
     .ss-canvas-wrap { position: relative; flex: 1; min-height: 0; overflow: hidden; }
     .ss-canvas { width: 100%; height: 100%; display: block; outline: none; }
     .ss-editor-overlay { position: absolute; box-sizing: border-box; padding: 0 5px; border: 2px solid var(--ss-accent); background: var(--ss-bg); color: var(--ss-text); font: 14px -apple-system, sans-serif; outline: none; }
