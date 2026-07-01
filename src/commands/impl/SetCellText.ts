@@ -1,4 +1,5 @@
 import { Command } from '../Command';
+import { cellFromText } from '../../util/cell';
 
 import type { Store } from '../../store/Store';
 import type { Cell } from '../../types';
@@ -17,7 +18,7 @@ export class SetCellText extends Command<SetCellTextArgs> {
     const oldCell = store.getCell(r, c);
 
     this.oldCell = oldCell;
-    store.setCell(r, c, { ...oldCell, text });
+    store.setCell(r, c, cellFromText(oldCell, text));
   }
 
   public getUndo(): Command {
