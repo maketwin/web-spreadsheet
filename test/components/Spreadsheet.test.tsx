@@ -9,6 +9,7 @@ function installCanvasContext(): void {
     clip: vi.fn(),
     fillRect: vi.fn(),
     fillText: vi.fn(),
+    strokeRect: vi.fn(),
     rect: vi.fn(),
     restore: vi.fn(),
     save: vi.fn(),

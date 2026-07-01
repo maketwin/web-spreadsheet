@@ -31,6 +31,8 @@ export { VirtualScroller } from './renderer/VirtualScroller';
 export type { PixelPosition, VisibleRange, VirtualScrollerOptions } from './renderer/VirtualScroller';
 export { Store } from './store/Store';
 export type { SerializedStore } from './store/Store';
+export { applyStoredTheme, getTheme, setTheme, THEMES } from './theme';
+export type { Theme } from './theme';
 export type { Cell, CellValue, ColMeta, RowMeta, StoreEvent, Style, Unsubscribe } from './types';
 
 export class Spreadsheet extends SpreadsheetImpl {

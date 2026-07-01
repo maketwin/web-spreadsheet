@@ -2,7 +2,7 @@ import type { Store } from '../store/Store';
 import { DependencyGraph } from './dependency';
 import { evaluate } from './evaluator';
 import { FormulaParser } from './parser';
-import type { FormulaValue } from './types';
+import type { FormulaArgument, FormulaValue } from './types';
 
 export class FormulaEngine {
   private graph = new DependencyGraph();
@@ -29,7 +29,7 @@ export class FormulaEngine {
     if (!ast) return;
 
     try {
-      const value = evaluate(ast, (x, y) => this.resolveCell(x, y));
+      const value = scalar(evaluate(ast, (x, y) => this.resolveCell(x, y)));
       const coords = parseCellId(cellId);
       if (!coords) return;
       const existing = this.store.getCell(coords.r, coords.c);
@@ -49,6 +49,15 @@ export class FormulaEngine {
     if (!cell) return null;
     return cell.value ?? cell.text;
   }
+}
+
+function scalar(value: FormulaArgument): FormulaValue {
+  if (isFormulaList(value)) return value[0] ?? null;
+  return value;
+}
+
+function isFormulaList(value: FormulaArgument): value is readonly FormulaValue[] {
+  return Array.isArray(value);
 }
 
 function parseCellId(cellId: string): { r: number; c: number } | null {

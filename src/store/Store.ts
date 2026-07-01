@@ -75,6 +75,10 @@ export class Store {
     this.notify({ type: 'merge', range });
   }
 
+  public getCells(): readonly [string, Cell][] {
+    return [...this.cells.entries()];
+  }
+
   public subscribe(fn: (e: StoreEvent) => void): Unsubscribe {
     this.subscribers.add(fn);
     return () => {

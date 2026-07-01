@@ -1,4 +1,5 @@
 export type FormulaValue = string | number | boolean | Date | null;
+export type FormulaArgument = FormulaValue | readonly FormulaValue[];
 
 export type AstNode =
   | { type: 'number'; value: number }

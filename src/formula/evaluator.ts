@@ -1,7 +1,7 @@
 import { registry } from './registry';
-import type { AstNode, CellResolver, FormulaValue } from './types';
+import type { AstNode, CellResolver, FormulaArgument, FormulaValue } from './types';
 
-export function evaluate(node: AstNode, resolve: CellResolver): FormulaValue {
+export function evaluate(node: AstNode, resolve: CellResolver): FormulaArgument {
   switch (node.type) {
     case 'number':
       return node.value;
@@ -10,7 +10,7 @@ export function evaluate(node: AstNode, resolve: CellResolver): FormulaValue {
     case 'cell':
       return resolve(node.x, node.y);
     case 'range':
-      return null;
+      return evaluateRange(node, resolve);
     case 'func':
       return evaluateFunction(node, resolve);
     case 'binary':
@@ -20,16 +20,28 @@ export function evaluate(node: AstNode, resolve: CellResolver): FormulaValue {
   }
 }
 
-function evaluateFunction(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver): FormulaValue {
+function evaluateRange(node: Extract<AstNode, { type: 'range' }>, resolve: CellResolver): readonly FormulaValue[] {
+  const values: FormulaValue[] = [];
+  const x1 = Math.min(node.x1, node.x2);
+  const x2 = Math.max(node.x1, node.x2);
+  const y1 = Math.min(node.y1, node.y2);
+  const y2 = Math.max(node.y1, node.y2);
+
+  for (let y = y1; y <= y2; y += 1) {
+    for (let x = x1; x <= x2; x += 1) values.push(resolve(x, y));
+  }
+  return values;
+}
+
+function evaluateFunction(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver): FormulaArgument {
   const spec = registry.get(node.name);
   if (!spec) return null;
-  const args = node.args.map((arg): FormulaValue => (arg.type === 'range' ? null : evaluate(arg, resolve)));
-  return spec.evaluate(args);
+  return spec.evaluate(node.args.map((arg) => evaluate(arg, resolve)));
 }
 
 function evaluateBinary(node: Extract<AstNode, { type: 'binary' }>, resolve: CellResolver): FormulaValue {
-  const left = evaluate(node.left, resolve);
-  const right = evaluate(node.right, resolve);
+  const left = scalar(evaluate(node.left, resolve));
+  const right = scalar(evaluate(node.right, resolve));
 
   switch (node.op) {
     case '+':
@@ -46,6 +58,15 @@ function evaluateBinary(node: Extract<AstNode, { type: 'binary' }>, resolve: Cel
 }
 
 function evaluateUnary(node: Extract<AstNode, { type: 'unary' }>, resolve: CellResolver): FormulaValue {
-  const value = evaluate(node.operand, resolve);
+  const value = scalar(evaluate(node.operand, resolve));
   return node.op === '-' ? -Number(value) : Number(value);
+}
+
+function scalar(value: FormulaArgument): FormulaValue {
+  if (isFormulaList(value)) return value[0] ?? null;
+  return value;
+}
+
+function isFormulaList(value: FormulaArgument): value is readonly FormulaValue[] {
+  return Array.isArray(value);
 }
