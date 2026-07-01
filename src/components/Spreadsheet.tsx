@@ -4,10 +4,11 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type FC, 
 import { ClipboardService } from '../clipboard/ClipboardService';
 import { CommandManager } from '../commands/CommandManager';
 import { SetCellText } from '../commands/impl/SetCellText';
+import { SetRangeStyleCommand } from '../commands/impl/SetRangeStyle';
 import { SetRangeValues } from '../commands/impl/SetRangeValues';
 import { EventBus } from '../events/EventBus';
 import { FormulaEngine } from '../formula/FormulaEngine';
-import { KeyboardHandler } from '../keys/KeyboardHandler';
+import { KeyboardHandler, type MenuShortcutCommand } from '../keys/KeyboardHandler';
 import { PluginManager, type Plugin } from '../plugin/PluginManager';
 import { CanvasRenderer, COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS, canvasPointToCell, type CellAddress } from '../renderer/CanvasRenderer';
 import { Range, type RangeAddress } from '../selection/Range';
@@ -15,16 +16,16 @@ import { Store, type SheetInfo } from '../store/Store';
 import { applyStoredTheme, setTheme, type Theme } from '../theme';
 import { cellFromText, cellId, formulaDependencies, formulaText, normalizeCellInput, type CellInput as CellDataInput } from '../util/cell';
 import { BottomBar } from './BottomBar';
-import { Toolbar } from './Toolbar';
-import type { Cell, StoreEvent } from '../types';
+import { MenuBar, allSheetRange } from './menu/MenuBar';
+import type { Cell, StoreEvent, Style } from '../types';
 
 export type CellInput = CellDataInput;
 export interface SheetInput { readonly id?: string; readonly name: string; readonly data?: readonly (readonly CellInput[])[] }
 export interface SpreadsheetOptions { readonly data?: readonly (readonly CellInput[])[]; readonly sheets?: readonly SheetInput[]; readonly theme?: Theme | false }
-export interface SpreadsheetProps { readonly store: Store; readonly cmdManager?: CommandManager; readonly formulaEngine?: FormulaEngine; readonly theme?: Theme | false | undefined }
+export interface SpreadsheetProps { readonly store: Store; readonly cmdManager?: CommandManager; readonly formulaEngine?: FormulaEngine; readonly theme?: Theme | false | undefined; readonly onClose?: () => void }
 interface EditingCell extends CellAddress { readonly value: string }
 
-export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, formulaEngine, theme }) => {
+export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, formulaEngine, theme, onClose }) => {
   const [selected, setSelected] = useState<RangeAddress | null>(Range.single(0, 0).toAddress());
   const [editing, setEditing] = useState<EditingCell | null>(null);
   const [sheets, setSheets] = useState<readonly SheetInfo[]>(store.getSheets());
@@ -45,7 +46,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   useEffect(() => inputRef.current?.focus(), [editing]);
 
   return <div className="ss-root">
-    <Toolbar {...toolbarActions()} />
+    <MenuBar {...menuBarProps(store, cmdManager, selected, selectRange, onClose)} />
     <div className="ss-canvas-wrap"><canvas ref={canvasRef} className="ss-canvas" tabIndex={0} onKeyDown={(e) => handleCanvasKeyDown(e, selected, store, cmdManager, startEditing, selectRange)} onDoubleClick={(e) => editFromPointer(e.currentTarget, e.clientX, e.clientY, startEditing)} />
       {editing !== null && <EditorOverlay refEl={inputRef} editing={editing} setEditing={setEditing} commit={commitEditing} />}</div>
     <BottomBar sheets={sheets} activeSheetId={activeSheetId} onSheetChange={(id) => store.activateSheet(id)} onAddSheet={() => addSheet(store)} onRenameSheet={(id) => renameSheet(store, id)} onDeleteSheet={(id) => deleteSheet(store, id)} />
@@ -106,6 +107,7 @@ function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selec
   else if (action.type === 'clear') clearRange(store, cmdManager, selected);
   else if (action.type === 'cancel') selectRange(Range.single(selected.r1, selected.c1).toAddress());
   else if (action.type === 'type' && action.text !== undefined) { setCellText(store, cmdManager, { r: selected.r1, c: selected.c1 }, action.text); startEditing({ r: selected.r1, c: selected.c1 }, action.text); }
+  else if (action.type === 'menu' && action.command !== undefined) handleMenuShortcut(action.command, store, cmdManager, selected, selectRange);
   else handleClipboardAction(action.type, store, cmdManager, selected);
 }
 
@@ -136,7 +138,19 @@ function deleteSheet(store: Store, id: string): void { if (window.confirm('Delet
 function loadData(store: Store, cmd: CommandManager, formula: FormulaEngine, data: readonly (readonly CellInput[])[]): void { loadValues(cmd, data); syncExistingFormulas(store, formula); }
 function loadSheets(store: Store, cmd: CommandManager, formula: FormulaEngine, sheets: readonly SheetInput[]): void { sheets.forEach((sheet, index) => { const id = index === 0 ? store.getActiveSheetId() : store.addSheet(sheet.name); store.renameSheet(id, sheet.name); store.activateSheet(id); loadValues(cmd, sheet.data ?? []); syncExistingFormulas(store, formula); }); const first = store.getSheets()[0]; if (first !== undefined) store.activateSheet(first.id); }
 function loadValues(cmd: CommandManager, data: readonly (readonly CellInput[])[]): void { const values = data.map((row) => row.map(normalizeCellInput)); const maxCols = values.reduce((max, row) => Math.max(max, row.length), 0); if (values.length === 0 || maxCols === 0) return; cmd.execute(new SetRangeValues({ r1: 0, c1: 0, r2: values.length - 1, c2: maxCols - 1, values })); }
-function toolbarActions(): React.ComponentProps<typeof Toolbar> { return { onBold: styleStub('Bold'), onItalic: styleStub('Italic'), onUnderline: styleStub('Underline'), onFontSize: styleStub('Font Size'), onAlign: styleStub('Align'), onToggleDark: toggleTheme }; }
-function styleStub(label: string): () => void { return () => { message.info(`${label} style command coming soon`); }; }
-function toggleTheme(): void { const cur = document.documentElement.getAttribute('data-spreadsheet-theme') || 'light'; setTheme(cur === 'light' ? 'dark' : 'light'); dispatchThemeChanged(); }
+
+function menuBarProps(store: Store, cmdManager: CommandManager | undefined, selected: RangeAddress | null, selectRange: (range: RangeAddress) => void, onClose: (() => void) | undefined): React.ComponentProps<typeof MenuBar> {
+  const props = { store, selected, selectRange, clearRange: () => { if (selected !== null) clearRange(store, cmdManager, selected); }, allRange: () => selectRange(allSheetRange()) };
+  return cmdManager === undefined ? withClose(props, onClose) : withClose({ ...props, cmdManager }, onClose);
+}
+function withClose<T extends Omit<React.ComponentProps<typeof MenuBar>, 'closeDemo'>>(props: T, onClose: (() => void) | undefined): React.ComponentProps<typeof MenuBar> {
+  return onClose === undefined ? props : { ...props, closeDemo: onClose };
+}
+
+function handleMenuShortcut(command: MenuShortcutCommand, store: Store, cmdManager: CommandManager | undefined, selected: RangeAddress, selectRange: (range: RangeAddress) => void): void {
+  const map: Record<MenuShortcutCommand, () => void> = { save: () => saveToLocal(store), find: () => message.info('查找快捷键已触发'), replace: () => message.info('替换快捷键已触发'), selectAll: () => selectRange(allSheetRange()), bold: () => applyShortcutStyle(store, cmdManager, selected, { bold: true }), italic: () => applyShortcutStyle(store, cmdManager, selected, { italic: true }), underline: () => applyShortcutStyle(store, cmdManager, selected, { underline: true }), zoom100: () => message.info('缩放 100%'), zoomIn: () => message.info('放大'), zoomOut: () => message.info('缩小'), undo: () => cmdManager?.undo(), redo: () => cmdManager?.redo() };
+  map[command]();
+}
+function applyShortcutStyle(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress, style: Partial<Style>): void { const cmd = new SetRangeStyleCommand({ ...range, style }); if (cmdManager === undefined) cmd.execute(store); else cmdManager.execute(cmd); }
+function saveToLocal(store: Store): void { window.localStorage.setItem('web-spreadsheet:workbook', JSON.stringify(store.serialize())); message.success('已保存到本地存储'); }
 function dispatchThemeChanged(): void { window.dispatchEvent(new CustomEvent('ss:theme-changed')); }

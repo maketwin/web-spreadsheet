@@ -3,10 +3,13 @@ import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/CanvasRenderer';
 import { Range, type RangeAddress } from '../selection/Range';
 
 export interface KeyboardAction {
-  readonly type: 'move' | 'edit' | 'clear' | 'cancel' | 'copy' | 'paste' | 'cut' | 'type';
+  readonly type: 'move' | 'edit' | 'clear' | 'cancel' | 'copy' | 'paste' | 'cut' | 'type' | 'menu';
   readonly range?: RangeAddress;
   readonly text?: string;
+  readonly command?: MenuShortcutCommand;
 }
+
+export type MenuShortcutCommand = 'save' | 'find' | 'replace' | 'selectAll' | 'bold' | 'italic' | 'underline' | 'zoom100' | 'zoomIn' | 'zoomOut' | 'undo' | 'redo';
 
 export class KeyboardHandler {
   public static next(key: string, range: RangeAddress, shiftKey = false, metaKey = false, ctrlKey = false): KeyboardAction | null {
@@ -39,6 +42,18 @@ function shortcutAction(key: string): KeyboardAction | null {
   if (normalized === 'c') return { type: 'copy' };
   if (normalized === 'v') return { type: 'paste' };
   if (normalized === 'x') return { type: 'cut' };
+  if (normalized === 's') return { type: 'menu', command: 'save' };
+  if (normalized === 'f') return { type: 'menu', command: 'find' };
+  if (normalized === 'h') return { type: 'menu', command: 'replace' };
+  if (normalized === 'a') return { type: 'menu', command: 'selectAll' };
+  if (normalized === 'b') return { type: 'menu', command: 'bold' };
+  if (normalized === 'i') return { type: 'menu', command: 'italic' };
+  if (normalized === 'u') return { type: 'menu', command: 'underline' };
+  if (normalized === '0') return { type: 'menu', command: 'zoom100' };
+  if (normalized === '+' || normalized === '=') return { type: 'menu', command: 'zoomIn' };
+  if (normalized === '-') return { type: 'menu', command: 'zoomOut' };
+  if (normalized === 'z') return { type: 'menu', command: 'undo' };
+  if (normalized === 'y') return { type: 'menu', command: 'redo' };
   return null;
 }
 
