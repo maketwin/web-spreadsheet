@@ -1,7 +1,7 @@
 import { BarChartOutlined, EditOutlined, FileOutlined, FormatPainterOutlined, QuestionCircleOutlined, SettingOutlined, TableOutlined } from '@ant-design/icons';
 import { Dropdown, Form, InputNumber, Modal, Switch, message } from 'antd';
 import type { MenuProps } from 'antd';
-import { useMemo, useRef, useState, type FC, type ReactElement, type ReactNode } from 'react';
+import { useMemo, useRef, useState, useEffect, type FC, type ReactElement, type ReactNode } from 'react';
 import { ClipboardService } from '../../clipboard/ClipboardService';
 import { DeleteColCommand } from '../../commands/impl/DeleteCol';
 import { DeleteRowCommand } from '../../commands/impl/DeleteRow';
@@ -11,6 +11,7 @@ import { SetMerge } from '../../commands/impl/SetMerge';
 import { SetRangeStyleCommand } from '../../commands/impl/SetRangeStyle';
 import { SetRangeValues } from '../../commands/impl/SetRangeValues';
 import { SetNumberFormatCommand } from '../../commands/impl/SetNumberFormat';
+import { FindReplaceService } from '../../find/FindReplaceService';
 import { TOTAL_COLS, TOTAL_ROWS } from '../../renderer/CanvasRenderer';
 import { Range, type RangeAddress } from '../../selection/Range';
 import { Store } from '../../store/Store';
@@ -19,7 +20,7 @@ import type { Cell, Style } from '../../types';
 import { xy2expr } from '../../util/alphabet';
 import { AboutDialog } from './dialogs/AboutDialog';
 import { ChartStubDialog } from './dialogs/ChartStubDialog';
-import { FindReplaceDialog, type FindReplaceValues } from './dialogs/FindReplaceDialog';
+import { FindReplaceDialog } from './dialogs/FindReplaceDialog';
 import { InsertColDialog, type InsertColValues } from './dialogs/InsertColDialog';
 import { InsertRowDialog, type InsertRowValues } from './dialogs/InsertRowDialog';
 import { NumberFormatDialog, type NumberFormatValues } from './dialogs/NumberFormatDialog';
@@ -28,7 +29,12 @@ import { ZoomDialog, type ZoomValues } from './dialogs/ZoomDialog';
 import { shortcutLabel } from './shortcutLabel';
 import type { DialogName, MenuActions, MenuContext, ViewState } from './types';
 
-export interface MenuBarProps extends MenuContext { readonly view?: Partial<ViewState> }
+export interface MenuBarProps extends MenuContext {
+  readonly view?: Partial<ViewState>;
+  readonly onFindNavigate?: (cell: import('../../renderer/coordinate').CellAddress) => void;
+  readonly onFindHighlight?: (cells: readonly import('../../renderer/coordinate').CellAddress[]) => void;
+  readonly openDialogKey?: DialogName | null;
+}
 
 export const MenuBar: FC<MenuBarProps> = (props) => {
   const [dialog, setDialog] = useState<DialogName | null>(null);
@@ -37,9 +43,11 @@ export const MenuBar: FC<MenuBarProps> = (props) => {
   const [showGrid, setShowGrid] = useState(props.view?.showGrid ?? true);
   const [frozenRows, setFrozenRows] = useState(props.view?.frozenRows ?? 0);
   const [frozenCols, setFrozenCols] = useState(props.view?.frozenCols ?? 0);
+  const findService = useRef(new FindReplaceService());
   const fileInput = useRef<HTMLInputElement>(null);
   const view = makeView(props.view, zoom, showFormula, showGrid, frozenRows, frozenCols, setZoom, setShowFormula, setShowGrid, setFrozenRows, setFrozenCols);
   const actions = useMemo(() => makeActions(props, setDialog, view, fileInput), [props, view]);
+  useEffect(() => { if (props.openDialogKey !== undefined && props.openDialogKey !== null) setDialog(props.openDialogKey); }, [props.openDialogKey]);
 
   const menus = topMenus(actions, view);
   return <div className="ss-menu-bar" role="menubar" aria-label="Spreadsheet menu">
@@ -51,7 +59,7 @@ export const MenuBar: FC<MenuBarProps> = (props) => {
       </Dropdown>)}
     </div>
     <input ref={fileInput} hidden type="file" accept=".csv,.tsv,.xlsx,.json" onChange={(e) => openLocalFile(e, props)} />
-    <Dialogs dialog={dialog} setDialog={setDialog} props={props} view={view} />
+    <Dialogs dialog={dialog} setDialog={setDialog} props={props} view={view} findService={findService.current} />
   </div>;
 };
 
@@ -294,10 +302,10 @@ function importText(text: string, ctx: MenuContext): void {
   execute(ctx, new SetRangeValues({ r1: 0, c1: 0, r2: values.length - 1, c2: (values[0]?.length ?? 1) - 1, values }));
 }
 
-function Dialogs({ dialog, setDialog, props, view }: { readonly dialog: DialogName | null; readonly setDialog: (name: DialogName | null) => void; readonly props: MenuBarProps; readonly view: ViewState }): ReactElement {
+function Dialogs({ dialog, setDialog, props, view, findService: svc }: { readonly dialog: DialogName | null; readonly setDialog: (name: DialogName | null) => void; readonly props: MenuBarProps; readonly view: ViewState; readonly findService: FindReplaceService }): ReactElement {
   const close = (): void => setDialog(null);
   return <>
-    <FindReplaceDialog open={dialog === 'find' || dialog === 'replace'} replaceMode={dialog === 'replace'} onCancel={close} onSubmit={(v) => submitFind(v, close)} />
+    <FindReplaceDialog open={dialog === 'find' || dialog === 'replace'} replaceMode={dialog === 'replace'} onCancel={close} store={props.store} selected={props.selected} service={svc} onNavigate={(cell) => props.onFindNavigate?.(cell)} onHighlight={(cells) => props.onFindHighlight?.(cells)} />
     <InsertRowDialog open={dialog === 'insertRow'} onCancel={close} onSubmit={(v) => submitRow(v, props, close)} />
     <InsertColDialog open={dialog === 'insertCol'} onCancel={close} onSubmit={(v) => submitCol(v, props, close)} />
     <ZoomDialog open={dialog === 'zoom'} zoom={view.zoom} onCancel={close} onSubmit={(v) => submitZoom(v, view, close)} />
@@ -310,7 +318,6 @@ function Dialogs({ dialog, setDialog, props, view }: { readonly dialog: DialogNa
   </>;
 }
 
-function submitFind(values: FindReplaceValues, close: () => void): void { message.info(`查找: ${values.find}${values.replace === undefined ? '' : ` → ${values.replace}`}`); close(); }
 function submitRow(values: InsertRowValues, ctx: MenuContext, close: () => void): void { execute(ctx, new InsertRowCommand({ r: ctx.selected?.r1 ?? 0, count: values.count, position: values.position })); close(); }
 function submitCol(values: InsertColValues, ctx: MenuContext, close: () => void): void { execute(ctx, new InsertColCommand({ c: ctx.selected?.c1 ?? 0, count: values.count, position: values.position })); close(); }
 function submitZoom(values: ZoomValues, view: ViewState, close: () => void): void { view.setZoom(values.zoom); close(); }
