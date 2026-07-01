@@ -49,3 +49,23 @@ export function canvasPointToRow(canvas: HTMLCanvasElement, clientY: number, scr
 export function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
+
+export interface CanvasTheme {
+  readonly bg: string; readonly text: string; readonly grid: string; readonly selected: string;
+  readonly headerBg: string; readonly accent: string; readonly fontFamily: string; readonly border: string;
+}
+
+export function readCanvasTheme(): CanvasTheme {
+  const s = typeof document === 'undefined' ? null : getComputedStyle(document.documentElement);
+  return {
+    bg: cssV(s, '--ss-bg', '#fff'), text: cssV(s, '--ss-text', '#333'), grid: cssV(s, '--ss-grid', '#f0f0f0'),
+    selected: cssV(s, '--ss-selected', '#e8f0ff'), headerBg: cssV(s, '--ss-header-bg', '#f7f7f7'),
+    accent: cssV(s, '--ss-accent', '#1677ff'), fontFamily: cssV(s, '--ss-font-family', 'sans-serif'), border: cssV(s, '--ss-border', '#d9d9d9'),
+  };
+}
+
+export function headerSelectionColor(theme: CanvasTheme): string {
+  return typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && CSS.supports('color', 'color-mix(in srgb, #000 10%, white)') ? `color-mix(in srgb, ${theme.accent} 14%, ${theme.headerBg})` : theme.selected;
+}
+
+function cssV(s: CSSStyleDeclaration | null, n: string, f: string): string { return s?.getPropertyValue(n).trim() || f; }

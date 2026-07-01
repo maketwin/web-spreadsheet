@@ -2,7 +2,7 @@ import { num2alpha } from '../util/alphabet';
 import type { SelectionKind } from '../selection/Selection';
 import { Range, type RangeAddress } from '../selection/Range';
 import type { Store } from '../store/Store';
-import { TOTAL_ROWS, TOTAL_COLS, ROW_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, COL_HEADER_HEIGHT, type CellAddress, canvasPointToCell, canvasPointToHeader, canvasPointToColumn, canvasPointToRow } from './coordinate';
+import { TOTAL_ROWS, TOTAL_COLS, ROW_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, COL_HEADER_HEIGHT, type CellAddress, canvasPointToCell, canvasPointToHeader, canvasPointToColumn, canvasPointToRow, type CanvasTheme, readCanvasTheme, headerSelectionColor } from './coordinate';
 import { DirtyRegionTracker, type Rect } from './DirtyRegionTracker';
 import { FillHandle } from '../fill/FillHandle';
 import { ResizeHandler } from './ResizeHandler';
@@ -32,11 +32,6 @@ export interface CanvasRendererOptions {
   onColDblClick?: (c: number) => void;
   onFill?: (source: RangeAddress, target: RangeAddress, ctrlKey: boolean) => void;
   devicePixelRatio?: number;
-}
-
-interface CanvasTheme {
-  readonly bg: string; readonly text: string; readonly grid: string; readonly selected: string;
-  readonly headerBg: string; readonly accent: string; readonly fontFamily: string; readonly border: string;
 }
 
 type DragAnchor = { type: 'cell'; r: number; c: number } | { type: 'column'; c: number } | { type: 'row'; r: number };
@@ -214,7 +209,7 @@ export class CanvasRenderer {
     for (let i = 0; i < vis.startCol; i += 1) x += this.scroller.getColWidth(i);
     for (let c = vis.startCol; c < vis.endCol; c += 1) {
       const w = this.scroller.getColWidth(c);
-      if (this.isHighCol(c)) { this.ctx.fillStyle = headerColor(theme); this.ctx.fillRect(x + 1, 1, w - 2, COL_HEADER_HEIGHT - 2); this.ctx.fillStyle = theme.text; }
+      if (this.isHighCol(c)) { this.ctx.fillStyle = headerSelectionColor(theme); this.ctx.fillRect(x + 1, 1, w - 2, COL_HEADER_HEIGHT - 2); this.ctx.fillStyle = theme.text; }
       this.ctx.strokeRect(x, 0, w, COL_HEADER_HEIGHT);
       this.ctx.fillText(num2alpha(c), x + w / 2, COL_HEADER_HEIGHT / 2);
       x += w;
@@ -223,7 +218,7 @@ export class CanvasRenderer {
     for (let i = 0; i < vis.startRow; i += 1) y += this.scroller.getRowHeight(i);
     for (let r = vis.startRow; r < vis.endRow; r += 1) {
       const h = this.scroller.getRowHeight(r);
-      if (this.isHighRow(r)) { this.ctx.fillStyle = headerColor(theme); this.ctx.fillRect(1, y + 1, ROW_HEADER_WIDTH - 2, h - 2); this.ctx.fillStyle = theme.text; }
+      if (this.isHighRow(r)) { this.ctx.fillStyle = headerSelectionColor(theme); this.ctx.fillRect(1, y + 1, ROW_HEADER_WIDTH - 2, h - 2); this.ctx.fillStyle = theme.text; }
       this.ctx.strokeRect(0, y, ROW_HEADER_WIDTH, h);
       this.ctx.fillText(String(r + 1), ROW_HEADER_WIDTH / 2, y + h / 2);
       y += h;
@@ -239,7 +234,7 @@ export class CanvasRenderer {
         const style = this.cellStyle(r, c);
         if (style?.bgcolor !== undefined) { this.ctx.fillStyle = style.bgcolor; this.ctx.fillRect(x + 1, y + 1, cw - 2, rh - 2); }
         if (this.opts.showGrid !== false) { this.ctx.strokeStyle = theme.grid; this.ctx.strokeRect(x, y, cw, rh); }
-        if (this.isSelFill(r, c, vis)) { this.ctx.fillStyle = theme.selected; this.ctx.fillRect(x + 1, y + 1, cw - 2, rh - 2); }
+        if (this.isSelFill(r, c)) { this.ctx.fillStyle = theme.selected; this.ctx.fillRect(x + 1, y + 1, cw - 2, rh - 2); }
         this.paintText(r, c, x, y, cw, rh, theme);
       }
     }
@@ -297,22 +292,20 @@ export class CanvasRenderer {
 
   private isHighCol(c: number): boolean { return this.selectedRange !== undefined && this.selectionKind !== 'row' && c >= this.selectedRange.c1 && c <= this.selectedRange.c2; }
   private isHighRow(r: number): boolean { return this.selectedRange !== undefined && this.selectionKind !== 'column' && r >= this.selectedRange.r1 && r <= this.selectedRange.r2; }
-  private isSelFill(r: number, c: number, _vis: VisibleRange): boolean {
-    if (this.selectedRange === undefined) return false;
-    const sr = this.selectedRange;
-    if (r < sr.r1 || r > sr.r2 || c < sr.c1 || c > sr.c2) return false;
-    if (this.isActiveCell(r, c) && this.selectionKind !== 'row' && this.selectionKind !== 'column' && this.selectionKind !== 'sheet') return false;
-    return true;
-  }
   private isActiveCell(r: number, c: number): boolean { return this.activeCell !== undefined && this.activeCell.r === r && this.activeCell.c === c; }
+  private isSelFill(r: number, c: number): boolean {
+    const sr = this.selectedRange;
+    if (sr === undefined || r < sr.r1 || r > sr.r2 || c < sr.c1 || c > sr.c2) return false;
+    return !(this.isActiveCell(r, c) && this.selectionKind !== 'row' && this.selectionKind !== 'column' && this.selectionKind !== 'sheet');
+  }
   private pointerCell(cx: number, cy: number): CellAddress | null { return canvasPointToCell(this.opts.canvas, cx, cy, this.scroller.scrollLeft, this.scroller.scrollTop, this.opts.zoom); }
   private cellVP(r: number, c: number): { x: number; y: number } { const p = this.scroller.cellToPixel(r, c); return { x: ROW_HEADER_WIDTH + p.x - this.scroller.scrollLeft, y: COL_HEADER_HEIGHT + p.y - this.scroller.scrollTop }; }
   private cellStyle(r: number, c: number) { const cell = this.opts.store.getCell(r, c); return cell?.styleId === undefined ? undefined : this.opts.store.getStyle(cell.styleId); }
   private zoom(): number { return (this.opts.zoom ?? 100) / 100; }
   private defaultRowHeight(): number { return ROW_HEIGHT * this.zoom(); }
   private defaultColWidth(): number { return COL_WIDTH * this.zoom(); }
-  private gridW(): number { return Math.max(0, this.vpW() - ROW_HEADER_WIDTH); }
-  private gridH(): number { return Math.max(0, this.vpH() - COL_HEADER_HEIGHT); }
+  private gridW(): number { return Math.max(0, (this.opts.canvas.clientWidth || this.opts.canvas.width || 300) - ROW_HEADER_WIDTH); }
+  private gridH(): number { return Math.max(0, (this.opts.canvas.clientHeight || this.opts.canvas.height || 150) - COL_HEADER_HEIGHT); }
   private vpW(): number { return this.opts.canvas.clientWidth || this.opts.canvas.width || 300; }
   private vpH(): number { return this.opts.canvas.clientHeight || this.opts.canvas.height || 150; }
 
@@ -329,16 +322,3 @@ export class CanvasRenderer {
     this.invalidateAll();
   }
 }
-
-function readCanvasTheme(): CanvasTheme {
-  const s = typeof document === 'undefined' ? null : getComputedStyle(document.documentElement);
-  return {
-    bg: cssV(s, '--ss-bg', '#fff'), text: cssV(s, '--ss-text', '#333'), grid: cssV(s, '--ss-grid', '#f0f0f0'),
-    selected: cssV(s, '--ss-selected', '#e8f0ff'), headerBg: cssV(s, '--ss-header-bg', '#f7f7f7'),
-    accent: cssV(s, '--ss-accent', '#1677ff'), fontFamily: cssV(s, '--ss-font-family', 'sans-serif'), border: cssV(s, '--ss-border', '#d9d9d9'),
-  };
-}
-function headerColor(theme: CanvasTheme): string {
-  return typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && CSS.supports('color', 'color-mix(in srgb, #000 10%, white)') ? `color-mix(in srgb, ${theme.accent} 14%, ${theme.headerBg})` : theme.selected;
-}
-function cssV(s: CSSStyleDeclaration | null, n: string, f: string): string { return s?.getPropertyValue(n).trim() || f; }
