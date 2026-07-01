@@ -1,13 +1,15 @@
 # web-spreadsheet v2.0
 
+![version](https://img.shields.io/badge/version-v1.0.0-brightgreen)
+
 A modern, lightweight TypeScript spreadsheet SDK with 4-layer architecture.
 Built from scratch based on the original [x-spreadsheet](https://github.com/myliang/x-spreadsheet)
 (MIT, 14.6k ⭐) — but with TypeScript strict, virtual scrolling, formula
 engine, and plugin system.
 
-> **Status:** v2.0 development in progress. See [PLAN.md](./PLAN.md) for the 7-week roadmap.
+> **Status:** v1.0 released. See [PLAN.md](./PLAN.md) for the 7-week roadmap.
 
-## Features (planned)
+## Features
 - [x] TypeScript strict
 - [x] Vite 5 + vitest
 - [x] Dark mode CSS variables
@@ -18,8 +20,8 @@ engine, and plugin system.
 - [x] Virtual scrolling (visible range calculation)
 - [x] Dirty region tracking
 - [x] Canvas renderer + React UI placeholders
-- [x] Formula engine v1 (30 functions)
-- [ ] Plugin system
+- [x] Formula engine v1 (32 functions)
+- [x] Plugin system
 
 ## Architecture
 ```
