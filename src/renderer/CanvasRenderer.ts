@@ -24,6 +24,7 @@ export interface CanvasRendererOptions {
   onSheetSelect?: () => void; onRowResize?: (r: number, height: number) => void; onColResize?: (c: number, width: number) => void;
   onRowDblClick?: (r: number) => void; onColDblClick?: (c: number) => void;
   onFill?: (source: RangeAddress, target: RangeAddress, ctrlKey: boolean) => void; devicePixelRatio?: number;
+  onHeaderContextMenu?: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => void;
 }
 
 type DragAnchor = { type: 'cell'; r: number; c: number } | { type: 'column'; c: number } | { type: 'row'; r: number };
@@ -72,13 +73,13 @@ export class CanvasRenderer {
   private bindEvents(): void {
     if (!this.opts.canvas.hasAttribute('tabindex')) this.opts.canvas.tabIndex = 0;
     const c = this.opts.canvas;
-    c.addEventListener('mousedown', this.handleMouseDown); c.addEventListener('dblclick', this.handleDblClick);
+    c.addEventListener('mousedown', this.handleMouseDown); c.addEventListener('dblclick', this.handleDblClick); c.addEventListener('contextmenu', this.handleContextMenu);
     window.addEventListener('mousemove', this.handleMouseMove); window.addEventListener('mouseup', this.handleMouseUp);
     window.addEventListener('ss:theme-changed', this.handleThemeChanged);
   }
   private unbindEvents(): void {
     const c = this.opts.canvas;
-    c.removeEventListener('mousedown', this.handleMouseDown); c.removeEventListener('dblclick', this.handleDblClick);
+    c.removeEventListener('mousedown', this.handleMouseDown); c.removeEventListener('dblclick', this.handleDblClick); c.removeEventListener('contextmenu', this.handleContextMenu);
     window.removeEventListener('mousemove', this.handleMouseMove); window.removeEventListener('mouseup', this.handleMouseUp);
     window.removeEventListener('ss:theme-changed', this.handleThemeChanged);
   }
@@ -108,6 +109,12 @@ export class CanvasRenderer {
   private readonly handleMouseUp = (): void => { if (this.resizeHandler.isResizing()) { this.resizeHandler.onMouseUp(); return; } if (this.fillHandle.isDragging()) { this.fillHandle.onMouseUp(); return; } this.dragAnchor = null; };
   private readonly handleDblClick = (ev: MouseEvent): void => { if (this.resizeHandler.onDblClick(ev)) ev.stopPropagation(); };
   private readonly handleThemeChanged = (): void => this.invalidateAll();
+  private readonly handleContextMenu = (ev: MouseEvent): void => {
+    ev.preventDefault();
+    const h = canvasPointToHeader(this.opts.canvas, ev.clientX, ev.clientY, this.scroller.scrollLeft, this.scroller.scrollTop, this.opts.zoom);
+    if (h?.type === 'row') this.opts.onHeaderContextMenu?.({ type: 'row', r: h.r }, ev.clientX, ev.clientY);
+    else if (h?.type === 'column') this.opts.onHeaderContextMenu?.({ type: 'column', c: h.c }, ev.clientX, ev.clientY);
+  };
 
   private scheduleRender(): void { if (this.rafId !== null) return; this.rafId = window.requestAnimationFrame(() => { this.rafId = null; this.render(); }); }
   private render(): void { if (this.dirty.isEmpty()) return; this.syncViewport(); const theme = readCanvasTheme(); const vis = this.scroller.getVisibleRange(); this.dirty.drain().forEach((r) => this.paintRegion(r, vis, theme)); }
