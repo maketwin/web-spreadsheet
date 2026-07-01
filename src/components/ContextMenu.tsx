@@ -1,6 +1,6 @@
-import { Dropdown, InputNumber, Modal, Form } from 'antd';
+import { Dropdown, InputNumber, Modal } from 'antd';
 import type { MenuProps } from 'antd';
-import { useState, type FC, type ReactElement } from 'react';
+import { useState, type FC } from 'react';
 
 export interface ContextMenuProps {
   readonly x: number;
