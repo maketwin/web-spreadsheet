@@ -15,7 +15,9 @@ engine, and plugin system.
 - [x] Store (reactive snapshot data layer)
 - [x] EventBus (subscribe + wildcard)
 - [x] Command pattern + undo/redo
-- [ ] Virtual scrolling (60fps for 10k rows)
+- [x] Virtual scrolling (visible range calculation)
+- [x] Dirty region tracking
+- [x] Canvas renderer + React UI placeholders
 - [ ] Formula engine v1 (30 functions)
 - [ ] Plugin system
 
