@@ -13,6 +13,9 @@ import { FormulaEngine } from '../formula/FormulaEngine';
 import { KeyboardHandler, type MenuShortcutCommand } from '../keys/KeyboardHandler';
 import { PluginManager, type Plugin } from '../plugin/PluginManager';
 import { CanvasRenderer, COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS, canvasPointToCell, type CellAddress } from '../renderer/CanvasRenderer';
+import { FillRangeCommand } from '../commands/impl/FillRange';
+import { SetColWidth } from '../commands/impl/SetColWidth';
+import { SetRowHeight } from '../commands/impl/SetRowHeight';
 import { Range, type RangeAddress } from '../selection/Range';
 import { Store, type SheetInfo } from '../store/Store';
 import { applyStoredTheme, setTheme, type Theme } from '../theme';
@@ -48,7 +51,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   }, []);
   const selectRange = useCallback((range: RangeAddress) => selectSelection(rangeSelection(range)), [selectSelection]);
   const onCellClick = useCallback((cell: CellAddress, shift: boolean) => selectSelection(shift && selectedRef.current ? extendSelection(selectedRef.current, cell) : cellSelection(cell.r, cell.c)), [selectSelection]);
-  const canvasRef = useCanvasRenderer(store, selected, onCellClick, selectSelection, view);
+  const canvasRef = useCanvasRenderer(store, selected, onCellClick, selectSelection, view, cmdManager);
   const startEditing = (cell: CellAddress, value = cellEditValue(store, cell)): void => {
     const next = cellSelection(cell.r, cell.c);
     selectedRef.current = next;
@@ -97,7 +100,7 @@ export class Spreadsheet {
 interface EditorOverlayProps { readonly refEl: RefObject<HTMLInputElement | null>; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly commit: (value: string) => void; readonly zoom: number }
 const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editing, setEditing, commit, zoom }) => <input ref={refEl} className="ss-editor-overlay" style={editorStyle(editing, zoom)} value={editing.value} onChange={(e) => setEditing({ ...editing, value: e.target.value })} onBlur={(e) => commit(e.target.value)} onKeyDown={(e) => handleEditorKey(e, commit, () => setEditing(null))} aria-label="Cell editor" />;
 
-function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick: (cell: CellAddress, shift: boolean) => void, onSelectionChange: (selection: Selection) => void, view: ViewState): RefObject<HTMLCanvasElement | null> {
+function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick: (cell: CellAddress, shift: boolean) => void, onSelectionChange: (selection: Selection) => void, view: ViewState, cmdManager?: CommandManager): RefObject<HTMLCanvasElement | null> {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<CanvasRenderer | null>(null);
   const callbacks = useRef({ onCellClick, onSelectionChange });
@@ -107,7 +110,7 @@ function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick
   useEffect(() => {
     if (canvasRef.current === null) return undefined;
     const currentSelection = selectedLiveRef.current;
-    const base = { canvas: canvasRef.current, store, zoom: view.zoom, showFormula: view.showFormula, showGrid: view.showGrid, onCellClick: (cell: CellAddress, shift?: boolean) => flushSync(() => callbacks.current.onCellClick(cell, shift === true)), onSelectionChange: (range: RangeAddress, active?: CellAddress, anchor?: CellAddress) => flushSync(() => callbacks.current.onSelectionChange(rangeSelection(range, anchor ?? selectedLiveRef.current?.anchor, active ?? { r: range.r2, c: range.c2 }))), onColumnSelect: (c: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(columnSelection(c, TOTAL_ROWS, shift && current?.kind === 'column' ? current.anchor.c : c)); }), onRowSelect: (r: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(rowSelection(r, TOTAL_COLS, shift && current?.kind === 'row' ? current.anchor.r : r)); }), onSheetSelect: () => flushSync(() => callbacks.current.onSelectionChange(sheetSelection(allSheetRange()))) };
+    const base = { canvas: canvasRef.current, store, zoom: view.zoom, showFormula: view.showFormula, showGrid: view.showGrid, onCellClick: (cell: CellAddress, shift?: boolean) => flushSync(() => callbacks.current.onCellClick(cell, shift === true)), onSelectionChange: (range: RangeAddress, active?: CellAddress, anchor?: CellAddress) => flushSync(() => callbacks.current.onSelectionChange(rangeSelection(range, anchor ?? selectedLiveRef.current?.anchor, active ?? { r: range.r2, c: range.c2 }))), onColumnSelect: (c: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(columnSelection(c, TOTAL_ROWS, shift && current?.kind === 'column' ? current.anchor.c : c)); }), onRowSelect: (r: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(rowSelection(r, TOTAL_COLS, shift && current?.kind === 'row' ? current.anchor.r : r)); }), onSheetSelect: () => flushSync(() => callbacks.current.onSelectionChange(sheetSelection(allSheetRange()))), onRowResize: (r: number, height: number) => { const cmd = new SetRowHeight({ r, height }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColResize: (c: number, width: number) => { const cmd = new SetColWidth({ c, width }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onRowDblClick: (r: number) => { const fit = autoFitRowHeight(store, r); const cmd = new SetRowHeight({ r, height: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColDblClick: (c: number) => { const fit = autoFitColWidth(store, c); const cmd = new SetColWidth({ c, width: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onFill: (source: RangeAddress, target: RangeAddress, ctrlKey: boolean) => { const cmd = new FillRangeCommand({ mode: ctrlKey ? 'series' : 'copy', source, target }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); } };
     const renderer = new CanvasRenderer(currentSelection === null ? base : { ...base, selectedRange: currentSelection.range, selectionKind: currentSelection.kind, activeCell: currentSelection.active });
     rendererRef.current = renderer;
     return () => { renderer.destroy(); rendererRef.current = null; };
@@ -115,6 +118,23 @@ function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick
   useEffect(() => rendererRef.current?.setSelection(selected?.range, selected?.kind, selected?.active), [selected]);
   return canvasRef;
 }
+
+function autoFitRowHeight(store: Store, r: number): number {
+  let hasContent = false;
+  for (let c = 0; c < TOTAL_COLS; c += 1) { if (store.getCell(r, c)?.text !== undefined && store.getCell(r, c)!.text.length > 0) { hasContent = true; break; } }
+  if (!hasContent) return ROW_HEIGHT;
+  return clampVal(20, 15, 500);
+}
+
+function autoFitColWidth(store: Store, c: number): number {
+  let maxLen = 0;
+  let hasContent = false;
+  for (let r = 0; r < TOTAL_ROWS; r += 1) { const t = store.getCell(r, c)?.text; if (t !== undefined && t.length > 0) { hasContent = true; if (t.length > maxLen) maxLen = t.length; } }
+  if (!hasContent) return COL_WIDTH;
+  return clampVal(maxLen * 8 + 20, 30, 500);
+}
+
+function clampVal(v: number, min: number, max: number): number { return Math.max(min, Math.min(max, v)); }
 
 function useTheme(theme: Theme | false | undefined): void { useEffect(() => { if (theme === false) return; if (theme === undefined) applyStoredTheme(); else setTheme(theme); dispatchThemeChanged(); }, [theme]); }
 function useStoreSheets(store: Store, setSheets: (s: readonly SheetInfo[]) => void, setActive: (id: string) => void): void { useEffect(() => store.subscribe((event) => { if (event.type !== 'sheet') return; setSheets(store.getSheets()); setActive(store.getActiveSheetId()); }), [store, setSheets, setActive]); }
