@@ -24,6 +24,8 @@ export class Spreadsheet {
   }
 }
 
+export { EventBus } from './events/EventBus';
+export type { EventHandler, WildcardPayload } from './events/EventBus';
 export { Store } from './store/Store';
 export type { SerializedStore } from './store/Store';
 export type { Cell, CellValue, ColMeta, RowMeta, StoreEvent, Style, Unsubscribe } from './types';
