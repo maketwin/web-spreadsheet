@@ -21,11 +21,14 @@ export interface ColMeta {
 export interface Style {
   bold?: boolean;
   italic?: boolean;
+  underline?: boolean;
   color?: string;
   bgcolor?: string;
   align?: 'left' | 'center' | 'right';
   fontSize?: number;
   fontFamily?: string;
+  numberFormat?: 'general' | 'number' | 'currency' | 'percent' | 'date' | 'time' | 'scientific';
+  wrap?: boolean;
   border?: { top?: string; bottom?: string; left?: string; right?: string };
 }
 
