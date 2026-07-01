@@ -34,6 +34,10 @@ engine, and plugin system.
 - [x] Fill handle drag-to-fill with copy/series modes
 - [x] Merge/unmerge cells (Format menu + renderer spanning)
 - [x] Number format (currency/percent/date/time/scientific with NumberFormatter + undo/redo)
+- [x] Conditional formatting (data bar, color scale, formula conditions)
+- [x] Cross-sheet formula references (=Sheet2!A1, =SUM(Sheet2!A1:A5))
+- [x] Format painter (copy cell styles with brush mode)
+- [x] Multi-sheet workflow (add/rename/delete/activate sheet tabs)
 - [x] Chart stub dialog (placeholder for upcoming chart feature)
 
 ## Architecture
