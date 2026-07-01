@@ -59,15 +59,17 @@ export function cellId(r: number, c: number): string {
 
 export function formulaDependencies(formula: string): string[] {
   const deps = new Set<string>();
-  const pattern = /([A-Za-z]+[1-9]\d*)(?::([A-Za-z]+[1-9]\d*))?/g;
-  for (const match of formula.matchAll(pattern)) addDependencyMatch(deps, match);
+  const pattern = /(?:'[^']+'|[A-Za-z][A-Za-z0-9_]*)?!?[A-Za-z]+[1-9]\d*(?::[A-Za-z]+[1-9]\d*)?/g;
+  for (const match of formula.matchAll(pattern)) addDependencyMatch(deps, match[0]);
   return [...deps];
 }
 
-function addDependencyMatch(deps: Set<string>, match: RegExpMatchArray): void {
-  const start = match[1];
+function addDependencyMatch(deps: Set<string>, expr: string): void {
+  const unscoped = expr.includes('!') ? expr.slice(expr.indexOf('!') + 1) : expr;
+  const parts = unscoped.split(':');
+  const start = parts[0];
+  const end = parts[1];
   if (start === undefined) return;
-  const end = match[2];
   if (end === undefined) {
     deps.add(exprToCellId(start));
     return;

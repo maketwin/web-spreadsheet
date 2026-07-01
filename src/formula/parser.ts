@@ -54,26 +54,42 @@ export class FormulaParser {
   }
 
   private parseRange(expr: string): AstNode | null {
-    const parts = expr.split(':');
+    const scoped = splitSheetScope(expr);
+    const parts = scoped.ref.split(':');
     if (parts.length !== 2) return null;
     const start = parts[0];
     const end = parts[1];
     if (start === undefined || end === undefined) return null;
-    const startCell = this.parseCell(start.trim());
-    const endCell = this.parseCell(end.trim());
+    const startCell = this.parseCell(start.trim(), scoped.sheetName);
+    const endCell = this.parseCell(end.trim(), scoped.sheetName);
     if (!startCell || !endCell) return null;
 
-    return { type: 'range', x1: startCell.x, y1: startCell.y, x2: endCell.x, y2: endCell.y };
+    const range: Extract<AstNode, { type: 'range' }> = { type: 'range', x1: startCell.x, y1: startCell.y, x2: endCell.x, y2: endCell.y };
+    if (scoped.sheetName !== undefined) return { ...range, sheetName: scoped.sheetName };
+    return range;
   }
 
-  private parseCell(expr: string): Extract<AstNode, { type: 'cell' }> | null {
-    const match = expr.match(/^([A-Za-z]+)(\d+)$/);
+  private parseCell(expr: string, sheetName?: string): Extract<AstNode, { type: 'cell' }> | null {
+    const scoped = sheetName === undefined ? splitSheetScope(expr) : { sheetName, ref: expr };
+    const match = scoped.ref.match(/^([A-Za-z]+)(\d+)$/);
     const col = match?.[1];
     const row = match?.[2];
     if (col === undefined || row === undefined) return null;
 
-    return { type: 'cell', x: columnToIndex(col), y: Number(row) - 1 };
+    const cell: Extract<AstNode, { type: 'cell' }> = { type: 'cell', x: columnToIndex(col), y: Number(row) - 1 };
+    if (scoped.sheetName !== undefined) return { ...cell, sheetName: scoped.sheetName };
+    return cell;
   }
+}
+
+
+function splitSheetScope(expr: string): { sheetName?: string; ref: string } {
+  const bang = expr.indexOf('!');
+  if (bang <= 0) return { ref: expr };
+  const name = expr.slice(0, bang).trim().replace(/^'|'$/g, '');
+  const ref = expr.slice(bang + 1).trim();
+  if (name.length === 0) return { ref };
+  return { sheetName: name, ref };
 }
 
 function columnToIndex(col: string): number {

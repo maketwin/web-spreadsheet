@@ -29,7 +29,7 @@ export class FormulaEngine {
     if (!ast) return;
 
     try {
-      const value = scalar(evaluate(ast, (x, y) => this.resolveCell(x, y)));
+      const value = scalar(evaluate(ast, (x, y, sheetName) => this.resolveCell(x, y, sheetName)));
       const coords = parseCellId(cellId);
       if (!coords) return;
       const existing = this.store.getCell(coords.r, coords.c);
@@ -44,8 +44,8 @@ export class FormulaEngine {
     for (const id of affected) this.recalculate(id);
   }
 
-  private resolveCell(x: number, y: number): FormulaValue {
-    const cell = this.store.getCell(y, x);
+  private resolveCell(x: number, y: number, sheetName?: string): FormulaValue {
+    const cell = sheetName === undefined ? this.store.getCell(y, x) : this.store.getCellBySheetName(sheetName, y, x);
     if (!cell) return null;
     return cell.value ?? cell.text;
   }

@@ -30,10 +30,11 @@ export interface Style {
 }
 
 export type StoreEvent =
-  | { type: 'cell'; r: number; c: number; cell: Cell | undefined }
-  | { type: 'row'; r: number; meta: RowMeta | undefined }
-  | { type: 'col'; c: number; meta: ColMeta | undefined }
-  | { type: 'style'; id: string; style: Style | undefined }
-  | { type: 'merge'; range: string };
+  | { type: 'cell'; r: number; c: number; cell: Cell | undefined; sheetId?: string }
+  | { type: 'row'; r: number; meta: RowMeta | undefined; sheetId?: string }
+  | { type: 'col'; c: number; meta: ColMeta | undefined; sheetId?: string }
+  | { type: 'style'; id: string; style: Style | undefined; sheetId?: string }
+  | { type: 'merge'; range: string; sheetId?: string }
+  | { type: 'sheet'; action: 'activate' | 'add' | 'rename' | 'delete'; sheetId: string; name?: string };
 
 export type Unsubscribe = () => void;

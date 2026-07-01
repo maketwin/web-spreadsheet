@@ -34,6 +34,7 @@ describe('domain types', () => {
       | { type: 'col'; c: number; meta: { width?: number; hide?: boolean } | undefined }
       | { type: 'style'; id: string; style: Style | undefined }
       | { type: 'merge'; range: string }
+      | { type: 'sheet'; action: 'activate' | 'add' | 'rename' | 'delete'; sheetId: string; name?: string }
     >();
   });
 

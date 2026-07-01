@@ -1,82 +1,130 @@
+import { SheetData, type SerializedSheetData } from './SheetData';
+
 import type { Cell, ColMeta, RowMeta, StoreEvent, Style, Unsubscribe } from '../types';
 
+export interface SheetInfo {
+  readonly id: string;
+  readonly name: string;
+}
+
 export class Store {
-  private cells = new Map<string, Cell>();
-  private rows = new Map<number, RowMeta>();
-  private cols = new Map<number, ColMeta>();
-  private styles = new Map<string, Style>();
-  private merges = new Set<string>();
-  private subscribers = new Set<(e: StoreEvent) => void>();
+  private readonly sheets = new Map<string, SheetData>();
+  private readonly sheetNames = new Map<string, string>();
+  private readonly subscribers = new Set<(e: StoreEvent) => void>();
+  private activeSheetId = 'sheet-1';
+  private nextSheetNumber = 2;
 
-  public getCell(r: number, c: number): Cell | undefined {
-    return this.cells.get(`${r},${c}`);
+  public constructor() {
+    this.sheets.set(this.activeSheetId, new SheetData());
+    this.sheetNames.set(this.activeSheetId, 'Sheet1');
   }
 
-  public getRow(r: number): RowMeta | undefined {
-    return this.rows.get(r);
+  public getActiveSheetId(): string {
+    return this.activeSheetId;
   }
 
-  public getCol(c: number): ColMeta | undefined {
-    return this.cols.get(c);
+  public getActiveSheetName(): string {
+    return this.sheetNames.get(this.activeSheetId) ?? this.activeSheetId;
   }
 
-  public getStyle(id: string): Style | undefined {
-    return this.styles.get(id);
+  public getSheetData(sheetId = this.activeSheetId): SheetData | undefined {
+    return this.sheets.get(sheetId);
   }
 
-  public getMerges(): readonly string[] {
-    return [...this.merges];
+  public getSheets(): readonly SheetInfo[] {
+    return [...this.sheets.keys()].map((id) => ({ id, name: this.sheetNames.get(id) ?? id }));
   }
 
-  public setCell(r: number, c: number, cell: Cell | undefined): void {
-    const key = `${r},${c}`;
-    if (cell == null) {
-      this.cells.delete(key);
-    } else {
-      this.cells.set(key, cell);
-    }
-    this.notify({ type: 'cell', r, c, cell });
+  public activateSheet(sheetId: string): boolean {
+    if (!this.sheets.has(sheetId)) return false;
+    this.activeSheetId = sheetId;
+    this.notify({ type: 'sheet', action: 'activate', sheetId });
+    return true;
   }
 
-  public setRow(r: number, meta: RowMeta | undefined): void {
-    if (meta == null) {
-      this.rows.delete(r);
-    } else {
-      this.rows.set(r, meta);
-    }
-    this.notify({ type: 'row', r, meta });
+  public addSheet(name = this.makeSheetName()): string {
+    const id = this.makeSheetId();
+    this.sheets.set(id, new SheetData());
+    this.sheetNames.set(id, name);
+    this.activeSheetId = id;
+    this.notify({ type: 'sheet', action: 'add', sheetId: id, name });
+    return id;
   }
 
-  public setCol(c: number, meta: ColMeta | undefined): void {
-    if (meta == null) {
-      this.cols.delete(c);
-    } else {
-      this.cols.set(c, meta);
-    }
-    this.notify({ type: 'col', c, meta });
+  public renameSheet(sheetId: string, name: string): boolean {
+    const trimmed = name.trim();
+    if (trimmed.length === 0 || !this.sheets.has(sheetId)) return false;
+    this.sheetNames.set(sheetId, trimmed);
+    this.notify({ type: 'sheet', action: 'rename', sheetId, name: trimmed });
+    return true;
   }
 
-  public setStyle(id: string, style: Style | undefined): void {
-    if (style == null) {
-      this.styles.delete(id);
-    } else {
-      this.styles.set(id, style);
-    }
-    this.notify({ type: 'style', id, style });
+  public deleteSheet(sheetId: string): boolean {
+    if (this.sheets.size <= 1 || !this.sheets.has(sheetId)) return false;
+    this.sheets.delete(sheetId);
+    this.sheetNames.delete(sheetId);
+    if (this.activeSheetId === sheetId) this.activeSheetId = this.sheets.keys().next().value as string;
+    this.notify({ type: 'sheet', action: 'delete', sheetId });
+    return true;
   }
 
-  public addMerge(range: string): void {
-    this.merges.add(range);
-    this.notify({ type: 'merge', range });
+  public getCell(r: number, c: number, sheetId = this.activeSheetId): Cell | undefined {
+    return this.requireSheet(sheetId).getCell(r, c);
   }
 
-  public removeMerge(range: string): void {
-    this.merges.delete(range);
-    this.notify({ type: 'merge', range });
+  public getCellBySheetName(name: string, r: number, c: number): Cell | undefined {
+    const id = this.findSheetIdByName(name);
+    return id === undefined ? undefined : this.getCell(r, c, id);
   }
 
-  public getCells(): readonly [string, Cell][] {
-    return [...this.cells.entries()];
+  public getRow(r: number, sheetId = this.activeSheetId): RowMeta | undefined {
+    return this.requireSheet(sheetId).getRow(r);
+  }
+
+  public getCol(c: number, sheetId = this.activeSheetId): ColMeta | undefined {
+    return this.requireSheet(sheetId).getCol(c);
+  }
+
+  public getStyle(id: string, sheetId = this.activeSheetId): Style | undefined {
+    return this.requireSheet(sheetId).getStyle(id);
+  }
+
+  public getMerges(sheetId = this.activeSheetId): readonly string[] {
+    return this.requireSheet(sheetId).getMerges();
+  }
+
+  public setCell(r: number, c: number, cell: Cell | undefined, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).setCell(r, c, cell);
+    this.notify(eventWithSheet({ type: 'cell', r, c, cell }, sheetId));
+  }
+
+  public setRow(r: number, meta: RowMeta | undefined, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).setRow(r, meta);
+    this.notify(eventWithSheet({ type: 'row', r, meta }, sheetId));
+  }
+
+  public setCol(c: number, meta: ColMeta | undefined, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).setCol(c, meta);
+    this.notify(eventWithSheet({ type: 'col', c, meta }, sheetId));
+  }
+
+  public setStyle(id: string, style: Style | undefined, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).setStyle(id, style);
+    this.notify(eventWithSheet({ type: 'style', id, style }, sheetId));
+  }
+
+  public addMerge(range: string, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).addMerge(range);
+    this.notify(eventWithSheet({ type: 'merge', range }, sheetId));
+  }
+
+  public removeMerge(range: string, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).removeMerge(range);
+    this.notify(eventWithSheet({ type: 'merge', range }, sheetId));
+  }
+
+  public getCells(sheetId = this.activeSheetId): readonly [string, Cell][] {
+    return this.requireSheet(sheetId).getCells();
   }
 
   public subscribe(fn: (e: StoreEvent) => void): Unsubscribe {
@@ -86,35 +134,70 @@ export class Store {
     };
   }
 
-  private notify(e: StoreEvent): void {
-    this.subscribers.forEach((fn) => fn(e));
-  }
-
   public serialize(): SerializedStore {
     return {
-      cells: [...this.cells.entries()],
-      rows: [...this.rows.entries()],
-      cols: [...this.cols.entries()],
-      styles: [...this.styles.entries()],
-      merges: [...this.merges],
+      activeSheetId: this.activeSheetId,
+      sheets: this.getSheets().map(({ id, name }) => ({ id, name, data: this.requireSheet(id).serialize() })),
     };
   }
 
   public static deserialize(data: SerializedStore): Store {
     const store = new Store();
-    data.cells.forEach(([key, value]) => store.cells.set(key, value));
-    data.rows.forEach(([key, value]) => store.rows.set(key, value));
-    data.cols.forEach(([key, value]) => store.cols.set(key, value));
-    data.styles.forEach(([key, value]) => store.styles.set(key, value));
-    data.merges.forEach((merge) => store.merges.add(merge));
+    store.sheets.clear();
+    store.sheetNames.clear();
+    data.sheets.forEach((sheet) => {
+      store.sheets.set(sheet.id, SheetData.deserialize(sheet.data));
+      store.sheetNames.set(sheet.id, sheet.name);
+    });
+    store.activeSheetId = store.sheets.has(data.activeSheetId) ? data.activeSheetId : (store.sheets.keys().next().value as string);
+    store.nextSheetNumber = store.sheets.size + 1;
     return store;
+  }
+
+  private notify(e: StoreEvent): void {
+    this.subscribers.forEach((fn) => fn(e));
+  }
+
+  private requireSheet(sheetId: string): SheetData {
+    const sheet = this.sheets.get(sheetId);
+    if (sheet === undefined) throw new Error(`Unknown sheet: ${sheetId}`);
+    return sheet;
+  }
+
+  private findSheetIdByName(name: string): string | undefined {
+    for (const [id, sheetName] of this.sheetNames) {
+      if (sheetName === name) return id;
+    }
+    return undefined;
+  }
+
+  private makeSheetId(): string {
+    let id = `sheet-${this.nextSheetNumber}`;
+    while (this.sheets.has(id)) {
+      this.nextSheetNumber += 1;
+      id = `sheet-${this.nextSheetNumber}`;
+    }
+    this.nextSheetNumber += 1;
+    return id;
+  }
+
+  private makeSheetName(): string {
+    let index = this.nextSheetNumber;
+    let name = `Sheet${index}`;
+    const existing = new Set(this.sheetNames.values());
+    while (existing.has(name)) {
+      index += 1;
+      name = `Sheet${index}`;
+    }
+    return name;
   }
 }
 
+function eventWithSheet<T extends StoreEvent>(event: T, sheetId: string): T {
+  return sheetId === 'sheet-1' ? event : { ...event, sheetId };
+}
+
 export interface SerializedStore {
-  cells: Array<[string, Cell]>;
-  rows: Array<[number, RowMeta]>;
-  cols: Array<[number, ColMeta]>;
-  styles: Array<[string, Style]>;
-  merges: string[];
+  readonly activeSheetId: string;
+  readonly sheets: Array<{ readonly id: string; readonly name: string; readonly data: SerializedSheetData }>;
 }

@@ -8,7 +8,7 @@ export function evaluate(node: AstNode, resolve: CellResolver): FormulaArgument 
     case 'string':
       return node.value;
     case 'cell':
-      return resolve(node.x, node.y);
+      return resolve(node.x, node.y, node.sheetName);
     case 'range':
       return evaluateRange(node, resolve);
     case 'func':
@@ -28,7 +28,7 @@ function evaluateRange(node: Extract<AstNode, { type: 'range' }>, resolve: CellR
   const y2 = Math.max(node.y1, node.y2);
 
   for (let y = y1; y <= y2; y += 1) {
-    for (let x = x1; x <= x2; x += 1) values.push(resolve(x, y));
+    for (let x = x1; x <= x2; x += 1) values.push(resolve(x, y, node.sheetName));
   }
   return values;
 }

@@ -1,0 +1,94 @@
+import type { Cell, ColMeta, RowMeta, Style } from '../types';
+
+export interface SerializedSheetData {
+  readonly cells: Array<[string, Cell]>;
+  readonly rows: Array<[number, RowMeta]>;
+  readonly cols: Array<[number, ColMeta]>;
+  readonly styles: Array<[string, Style]>;
+  readonly merges: string[];
+}
+
+export class SheetData {
+  private readonly cells = new Map<string, Cell>();
+  private readonly rows = new Map<number, RowMeta>();
+  private readonly cols = new Map<number, ColMeta>();
+  private readonly styles = new Map<string, Style>();
+  private readonly merges = new Set<string>();
+
+  public getCell(r: number, c: number): Cell | undefined {
+    return this.cells.get(keyOf(r, c));
+  }
+
+  public setCell(r: number, c: number, cell: Cell | undefined): void {
+    const key = keyOf(r, c);
+    if (cell === undefined) this.cells.delete(key);
+    else this.cells.set(key, cell);
+  }
+
+  public getRow(r: number): RowMeta | undefined {
+    return this.rows.get(r);
+  }
+
+  public setRow(r: number, meta: RowMeta | undefined): void {
+    if (meta === undefined) this.rows.delete(r);
+    else this.rows.set(r, meta);
+  }
+
+  public getCol(c: number): ColMeta | undefined {
+    return this.cols.get(c);
+  }
+
+  public setCol(c: number, meta: ColMeta | undefined): void {
+    if (meta === undefined) this.cols.delete(c);
+    else this.cols.set(c, meta);
+  }
+
+  public getStyle(id: string): Style | undefined {
+    return this.styles.get(id);
+  }
+
+  public setStyle(id: string, style: Style | undefined): void {
+    if (style === undefined) this.styles.delete(id);
+    else this.styles.set(id, style);
+  }
+
+  public addMerge(range: string): void {
+    this.merges.add(range);
+  }
+
+  public removeMerge(range: string): void {
+    this.merges.delete(range);
+  }
+
+  public getMerges(): readonly string[] {
+    return [...this.merges];
+  }
+
+  public getCells(): readonly [string, Cell][] {
+    return [...this.cells.entries()];
+  }
+
+  public serialize(): SerializedSheetData {
+    return {
+      cells: [...this.cells.entries()],
+      rows: [...this.rows.entries()],
+      cols: [...this.cols.entries()],
+      styles: [...this.styles.entries()],
+      merges: [...this.merges],
+    };
+  }
+
+  public static deserialize(data: SerializedSheetData): SheetData {
+    const sheet = new SheetData();
+    data.cells.forEach(([key, value]) => sheet.cells.set(key, value));
+    data.rows.forEach(([key, value]) => sheet.rows.set(key, value));
+    data.cols.forEach(([key, value]) => sheet.cols.set(key, value));
+    data.styles.forEach(([key, value]) => sheet.styles.set(key, value));
+    data.merges.forEach((merge) => sheet.merges.add(merge));
+    return sheet;
+  }
+}
+
+function keyOf(r: number, c: number): string {
+  return `${r},${c}`;
+}

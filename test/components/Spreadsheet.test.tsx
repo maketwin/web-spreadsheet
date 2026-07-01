@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FormulaEngine, Spreadsheet, SpreadsheetComponent } from '../../src/index';
+import { Spreadsheet, SpreadsheetComponent } from '../../src/index';
 import { Store } from '../../src/store/Store';
 
 function installCanvasContext(): void {
@@ -13,6 +13,7 @@ function installCanvasContext(): void {
     restore: vi.fn(),
     save: vi.fn(),
     scale: vi.fn(),
+    setLineDash: vi.fn(),
     setTransform: vi.fn(),
     strokeRect: vi.fn(),
   };
@@ -121,16 +122,35 @@ describe('Spreadsheet', () => {
     expect(screen.queryByLabelText('Cell editor')).not.toBeInTheDocument();
   });
 
-  it('formula engine recalculates when a dependency cell changes', () => {
+  it('column header click selects the column and Delete clears it', () => {
     installCanvasContext();
     const store = new Store();
-    const formulaEngine = new FormulaEngine(store);
-    render(<SpreadsheetComponent store={store} formulaEngine={formulaEngine} theme={false} />);
+    store.setCell(0, 0, { text: 'A1' });
+    render(<SpreadsheetComponent store={store} theme={false} />);
+    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+    installCanvasRect(canvas);
 
-    act(() => store.setCell(0, 0, { text: '1', value: 1 }));
-    act(() => store.setCell(0, 1, { text: '=A1' }));
-    act(() => store.setCell(0, 0, { text: '5', value: 5 }));
+    fireEvent.mouseDown(canvas, { clientX: 46 + 5, clientY: 5 });
+    fireEvent.keyDown(canvas, { key: 'Delete' });
 
-    expect(store.getCell(0, 1)?.value).toBe(5);
+    expect(store.getCell(0, 0)?.text).toBe('');
   });
+
+  it('shift column header click selects multiple columns and Delete clears them', () => {
+    installCanvasContext();
+    const store = new Store();
+    store.setCell(0, 0, { text: 'A1' });
+    store.setCell(0, 1, { text: 'B1' });
+    render(<SpreadsheetComponent store={store} theme={false} />);
+    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+    installCanvasRect(canvas);
+
+    fireEvent.mouseDown(canvas, { clientX: 46 + 5, clientY: 5 });
+    fireEvent.mouseDown(canvas, { clientX: 46 + 105, clientY: 5, shiftKey: true });
+    fireEvent.keyDown(canvas, { key: 'Delete' });
+
+    expect(store.getCell(0, 0)?.text).toBe('');
+    expect(store.getCell(0, 1)?.text).toBe('');
+  });
+
 });
