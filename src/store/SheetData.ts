@@ -1,4 +1,5 @@
 import type { Cell, ColMeta, RowMeta, Style } from '../types';
+import type { ConditionalRule } from '../conditional/ConditionalRule';
 
 export interface SerializedSheetData {
   readonly cells: Array<[string, Cell]>;
@@ -6,6 +7,7 @@ export interface SerializedSheetData {
   readonly cols: Array<[number, ColMeta]>;
   readonly styles: Array<[string, Style]>;
   readonly merges: string[];
+  readonly conditionalRules: Array<[string, ConditionalRule[]]>;
 }
 
 export class SheetData {
@@ -14,6 +16,7 @@ export class SheetData {
   private readonly cols = new Map<number, ColMeta>();
   private readonly styles = new Map<string, Style>();
   private readonly merges = new Set<string>();
+  private readonly conditionalRules = new Map<string, ConditionalRule[]>();
 
   public getCell(r: number, c: number): Cell | undefined {
     return this.cells.get(keyOf(r, c));
@@ -68,6 +71,18 @@ export class SheetData {
     return [...this.cells.entries()];
   }
 
+  public getConditionalRules(): readonly [string, ConditionalRule[]][] {
+    return [...this.conditionalRules.entries()];
+  }
+
+  public setConditionalRule(range: string, rules: ConditionalRule[]): void {
+    this.conditionalRules.set(range, rules);
+  }
+
+  public removeConditionalRule(range: string): void {
+    this.conditionalRules.delete(range);
+  }
+
   public serialize(): SerializedSheetData {
     return {
       cells: [...this.cells.entries()],
@@ -75,6 +90,7 @@ export class SheetData {
       cols: [...this.cols.entries()],
       styles: [...this.styles.entries()],
       merges: [...this.merges],
+      conditionalRules: [...this.conditionalRules.entries()],
     };
   }
 
@@ -85,6 +101,7 @@ export class SheetData {
     data.cols.forEach(([key, value]) => sheet.cols.set(key, value));
     data.styles.forEach(([key, value]) => sheet.styles.set(key, value));
     data.merges.forEach((merge) => sheet.merges.add(merge));
+    data.conditionalRules.forEach(([key, value]) => sheet.conditionalRules.set(key, value));
     return sheet;
   }
 }

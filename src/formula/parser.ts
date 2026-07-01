@@ -17,7 +17,7 @@ export class FormulaParser {
   }
 
   private parseBinary(expr: string): AstNode | null {
-    for (const op of ['+', '-', '*', '/']) {
+    for (const op of ['+', '-', '*', '/', '>', '<']) {
       const index = expr.indexOf(op, 1);
       if (index <= 0) continue;
       return {

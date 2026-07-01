@@ -47,6 +47,9 @@ export type { SerializedStore } from './store/Store';
 export { applyStoredTheme, getTheme, setTheme, THEMES } from './theme';
 export type { Theme } from './theme';
 export type { Cell, CellValue, ColMeta, RowMeta, StoreEvent, Style, Unsubscribe } from './types';
+export { ConditionalService } from './conditional/ConditionalService';
+export type { ConditionalOverlay, ConditionalRule } from './conditional/ConditionalRule';
+export { SetConditionalFormatCommand } from './commands/impl/SetConditionalFormat';
 
 export class Spreadsheet extends SpreadsheetImpl {
   public constructor(root: HTMLElement | string, options: SpreadsheetOptions = {}) {

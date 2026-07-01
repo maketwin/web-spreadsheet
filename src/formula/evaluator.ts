@@ -52,6 +52,10 @@ function evaluateBinary(node: Extract<AstNode, { type: 'binary' }>, resolve: Cel
       return Number(left) * Number(right);
     case '/':
       return Number(left) / Number(right);
+    case '>':
+      return Number(left) > Number(right);
+    case '<':
+      return Number(left) < Number(right);
     default:
       return null;
   }

@@ -11,6 +11,7 @@ import { VirtualScroller, type VisibleRange } from './VirtualScroller';
 import type { StoreEvent } from '../types';
 import { parseRange } from '../util/cell';
 import { formatValue } from '../format/NumberFormatter';
+import { ConditionalService } from '../conditional/ConditionalService';
 
 export { TOTAL_ROWS, TOTAL_COLS, ROW_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, COL_HEADER_HEIGHT, canvasPointToCell, canvasPointToHeader, canvasPointToColumn, canvasPointToRow, type CellAddress };
 
@@ -37,6 +38,7 @@ export class CanvasRenderer {
   private readonly resizeHandler: ResizeHandler;
   private readonly fillHandle: FillHandle;
   private readonly unsubscribe: () => void;
+  private readonly conditionalService = new ConditionalService();
   private selectedRange: RangeAddress | undefined;
   private selectionKind: SelectionKind | undefined;
   private activeCell: CellAddress | undefined;
@@ -153,10 +155,23 @@ export class CanvasRenderer {
 
   private paintCellBg(r: number, c: number, x: number, y: number, cw: number, rh: number, theme: CanvasTheme): void {
     const style = this.cellStyle(r, c);
-    if (style?.bgcolor !== undefined) { this.ctx.fillStyle = style.bgcolor; this.ctx.fillRect(x + 1, y + 1, cw - 2, rh - 2); }
+    const overlay = this.conditionalService.computeOverlay(this.opts.store, r, c);
+    const merged = { ...style, ...overlay.style };
+    if (merged.bgcolor !== undefined) { this.ctx.fillStyle = merged.bgcolor; this.ctx.fillRect(x + 1, y + 1, cw - 2, rh - 2); }
+    if (overlay.dataBar !== undefined) { this.paintDataBar(x, y, cw, rh, overlay.dataBar.ratio, overlay.dataBar.color); }
     if (this.opts.showGrid !== false) { this.ctx.strokeStyle = theme.grid; this.ctx.strokeRect(x, y, cw, rh); }
     if (this.isSelFill(r, c)) { this.ctx.fillStyle = theme.selected; this.ctx.fillRect(x + 1, y + 1, cw - 2, rh - 2); }
-    this.paintText(r, c, x, y, cw, rh, theme);
+    this.paintTextWith(r, c, x, y, cw, rh, theme, merged);
+  }
+
+  private paintDataBar(x: number, y: number, cw: number, rh: number, ratio: number, color: string): void {
+    const barW = Math.max(0, (cw - 2) * ratio);
+    this.ctx.save();
+    this.ctx.globalAlpha = 0.4;
+    this.ctx.fillStyle = color;
+    this.ctx.fillRect(x + 1, y + 1, barW, rh - 2);
+    this.ctx.globalAlpha = 1;
+    this.ctx.restore();
   }
 
   private mergeSkipSet(vis: VisibleRange): Set<string> {
@@ -165,9 +180,8 @@ export class CanvasRenderer {
     return skip;
   }
 
-  private paintText(r: number, c: number, x: number, y: number, cw: number, rh: number, theme: CanvasTheme): void {
+  private paintTextWith(r: number, c: number, x: number, y: number, cw: number, rh: number, theme: CanvasTheme, style: import('../types').Style | undefined): void {
     const cell = this.opts.store.getCell(r, c); if (cell === undefined || cell.text.length === 0) return;
-    const style = this.cellStyle(r, c);
     const fontSize = Math.max(10, Math.round((style?.fontSize ?? 14) * this.zoom()));
     const fontFamily = style?.fontFamily ?? theme.fontFamily;
     const rawText = this.opts.showFormula === true && cell.formula !== undefined ? cell.formula : cell.text;

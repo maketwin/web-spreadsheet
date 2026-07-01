@@ -2,6 +2,7 @@ import { SheetData, type SerializedSheetData } from './SheetData';
 
 import { parseRange } from '../util/cell';
 import type { Cell, ColMeta, RowMeta, StoreEvent, Style, Unsubscribe } from '../types';
+import type { ConditionalRule } from '../conditional/ConditionalRule';
 
 export interface SheetInfo {
   readonly id: string;
@@ -136,6 +137,20 @@ export class Store {
 
   public getCells(sheetId = this.activeSheetId): readonly [string, Cell][] {
     return this.requireSheet(sheetId).getCells();
+  }
+
+  public getConditionalRules(sheetId = this.activeSheetId): readonly [string, ConditionalRule[]][] {
+    return this.requireSheet(sheetId).getConditionalRules();
+  }
+
+  public setConditionalRule(range: string, rules: ConditionalRule[], sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).setConditionalRule(range, rules);
+    this.notify(eventWithSheet({ type: 'style' as const, id: `cf:${range}`, style: undefined }, sheetId));
+  }
+
+  public removeConditionalRule(range: string, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).removeConditionalRule(range);
+    this.notify(eventWithSheet({ type: 'style' as const, id: `cf:${range}`, style: undefined }, sheetId));
   }
 
   public subscribe(fn: (e: StoreEvent) => void): Unsubscribe {

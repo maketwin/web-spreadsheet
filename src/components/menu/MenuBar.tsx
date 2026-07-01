@@ -11,6 +11,7 @@ import { SetMerge } from '../../commands/impl/SetMerge';
 import { SetRangeStyleCommand } from '../../commands/impl/SetRangeStyle';
 import { SetRangeValues } from '../../commands/impl/SetRangeValues';
 import { SetNumberFormatCommand } from '../../commands/impl/SetNumberFormat';
+import { SetConditionalFormatCommand } from '../../commands/impl/SetConditionalFormat';
 import { FindReplaceService } from '../../find/FindReplaceService';
 import { TOTAL_COLS, TOTAL_ROWS } from '../../renderer/CanvasRenderer';
 import { Range, type RangeAddress } from '../../selection/Range';
@@ -149,6 +150,8 @@ function formatItems(): NonNullable<MenuProps['items']> {
     item('format:unmerge', '取消合并'),
     divider('format:divider:3'),
     item('format:number', '数字格式...'),
+    divider('format:divider:4'),
+    { key: 'format:conditional', label: '条件格式', children: [item('format:cf:dataBar', '数据条'), item('format:cf:colorScale', '色阶'), item('format:cf:formula', '公式条件')] },
   ];
 }
 
@@ -216,6 +219,9 @@ function runFormatAction(key: string, ctx: MenuContext, openDialog: (name: Dialo
   if (key === 'format:number') openDialog('numberFormat');
   else if (key === 'format:merge') execute(ctx, new SetMerge({ range: rangeName(ctx.selected), active: true }));
   else if (key === 'format:unmerge') execute(ctx, new SetMerge({ range: rangeName(ctx.selected), active: false }));
+  else if (key === 'format:cf:dataBar') applyConditionalDataBar(ctx);
+  else if (key === 'format:cf:colorScale') applyConditionalColorScale(ctx);
+  else if (key === 'format:cf:formula') applyConditionalFormula(ctx);
   else applyStyle(ctx, map[key] ?? {});
 }
 
@@ -347,4 +353,21 @@ function makeView(partial: Partial<ViewState> | undefined, zoom: number, showFor
 function selectedRows(range: RangeAddress | null): number { return range === null ? 1 : range.r2 - range.r1 + 1; }
 function selectedCols(range: RangeAddress | null): number { return range === null ? 1 : range.c2 - range.c1 + 1; }
 function rangeName(range: RangeAddress | null): string { const r = range ?? Range.single(0, 0).toAddress(); return `${xy2expr(r.c1, r.r1)}:${xy2expr(r.c2, r.r2)}`; }
+
+function applyConditionalDataBar(ctx: MenuContext): void {
+  const sel = ctx.selected ?? Range.single(0, 0).toAddress();
+  execute(ctx, new SetConditionalFormatCommand({ ...sel, rules: [{ type: 'dataBar', min: 0, max: 100, color: '#4A90D9' }] }));
+}
+
+function applyConditionalColorScale(ctx: MenuContext): void {
+  const sel = ctx.selected ?? Range.single(0, 0).toAddress();
+  execute(ctx, new SetConditionalFormatCommand({ ...sel, rules: [{ type: 'colorScale', min: 0, max: 100, minColor: '#FFFFFF', maxColor: '#4A90D9' }] }));
+}
+
+function applyConditionalFormula(ctx: MenuContext): void {
+  const formula = window.prompt('Conditional formula (e.g. =A1>5)', '=A1>0');
+  if (formula === null) return;
+  const sel = ctx.selected ?? Range.single(0, 0).toAddress();
+  execute(ctx, new SetConditionalFormatCommand({ ...sel, rules: [{ type: 'formula', formula, style: { bgcolor: '#FFFF00' } }] }));
+}
 export function allSheetRange(): RangeAddress { return { r1: 0, c1: 0, r2: TOTAL_ROWS - 1, c2: TOTAL_COLS - 1 }; }
