@@ -7,7 +7,9 @@ import { DirtyRegionTracker, type Rect } from './DirtyRegionTracker';
 import { FillHandle } from '../fill/FillHandle';
 import { ResizeHandler } from './ResizeHandler';
 import { VirtualScroller, type VisibleRange } from './VirtualScroller';
-import type { StoreEvent } from '../types';
+import type { StoreEvent, Cell, Style } from '../types';
+import { parseRange } from '../util/cell';
+import { formatValue } from '../format/NumberFormatter';
 
 // Re-export for backward compatibility
 export { TOTAL_ROWS, TOTAL_COLS, ROW_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, COL_HEADER_HEIGHT, canvasPointToCell, canvasPointToHeader, canvasPointToColumn, canvasPointToRow, type CellAddress };
@@ -226,8 +228,13 @@ export class CanvasRenderer {
   }
 
   private paintCells(vis: VisibleRange, theme: CanvasTheme): void {
+    const skip = this.buildMergeSkipSet(vis);
     for (let r = vis.startRow; r < vis.endRow; r += 1) {
       for (let c = vis.startCol; c < vis.endCol; c += 1) {
+        const mergeKey = `${r},${c}`;
+        if (skip.has(mergeKey)) continue;
+        const merge = this.opts.store.getMergeAt(r, c);
+        if (merge !== undefined) { this.paintMergedCell(r, c, merge, theme); continue; }
         const { x, y } = this.cellVP(r, c);
         const cw = this.scroller.getColWidth(c);
         const rh = this.scroller.getRowHeight(r);
@@ -240,13 +247,44 @@ export class CanvasRenderer {
     }
   }
 
+  /** Paint a merged region spanning from the first cell of the merge range. */
+  private paintMergedCell(_r: number, _c: number, rangeStr: string, theme: CanvasTheme): void {
+    const { r1, c1, r2, c2 } = parseRange(rangeStr);
+    const { x, y } = this.cellVP(r1, c1);
+    let mw = 0; for (let col = c1; col <= c2; col += 1) mw += this.scroller.getColWidth(col);
+    let mh = 0; for (let row = r1; row <= r2; row += 1) mh += this.scroller.getRowHeight(row);
+    const style = this.cellStyle(r1, c1);
+    if (style?.bgcolor !== undefined) { this.ctx.fillStyle = style.bgcolor; this.ctx.fillRect(x + 1, y + 1, mw - 2, mh - 2); }
+    if (this.opts.showGrid !== false) { this.ctx.strokeStyle = theme.grid; this.ctx.strokeRect(x, y, mw, mh); }
+    if (this.isSelFill(r1, c1)) { this.ctx.fillStyle = theme.selected; this.ctx.fillRect(x + 1, y + 1, mw - 2, mh - 2); }
+    this.paintText(r1, c1, x, y, mw, mh, theme);
+  }
+
+  /** Build set of "r,c" keys for cells that are non-first cells in a merge. */
+  private buildMergeSkipSet(vis: VisibleRange): Set<string> {
+    const skip = new Set<string>();
+    const merges = this.opts.store.getMerges();
+    for (const rangeStr of merges) {
+      const { r1, c1, r2, c2 } = parseRange(rangeStr);
+      const vR1 = Math.max(r1, vis.startRow); const vR2 = Math.min(r2, vis.endRow - 1);
+      const vC1 = Math.max(c1, vis.startCol); const vC2 = Math.min(c2, vis.endCol - 1);
+      for (let r = vR1; r <= vR2; r += 1) {
+        for (let c = vC1; c <= vC2; c += 1) {
+          if (r !== r1 || c !== c1) skip.add(`${r},${c}`);
+        }
+      }
+    }
+    return skip;
+  }
+
   private paintText(r: number, c: number, x: number, y: number, cw: number, rh: number, theme: CanvasTheme): void {
     const cell = this.opts.store.getCell(r, c);
     if (cell === undefined || cell.text.length === 0) return;
     const style = this.cellStyle(r, c);
     const fontSize = Math.max(10, Math.round((style?.fontSize ?? 14) * this.zoom()));
     const fontFamily = style?.fontFamily ?? theme.fontFamily;
-    const text = this.opts.showFormula === true && cell.formula !== undefined ? cell.formula : cell.text;
+    const rawText = this.opts.showFormula === true && cell.formula !== undefined ? cell.formula : cell.text;
+    const text = this.formatCellText(cell, style, rawText);
     const align = style?.align ?? 'left';
     this.ctx.save();
     this.ctx.beginPath(); this.ctx.rect(x + 1, y + 1, cw - 2, rh - 2); this.ctx.clip();
@@ -256,6 +294,13 @@ export class CanvasRenderer {
     this.ctx.fillText(text, tx, y + rh / 2);
     if (style?.underline === true) { const w = typeof this.ctx.measureText === 'function' ? this.ctx.measureText(text).width : text.length * fontSize * 0.6; const s = align === 'center' ? tx - w / 2 : align === 'right' ? tx - w : tx; this.ctx.beginPath(); this.ctx.moveTo(s, y + rh / 2 + fontSize * 0.38); this.ctx.lineTo(s + w, y + rh / 2 + fontSize * 0.38); this.ctx.strokeStyle = String(this.ctx.fillStyle); this.ctx.lineWidth = 1; this.ctx.stroke(); }
     this.ctx.restore();
+  }
+
+  private formatCellText(cell: Cell, style: Style | undefined, rawText: string): string {
+    const nf = style?.numberFormat;
+    if (nf === undefined || nf === 'general') return rawText;
+    const result = formatValue(cell.value, nf);
+    return result.formatted ? result.text : rawText;
   }
 
   private paintSelection(theme: CanvasTheme): void {

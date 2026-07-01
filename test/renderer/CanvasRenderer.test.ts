@@ -174,6 +174,30 @@ describe('CanvasRenderer', () => {
     expect(ctx.fillText).toHaveBeenCalledWith('=SUM(1,2)', expect.any(Number), expect.any(Number));
     renderer.destroy();
   });
+
+  it('skips non-first cells in merged regions', () => {
+    const ctx = installCanvasContext();
+    const callbacks = installAnimationFrames();
+    const store = new Store();
+    store.addMerge('A1:B2');
+    store.setCell(0, 0, { text: 'merged' });
+    store.setCell(0, 1, { text: 'hidden1' });
+    store.setCell(1, 0, { text: 'hidden2' });
+    store.setCell(1, 1, { text: 'hidden3' });
+    const renderer = new CanvasRenderer({ canvas: makeCanvas(), store });
+
+    callbacks[0]?.(0);
+
+    // Only the first cell's text should be rendered — the other 3 should be skipped
+    const allCalls = (ctx.fillText as ReturnType<typeof vi.fn>).mock.calls.map(
+      (call: readonly unknown[]) => String(call[0]),
+    );
+    expect(allCalls).toContain('merged');
+    expect(allCalls).not.toContain('hidden1');
+    expect(allCalls).not.toContain('hidden2');
+    expect(allCalls).not.toContain('hidden3');
+    renderer.destroy();
+  });
 });
 
 function installAnimationFrames(): FrameRequestCallback[] {

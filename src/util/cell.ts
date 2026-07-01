@@ -90,6 +90,13 @@ function exprToCellId(expr: string): string {
   return cellId(coords.r, coords.c);
 }
 
+export function parseRange(rangeStr: string): { r1: number; c1: number; r2: number; c2: number } {
+  const parts = rangeStr.split(':');
+  const start = exprToCoords(parts[0] ?? rangeStr);
+  const end = parts[1] !== undefined ? exprToCoords(parts[1]) : start;
+  return { r1: Math.min(start.r, end.r), c1: Math.min(start.c, end.c), r2: Math.max(start.r, end.r), c2: Math.max(start.c, end.c) };
+}
+
 function exprToCoords(expr: string): CellAddress {
   const match = expr.match(/^([A-Za-z]+)([1-9]\d*)$/);
   const col = match?.[1];

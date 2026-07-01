@@ -1,5 +1,6 @@
 import { SheetData, type SerializedSheetData } from './SheetData';
 
+import { parseRange } from '../util/cell';
 import type { Cell, ColMeta, RowMeta, StoreEvent, Style, Unsubscribe } from '../types';
 
 export interface SheetInfo {
@@ -91,6 +92,16 @@ export class Store {
 
   public getMerges(sheetId = this.activeSheetId): readonly string[] {
     return this.requireSheet(sheetId).getMerges();
+  }
+
+  /** Returns the merge range string covering (r,c), or undefined if none. */
+  public getMergeAt(r: number, c: number, sheetId = this.activeSheetId): string | undefined {
+    const merges = this.requireSheet(sheetId).getMerges();
+    for (const rangeStr of merges) {
+      const { r1, c1, r2, c2 } = parseRange(rangeStr);
+      if (r >= r1 && r <= r2 && c >= c1 && c <= c2) return rangeStr;
+    }
+    return undefined;
   }
 
   public setCell(r: number, c: number, cell: Cell | undefined, sheetId = this.activeSheetId): void {
