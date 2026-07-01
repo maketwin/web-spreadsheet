@@ -23,3 +23,7 @@ export class Spreadsheet {
     return this.options.data?.length ?? 0;
   }
 }
+
+export { Store } from './store/Store';
+export type { SerializedStore } from './store/Store';
+export type { Cell, CellValue, ColMeta, RowMeta, StoreEvent, Style, Unsubscribe } from './types';
