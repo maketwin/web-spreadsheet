@@ -23,6 +23,8 @@ import { cellFromText, cellId, formulaDependencies, formulaText, normalizeCellIn
 import { cellSelection, columnSelection, extendSelection, rangeSelection, rowSelection, selectionLabel, sheetSelection, type Selection } from '../selection/Selection';
 import { BottomBar } from './BottomBar';
 import { MenuBar, allSheetRange } from './menu/MenuBar';
+import { startAutoSave } from '../db/autoSave';
+import { loadWorkbook, DEFAULT_ID, saveWorkbook as saveToDB } from '../db/WorkbookDB';
 import type { Cell, StoreEvent, Style } from '../types';
 
 export type CellInput = CellDataInput;
@@ -78,6 +80,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   useStoreSheets(store, setSheets, setActiveSheetId);
   useStoreVersion(store, () => setStoreVersion((value) => value + 1));
   useFormulaValue(selected, editing, store, storeVersion, setFormulaValue);
+  useAutoSave(store);
   useEffect(() => inputRef.current?.focus(), [editing]);
 
   return <div className="ss-root">
@@ -98,7 +101,7 @@ export class Spreadsheet {
   private readonly plugins = new PluginManager(this);
   private root: Root | null = null;
   public constructor(private readonly mountRoot: HTMLElement, private readonly options: SpreadsheetOptions = {}) {}
-  public mount(): void { this.loadInitialData(); this.root = createRoot(this.mountRoot); this.root.render(<SpreadsheetComponent store={this.store} cmdManager={this.cmdManager} formulaEngine={this.formula} theme={this.options.theme} />); }
+  public mount(): void { this.loadInitialData(); void this.tryRestoreFromDB(); this.root = createRoot(this.mountRoot); this.root.render(<SpreadsheetComponent store={this.store} cmdManager={this.cmdManager} formulaEngine={this.formula} theme={this.options.theme} />); }
   public destroy(): void { this.root?.unmount(); this.root = null; this.plugins.clear(); }
   public use(plugin: Plugin): this { this.plugins.use(plugin); return this; }
   public get rowCount(): number { return this.options.data?.length ?? this.options.sheets?.[0]?.data?.length ?? 0; }
@@ -106,6 +109,16 @@ export class Spreadsheet {
   private loadInitialData(): void {
     if (this.options.sheets !== undefined) loadSheets(this.store, this.cmdManager, this.formula, this.options.sheets);
     else if (this.options.data !== undefined) loadData(this.store, this.cmdManager, this.formula, this.options.data);
+    this.cmdManager.clear();
+  }
+
+  private async tryRestoreFromDB(): Promise<void> {
+    if (this.options.sheets !== undefined || this.options.data !== undefined) return;
+    const data = await loadWorkbook(DEFAULT_ID);
+    if (data === undefined) return;
+    const restored = Store.deserialize(data);
+    restored.getSheets().forEach(({ id, name }) => { if (id !== 'sheet-1') this.store.addSheet(name); this.store.renameSheet(id, name); });
+    restored.getCells().forEach(([key, cell]) => { const [r, c] = key.split(',').map(Number); this.store.setCell(r ?? 0, c ?? 0, cell); });
     this.cmdManager.clear();
   }
 }
@@ -153,6 +166,7 @@ function clampVal(v: number, min: number, max: number): number { return Math.max
 function useTheme(theme: Theme | false | undefined): void { useEffect(() => { if (theme === false) return; if (theme === undefined) applyStoredTheme(); else setTheme(theme); dispatchThemeChanged(); }, [theme]); }
 function useStoreSheets(store: Store, setSheets: (s: readonly SheetInfo[]) => void, setActive: (id: string) => void): void { useEffect(() => store.subscribe((event) => { if (event.type !== 'sheet') return; setSheets(store.getSheets()); setActive(store.getActiveSheetId()); }), [store, setSheets, setActive]); }
 function useStoreVersion(store: Store, bump: () => void): void { useEffect(() => store.subscribe(() => bump()), [store, bump]); }
+function useAutoSave(store: Store): void { useEffect(() => { const handle = startAutoSave(store); return () => handle.stop(); }, [store]); }
 function useFormulaSync(store: Store, formulaEngine: FormulaEngine | undefined): void { const syncing = useRef(false); useEffect(() => { if (formulaEngine === undefined) return undefined; return store.subscribe((e) => syncFormulaEvent(e, formulaEngine, syncing)); }, [store, formulaEngine]); }
 function useFormulaValue(selected: Selection | null, editing: EditingCell | null, store: Store, storeVersion: number, setFormulaValue: (value: string) => void): void {
   useEffect(() => {
@@ -227,7 +241,7 @@ function handleMenuShortcut(command: MenuShortcutCommand, store: Store, cmdManag
   map[command]();
 }
 function applyShortcutStyle(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress, style: Partial<Style>): void { const cmd = new SetRangeStyleCommand({ ...range, style }); if (cmdManager === undefined) cmd.execute(store); else cmdManager.execute(cmd); }
-function saveToLocal(store: Store): void { window.localStorage.setItem('web-spreadsheet:workbook', JSON.stringify(store.serialize())); message.success('已保存到本地存储'); }
+function saveToLocal(store: Store): void { void saveToDB(DEFAULT_ID, store.serialize()).then(() => message.success('已保存到 IndexedDB')); }
 function dispatchThemeChanged(): void { window.dispatchEvent(new CustomEvent('ss:theme-changed')); }
 function commitFormulaValue(selected: Selection | null, value: string, store: Store, cmdManager: CommandManager | undefined): void {
   if (selected === null) return;

@@ -19,6 +19,7 @@ import { Store } from '../../store/Store';
 import type { Command } from '../../commands/Command';
 import type { Cell, Style } from '../../types';
 import { xy2expr } from '../../util/alphabet';
+import { saveWorkbook as saveToDB, DEFAULT_ID } from '../../db/WorkbookDB';
 import { AboutDialog } from './dialogs/AboutDialog';
 import { ChartStubDialog } from './dialogs/ChartStubDialog';
 import { FindReplaceDialog } from './dialogs/FindReplaceDialog';
@@ -282,8 +283,7 @@ function restoreEmpty(store: Store): void {
 }
 
 function saveWorkbook(store: Store): void {
-  window.localStorage.setItem('web-spreadsheet:workbook', JSON.stringify(store.serialize()));
-  message.success('已保存到本地存储');
+  void saveToDB(DEFAULT_ID, store.serialize()).then(() => message.success('已保存到 IndexedDB'));
 }
 
 function downloadWorkbook(store: Store): void {
