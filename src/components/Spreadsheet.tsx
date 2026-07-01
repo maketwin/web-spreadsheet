@@ -3,6 +3,8 @@ import { useEffect, useRef, type FC, type RefObject } from 'react';
 import { CommandManager } from '../commands/CommandManager';
 import { SetRangeValues } from '../commands/impl/SetRangeValues';
 import { EventBus } from '../events/EventBus';
+import { FormulaEngine } from '../formula/FormulaEngine';
+import { PluginManager, type Plugin } from '../plugin/PluginManager';
 import { CanvasRenderer } from '../renderer/CanvasRenderer';
 import { Store } from '../store/Store';
 import { applyStoredTheme, setTheme, type Theme } from '../theme';
@@ -40,9 +42,11 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, theme }) => 
 };
 
 export class Spreadsheet {
-  private readonly store = new Store();
-  private readonly events = new EventBus();
-  private readonly commandManager = new CommandManager(this.store, this.events);
+  public readonly store = new Store();
+  public readonly events = new EventBus();
+  public readonly cmdManager = new CommandManager(this.store, this.events);
+  public readonly formula = new FormulaEngine(this.store);
+  private readonly plugins = new PluginManager(this);
   private root: Root | null = null;
 
   public constructor(
@@ -59,6 +63,12 @@ export class Spreadsheet {
   public destroy(): void {
     this.root?.unmount();
     this.root = null;
+    this.plugins.clear();
+  }
+
+  public use(plugin: Plugin): this {
+    this.plugins.use(plugin);
+    return this;
   }
 
   public get rowCount(): number {
@@ -73,7 +83,7 @@ export class Spreadsheet {
     const maxCols = values.reduce((max, row) => Math.max(max, row.length), 0);
     if (values.length === 0 || maxCols === 0) return;
 
-    this.commandManager.execute(
+    this.cmdManager.execute(
       new SetRangeValues({ r1: 0, c1: 0, r2: values.length - 1, c2: maxCols - 1, values }),
     );
   }
