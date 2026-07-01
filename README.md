@@ -29,6 +29,9 @@ engine, and plugin system.
 - [x] Format menu with font, size, color, number format, alignment, wrap
 - [x] View/Tools/Help menus with zoom, options, plugins, about, shortcuts
 - [x] Keyboard shortcut integration for menu actions
+- [x] Row height / column width drag-resize with min/max constraints
+- [x] Double-click border auto-fits row/column to content
+- [x] Fill handle drag-to-fill with copy/series modes
 
 ## Architecture
 ```
