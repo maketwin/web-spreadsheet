@@ -1,6 +1,6 @@
 {
   "name": "web-spreadsheet",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "A modern TypeScript spreadsheet SDK with 4-layer architecture",
   "type": "module",
   "main": "./dist/web-spreadsheet.umd.js",
@@ -61,8 +61,7 @@
     "vite": "^5.4.0",
     "vite-plugin-dts": "^4.0.0",
     "vitepress": "1",
-    "vitest": "^2.0.0",
-    "vitest-axe": "^0.1.0"
+    "vitest": "^2.0.0"
   },
   "dependencies": {
     "@ant-design/icons": "^5.6.1",

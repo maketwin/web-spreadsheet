@@ -1,5 +1,42 @@
 # Changelog
 
+## v1.5.0 (2026-07-02)
+
+### New Features
+
+- **React ErrorBoundary** — Any component render error now shows a friendly
+  "出错了" error UI with a "刷新" button instead of a white screen. Wraps
+  the entire Spreadsheet root. Uses antd `Result` component.
+
+- **Accessibility (a11y) Improvements** — ARIA roles and labels added across
+  the UI for screen reader support:
+  - MenuBar: `role="menubar"` with `aria-orientation="horizontal"`
+  - InteractionToolbar: `role="toolbar"` with `aria-label`
+  - BottomBar sheet tabs: `role="tablist"` / `role="tab"` / `aria-selected`
+  - Canvas: `aria-label="Spreadsheet canvas, use arrow keys to navigate"`
+  - All Toolbar buttons have `aria-label` attributes
+  - `:focus-visible` outline styles for keyboard navigation
+
+- **Performance Benchmark** — VirtualScroller benchmark for 10,000 rows × 50
+  columns. Tests verify `getVisibleRange()` < 0.5ms per call and simulated
+  scroll > 50 FPS.
+
+- **VitePress Documentation Site** — Full documentation site at
+  https://maketwin.github.io/web-spreadsheet/ with:
+  - Homepage with feature overview
+  - Getting Started guide
+  - API reference (Spreadsheet, Store, FormulaEngine, CommandManager, etc.)
+  - Plugin development guide
+  - GitHub Actions workflow for automatic deployment to GitHub Pages
+
+### Technical Details
+
+- New component: `src/components/ErrorBoundary.tsx` (class component, React 18)
+- New tests: `ErrorBoundary.test.tsx`, `a11y.test.tsx`, `perf/10000-rows.test.ts`
+- Added `vitepress@1` and `vitest-axe` devDependencies
+- Added `docs:dev` / `docs:build` / `docs:preview` scripts
+- 260 tests passing (7 new tests across 3 new test files)
+
 ## v1.1.0 (2026-07-01)
 
 ### New Features
