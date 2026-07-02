@@ -20,6 +20,7 @@ import { SetRowHeight } from '../commands/impl/SetRowHeight';
 import { Range, type RangeAddress } from '../selection/Range';
 import { Store, type SheetInfo } from '../store/Store';
 import { applyStoredTheme, setTheme, type Theme } from '../theme';
+import { DataValidationService } from '../validation/DataValidationService';
 import { cellFromText, cellId, formulaDependencies, formulaText, normalizeCellInput, type CellInput as CellDataInput } from '../util/cell';
 import { cellSelection, columnSelection, extendSelection, rangeSelection, rowSelection, sheetSelection, type Selection } from '../selection/Selection';
 import { BottomBar } from './BottomBar';
@@ -76,7 +77,18 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     setSelected(next);
     setEditing({ ...cell, value });
   };
-  const commitEditing = (value: string): void => { if (editing !== null) setCellText(store, cmdManager, editing, value); setEditing(null); };
+  const commitEditing = (value: string): void => {
+    if (editing !== null) {
+      const rule = store.getValidationRule(editing.r, editing.c);
+      if (rule !== undefined) {
+        const svc = new DataValidationService();
+        const result = svc.validate(value, rule);
+        if (!result.valid) { message.warning(result.message ?? '输入值不符合验证规则'); }
+      }
+      setCellText(store, cmdManager, editing, value);
+    }
+    setEditing(null);
+  };
 
   useTheme(theme);
   useFormulaSync(store, formulaEngine);
