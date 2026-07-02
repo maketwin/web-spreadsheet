@@ -5,6 +5,9 @@ import type { Cell, ColMeta, RowMeta, StoreEvent, Style, Unsubscribe } from '../
 import type { ConditionalRule } from '../conditional/ConditionalRule';
 import type { ChartSpec } from '../charts/types';
 import type { ValidationRule } from '../validation/types';
+import type { SparklineSpec } from '../sparkline/types';
+import type { NamedRangeDef } from '../namedrange/types';
+import type { SheetProtectionState } from '../protection/SheetProtection';
 
 export interface SheetInfo {
   readonly id: string;
@@ -185,6 +188,55 @@ export class Store {
 
   public getValidationRule(r: number, c: number, sheetId = this.activeSheetId): ValidationRule | undefined {
     return this.requireSheet(sheetId).getValidationRule(r, c);
+  }
+
+  public getSparklines(sheetId = this.activeSheetId): readonly SparklineSpec[] {
+    return this.requireSheet(sheetId).getSparklines();
+  }
+
+  public addSparkline(spec: SparklineSpec, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).addSparkline(spec);
+    this.notify(eventWithSheet({ type: 'style' as const, id: `sparkline:${spec.id}`, style: undefined }, sheetId));
+  }
+
+  public removeSparkline(id: string, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).removeSparkline(id);
+    this.notify(eventWithSheet({ type: 'style' as const, id: `sparkline:${id}`, style: undefined }, sheetId));
+  }
+
+  public getSparklineAt(r: number, c: number, sheetId = this.activeSheetId): SparklineSpec | undefined {
+    return this.requireSheet(sheetId).getSparklineAt(r, c);
+  }
+
+  public getNamedRanges(sheetId = this.activeSheetId): readonly [string, NamedRangeDef][] {
+    return this.requireSheet(sheetId).getNamedRanges();
+  }
+
+  public setNamedRange(name: string, def: NamedRangeDef, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).setNamedRange(name, def);
+    this.notify(eventWithSheet({ type: 'style' as const, id: `nr:${name}`, style: undefined }, sheetId));
+  }
+
+  public removeNamedRange(name: string, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).removeNamedRange(name);
+    this.notify(eventWithSheet({ type: 'style' as const, id: `nr:${name}`, style: undefined }, sheetId));
+  }
+
+  public getNamedRange(name: string, sheetId = this.activeSheetId): NamedRangeDef | undefined {
+    return this.requireSheet(sheetId).getNamedRange(name);
+  }
+
+  public getProtection(sheetId = this.activeSheetId): SheetProtectionState | undefined {
+    return this.requireSheet(sheetId).getProtection();
+  }
+
+  public setProtection(state: SheetProtectionState | undefined, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).setProtection(state);
+    this.notify(eventWithSheet({ type: 'style' as const, id: 'protection', style: undefined }, sheetId));
+  }
+
+  public isSheetProtected(sheetId = this.activeSheetId): boolean {
+    return this.requireSheet(sheetId).getProtection()?.protected === true;
   }
 
   public subscribe(fn: (e: StoreEvent) => void): Unsubscribe {

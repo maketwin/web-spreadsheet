@@ -57,6 +57,14 @@ export { SetValidationCommand } from './commands/impl/SetValidation';
 export { DataValidationService } from './validation/DataValidationService';
 export type { ValidationRule, ValidationType } from './validation/types';
 export { FilterService } from './filter/FilterService';
+export { Sparkline } from './sparkline/Sparkline';
+export type { SparklineProps } from './sparkline/Sparkline';
+export type { SparklineSpec, SparklineType } from './sparkline/types';
+export { SetSparklineCommand } from './commands/impl/SetSparkline';
+export { NamedRangeService } from './namedrange/NamedRangeService';
+export type { NamedRangeDef } from './namedrange/types';
+export { hashPassword, protectSheet, unprotectSheet, verifyPassword } from './protection/SheetProtection';
+export type { SheetProtectionState } from './protection/SheetProtection';
 
 export class Spreadsheet extends SpreadsheetImpl {
   public constructor(root: HTMLElement | string, options: SpreadsheetOptions = {}) {

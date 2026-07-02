@@ -50,6 +50,11 @@ export class FormulaParser {
     const numeric = Number(expr);
     if (expr !== '' && Number.isFinite(numeric)) return { type: 'number', value: numeric };
 
+    // Named range: identifier that is not a cell ref or function call
+    if (/^[A-Za-z_]\w*$/.test(expr)) {
+      return { type: 'name', value: expr };
+    }
+
     return { type: 'string', value: expr };
   }
 

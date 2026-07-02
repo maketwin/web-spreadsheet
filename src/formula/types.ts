@@ -8,6 +8,7 @@ export type AstNode =
   | { type: 'range'; x1: number; y1: number; x2: number; y2: number; sheetName?: string }
   | { type: 'func'; name: string; args: AstNode[] }
   | { type: 'binary'; op: string; left: AstNode; right: AstNode }
-  | { type: 'unary'; op: string; operand: AstNode };
+  | { type: 'unary'; op: string; operand: AstNode }
+  | { type: 'name'; value: string };
 
 export type CellResolver = (x: number, y: number, sheetName?: string) => FormulaValue;

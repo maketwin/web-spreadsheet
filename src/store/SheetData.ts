@@ -2,6 +2,9 @@ import type { Cell, ColMeta, RowMeta, Style } from '../types';
 import type { ConditionalRule } from '../conditional/ConditionalRule';
 import type { ChartSpec } from '../charts/types';
 import type { ValidationRule } from '../validation/types';
+import type { SparklineSpec } from '../sparkline/types';
+import type { NamedRangeDef } from '../namedrange/types';
+import type { SheetProtectionState } from '../protection/SheetProtection';
 
 export interface SerializedSheetData {
   readonly cells: Array<[string, Cell]>;
@@ -12,6 +15,9 @@ export interface SerializedSheetData {
   readonly conditionalRules: Array<[string, ConditionalRule[]]>;
   readonly charts: ChartSpec[];
   readonly validationRules: Array<[string, ValidationRule]>;
+  readonly sparklines: SparklineSpec[];
+  readonly namedRanges: Array<[string, NamedRangeDef]>;
+  readonly protection?: SheetProtectionState | undefined;
 }
 
 export class SheetData {
@@ -23,6 +29,9 @@ export class SheetData {
   private readonly conditionalRules = new Map<string, ConditionalRule[]>();
   private readonly charts = new Map<string, ChartSpec>();
   private readonly validationRules = new Map<string, ValidationRule>();
+  private readonly sparklines = new Map<string, SparklineSpec>();
+  private readonly namedRanges = new Map<string, NamedRangeDef>();
+  private protection: SheetProtectionState | undefined;
 
   public getCell(r: number, c: number): Cell | undefined {
     return this.cells.get(keyOf(r, c));
@@ -120,6 +129,49 @@ export class SheetData {
     return undefined;
   }
 
+  public getSparklines(): readonly SparklineSpec[] {
+    return [...this.sparklines.values()];
+  }
+
+  public addSparkline(spec: SparklineSpec): void {
+    this.sparklines.set(spec.id, spec);
+  }
+
+  public removeSparkline(id: string): void {
+    this.sparklines.delete(id);
+  }
+
+  public getSparklineAt(r: number, c: number): SparklineSpec | undefined {
+    for (const spec of this.sparklines.values()) {
+      if (spec.row === r && spec.col === c) return spec;
+    }
+    return undefined;
+  }
+
+  public getNamedRanges(): readonly [string, NamedRangeDef][] {
+    return [...this.namedRanges.entries()];
+  }
+
+  public setNamedRange(name: string, def: NamedRangeDef): void {
+    this.namedRanges.set(name, def);
+  }
+
+  public removeNamedRange(name: string): void {
+    this.namedRanges.delete(name);
+  }
+
+  public getNamedRange(name: string): NamedRangeDef | undefined {
+    return this.namedRanges.get(name);
+  }
+
+  public getProtection(): SheetProtectionState | undefined {
+    return this.protection;
+  }
+
+  public setProtection(state: SheetProtectionState | undefined): void {
+    this.protection = state;
+  }
+
   public serialize(): SerializedSheetData {
     return {
       cells: [...this.cells.entries()],
@@ -130,6 +182,9 @@ export class SheetData {
       conditionalRules: [...this.conditionalRules.entries()],
       charts: [...this.charts.values()],
       validationRules: [...this.validationRules.entries()],
+      sparklines: [...this.sparklines.values()],
+      namedRanges: [...this.namedRanges.entries()],
+      protection: this.protection,
     };
   }
 
@@ -143,6 +198,9 @@ export class SheetData {
     data.conditionalRules.forEach(([key, value]) => sheet.conditionalRules.set(key, value));
     data.charts.forEach((spec) => sheet.charts.set(spec.id, spec));
     data.validationRules.forEach(([key, value]) => sheet.validationRules.set(key, value));
+    data.sparklines.forEach((spec) => sheet.sparklines.set(spec.id, spec));
+    data.namedRanges.forEach(([key, value]) => sheet.namedRanges.set(key, value));
+    if (data.protection !== undefined) sheet.protection = data.protection;
     return sheet;
   }
 }

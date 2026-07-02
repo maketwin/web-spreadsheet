@@ -1,7 +1,9 @@
 import { registry } from './registry';
 import type { AstNode, CellResolver, FormulaArgument, FormulaValue } from './types';
 
-export function evaluate(node: AstNode, resolve: CellResolver): FormulaArgument {
+export type NamedRangeResolver = (name: string) => AstNode | null;
+
+export function evaluate(node: AstNode, resolve: CellResolver, resolveName?: NamedRangeResolver): FormulaArgument {
   switch (node.type) {
     case 'number':
       return node.value;
@@ -12,11 +14,13 @@ export function evaluate(node: AstNode, resolve: CellResolver): FormulaArgument 
     case 'range':
       return evaluateRange(node, resolve);
     case 'func':
-      return evaluateFunction(node, resolve);
+      return evaluateFunction(node, resolve, resolveName);
     case 'binary':
-      return evaluateBinary(node, resolve);
+      return evaluateBinary(node, resolve, resolveName);
     case 'unary':
-      return evaluateUnary(node, resolve);
+      return evaluateUnary(node, resolve, resolveName);
+    case 'name':
+      return evaluateName(node, resolve, resolveName);
   }
 }
 
@@ -33,15 +37,15 @@ function evaluateRange(node: Extract<AstNode, { type: 'range' }>, resolve: CellR
   return values;
 }
 
-function evaluateFunction(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver): FormulaArgument {
+function evaluateFunction(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver, resolveName?: NamedRangeResolver): FormulaArgument {
   const spec = registry.get(node.name);
   if (!spec) return null;
-  return spec.evaluate(node.args.map((arg) => evaluate(arg, resolve)));
+  return spec.evaluate(node.args.map((arg) => evaluate(arg, resolve, resolveName)));
 }
 
-function evaluateBinary(node: Extract<AstNode, { type: 'binary' }>, resolve: CellResolver): FormulaValue {
-  const left = scalar(evaluate(node.left, resolve));
-  const right = scalar(evaluate(node.right, resolve));
+function evaluateBinary(node: Extract<AstNode, { type: 'binary' }>, resolve: CellResolver, resolveName?: NamedRangeResolver): FormulaValue {
+  const left = scalar(evaluate(node.left, resolve, resolveName));
+  const right = scalar(evaluate(node.right, resolve, resolveName));
 
   switch (node.op) {
     case '+':
@@ -61,9 +65,16 @@ function evaluateBinary(node: Extract<AstNode, { type: 'binary' }>, resolve: Cel
   }
 }
 
-function evaluateUnary(node: Extract<AstNode, { type: 'unary' }>, resolve: CellResolver): FormulaValue {
-  const value = scalar(evaluate(node.operand, resolve));
+function evaluateUnary(node: Extract<AstNode, { type: 'unary' }>, resolve: CellResolver, resolveName?: NamedRangeResolver): FormulaValue {
+  const value = scalar(evaluate(node.operand, resolve, resolveName));
   return node.op === '-' ? -Number(value) : Number(value);
+}
+
+function evaluateName(node: Extract<AstNode, { type: 'name' }>, resolve: CellResolver, resolveName?: NamedRangeResolver): FormulaArgument {
+  if (resolveName === undefined) return null;
+  const resolved = resolveName(node.value);
+  if (resolved === null) return null;
+  return evaluate(resolved, resolve, resolveName);
 }
 
 function scalar(value: FormulaArgument): FormulaValue {

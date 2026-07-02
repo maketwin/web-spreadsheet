@@ -1,8 +1,8 @@
 import type { Store } from '../store/Store';
 import { DependencyGraph } from './dependency';
-import { evaluate } from './evaluator';
+import { evaluate, type NamedRangeResolver } from './evaluator';
 import { FormulaParser } from './parser';
-import type { FormulaArgument, FormulaValue } from './types';
+import type { AstNode, FormulaArgument, FormulaValue } from './types';
 
 export class FormulaEngine {
   private graph = new DependencyGraph();
@@ -37,7 +37,7 @@ export class FormulaEngine {
 
     const { sheetId, r, c } = parseScopedKey(scopedId);
     try {
-      const value = scalar(evaluate(ast, (x, y, sheetName) => this.resolveCell(x, y, sheetName)));
+      const value = scalar(evaluate(ast, (x, y, sheetName) => this.resolveCell(x, y, sheetName), this.nameResolver));
       const existing = this.store.getCell(r, c, sheetId);
       this.store.setCell(r, c, { ...existing, text: String(value ?? ''), value }, sheetId);
     } catch (err) {
@@ -76,6 +76,21 @@ export class FormulaEngine {
     }
     return undefined;
   }
+
+  private readonly nameResolver: NamedRangeResolver = (name: string): AstNode | null => {
+    const def = this.store.getNamedRange(name);
+    if (def === undefined) return null;
+    const parts = def.range.split(':');
+    const start = parts[0]?.split(',').map(Number) ?? [];
+    const end = parts[1]?.split(',').map(Number) ?? start;
+    return {
+      type: 'range',
+      x1: start[1] ?? 0,
+      y1: start[0] ?? 0,
+      x2: end[1] ?? 0,
+      y2: end[0] ?? 0,
+    };
+  };
 }
 
 function scopedKey(cellId: string, sheetId: string): string {

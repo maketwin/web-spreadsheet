@@ -1,5 +1,5 @@
-import { BarChartOutlined, DatabaseOutlined, EditOutlined, FileOutlined, FormatPainterOutlined, QuestionCircleOutlined, SettingOutlined, TableOutlined } from '@ant-design/icons';
-import { Dropdown, Form, InputNumber, Modal, Switch, message } from 'antd';
+import { BarChartOutlined, DatabaseOutlined, EditOutlined, FileOutlined, FormatPainterOutlined, LockOutlined, QuestionCircleOutlined, SettingOutlined, TableOutlined } from '@ant-design/icons';
+import { Dropdown, Form, Input, InputNumber, Modal, Switch, message } from 'antd';
 import type { MenuProps } from 'antd';
 import { useMemo, useRef, useState, useEffect, type FC, type ReactElement, type ReactNode } from 'react';
 import { ClipboardService } from '../../clipboard/ClipboardService';
@@ -13,11 +13,13 @@ import { SetRangeValues } from '../../commands/impl/SetRangeValues';
 import { SetNumberFormatCommand } from '../../commands/impl/SetNumberFormat';
 import { SetConditionalFormatCommand } from '../../commands/impl/SetConditionalFormat';
 import { CreateChartCommand } from '../../commands/impl/CreateChart';
+import { SetSparklineCommand } from '../../commands/impl/SetSparkline';
 import type { ChartType } from '../../charts/types';
 import { FilterService } from '../../filter/FilterService';
 import type { ValidationRule } from '../../validation/types';
 import { SetValidationCommand } from '../../commands/impl/SetValidation';
 import { FindReplaceService } from '../../find/FindReplaceService';
+import { protectSheet, unprotectSheet, verifyPassword } from '../../protection/SheetProtection';
 import { TOTAL_COLS, TOTAL_ROWS } from '../../renderer/CanvasRenderer';
 import { Range, type RangeAddress } from '../../selection/Range';
 import { Store } from '../../store/Store';
@@ -31,6 +33,7 @@ import { AboutDialog } from './dialogs/AboutDialog';
 import { ChartDialog } from './dialogs/ChartDialog';
 import { DataValidationDialog, type ValidationConfig } from './dialogs/DataValidationDialog';
 import { FindReplaceDialog } from './dialogs/FindReplaceDialog';
+import { SparklineDialog, type SparklineConfig } from './dialogs/SparklineDialog';
 import { InsertColDialog, type InsertColValues } from './dialogs/InsertColDialog';
 import { InsertRowDialog, type InsertRowValues } from './dialogs/InsertRowDialog';
 import { NumberFormatDialog, type NumberFormatValues } from './dialogs/NumberFormatDialog';
@@ -88,6 +91,7 @@ function topMenus(actions: MenuActions, view: ViewState): readonly TopMenu[] {
     { key: 'insert', label: '插入(I)', icon: <BarChartOutlined />, items: insertItems() },
     { key: 'format', label: '格式(O)', icon: <FormatPainterOutlined />, items: formatItems() },
     { key: 'data', label: '数据(D)', icon: <DatabaseOutlined />, items: dataItems() },
+    { key: 'review', label: '审阅(R)', icon: <LockOutlined />, items: reviewItems() },
     { key: 'tools', label: '工具(T)', icon: <SettingOutlined />, items: toolsItems() },
     { key: 'help', label: '帮助(H)', icon: <QuestionCircleOutlined />, items: helpItems() },
   ];
@@ -154,6 +158,7 @@ function insertItems(): NonNullable<MenuProps['items']> {
     divider('insert:divider:1'),
     item('insert:image', '图片...'),
     item('insert:chart', '图表...'),
+    item('insert:sparkline', '迷你图...'),
   ];
 }
 
@@ -188,6 +193,13 @@ function dataItems(): NonNullable<MenuProps['items']> {
   ];
 }
 
+function reviewItems(): NonNullable<MenuProps['items']> {
+  return [
+    item('review:protect', '保护工作表...'),
+    item('review:unprotect', '取消保护工作表...'),
+  ];
+}
+
 function helpItems(): NonNullable<MenuProps['items']> {
   return [item('help:docs', '文档'), item('help:shortcuts', '快捷键'), divider('help:divider:1'), item('help:about', '关于')];
 }
@@ -211,6 +223,7 @@ function runMenuAction(key: string, ctx: MenuContext, openDialog: (name: DialogN
   else if (key.startsWith('format:')) runFormatAction(key, ctx, openDialog);
   else if (key.startsWith('view:')) runViewAction(key, view, openDialog);
   else if (key.startsWith('data:')) runDataAction(key, ctx, openDialog);
+  else if (key.startsWith('review:')) runReviewAction(key, ctx, openDialog);
   else if (key.startsWith('tools:')) runToolsAction(key, openDialog);
   else if (key.startsWith('help:')) runHelpAction(key, openDialog);
 }
@@ -247,6 +260,7 @@ function runInsertAction(key: string, ctx: MenuContext, openDialog: (name: Dialo
   if (key === 'insert:deleteCol') execute(ctx, new DeleteColCommand({ c: ctx.selected?.c1 ?? 0, count: selectedCols(ctx.selected) }));
   if (key === 'insert:image') message.info('图片入口已触发，渲染层待接入');
   if (key === 'insert:chart') openDialog('chart');
+  if (key === 'insert:sparkline') openDialog('sparkline');
 }
 
 function runFormatAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void): void {
@@ -279,6 +293,11 @@ function runDataAction(key: string, ctx: MenuContext, openDialog: (name: DialogN
   if (key === 'data:filter') { message.info('请点击列标头下拉箭头进行筛选'); }
   if (key === 'data:sortAsc') applySort(ctx, 'asc');
   if (key === 'data:sortDesc') applySort(ctx, 'desc');
+}
+
+function runReviewAction(key: string, _ctx: MenuContext, openDialog: (name: DialogName) => void): void {
+  if (key === 'review:protect') openDialog('protectSheet');
+  if (key === 'review:unprotect') openDialog('unprotectSheet');
 }
 
 function runToolsAction(key: string, openDialog: (name: DialogName) => void): void {
@@ -392,6 +411,9 @@ function Dialogs({ dialog, setDialog, props, view, findService: svc }: { readonl
     <ShortcutsDialog open={dialog === 'shortcuts'} onCancel={close} />
     <ChartDialog open={dialog === 'chart'} onCancel={close} onSubmit={(type: import('../../charts/types').ChartType, title: string) => submitChart(type, title, props, close)} />
     <DataValidationDialog open={dialog === 'dataValidation'} onCancel={close} onSubmit={(type: import('../../validation/types').ValidationType, config: ValidationConfig) => submitValidation(type, config, props, close)} />
+    <SparklineDialog open={dialog === 'sparkline'} onCancel={close} onSubmit={(config: SparklineConfig) => submitSparkline(config, props, close)} />
+    <ProtectSheetDialog open={dialog === 'protectSheet'} store={props.store} onCancel={close} />
+    <UnprotectSheetDialog open={dialog === 'unprotectSheet'} store={props.store} onCancel={close} />
     <OptionsDialog open={dialog === 'options'} onCancel={close} />
     <PluginsDialog open={dialog === 'plugins'} onCancel={close} />
     <HistoryPanel open={dialog === 'history'} onCancel={close} cmdManager={props.cmdManager} />
@@ -412,6 +434,39 @@ const OptionsDialog: FC<{ readonly open: boolean; readonly onCancel: () => void 
   <Form layout="vertical"><Form.Item label="默认字号"><InputNumber defaultValue={14} min={8} max={72} /></Form.Item><Form.Item label="默认列宽"><InputNumber defaultValue={100} min={40} max={400} /></Form.Item><Form.Item label="启用网格线"><Switch defaultChecked /></Form.Item></Form>
 </Modal>;
 const PluginsDialog: FC<{ readonly open: boolean; readonly onCancel: () => void }> = ({ open, onCancel }) => <Modal title="插件管理" open={open} onCancel={onCancel} onOk={onCancel}>已装插件：csv-import <Switch size="small" defaultChecked /></Modal>;
+
+const ProtectSheetDialog: FC<{ readonly open: boolean; readonly store: Store; readonly onCancel: () => void }> = ({ open, store, onCancel }) => {
+  const [form] = Form.useForm<{ password: string }>();
+  const handleOk = (): void => {
+    const pwd = form.getFieldValue('password') ?? '';
+    store.setProtection(protectSheet(pwd));
+    message.success('工作表已保护');
+    form.resetFields();
+    onCancel();
+  };
+  return <Modal title="保护工作表" open={open} onCancel={onCancel} onOk={handleOk} destroyOnHidden>
+    <Form form={form} layout="vertical"><Form.Item name="password" label="密码"><Input.Password placeholder="输入保护密码" /></Form.Item></Form>
+  </Modal>;
+};
+
+const UnprotectSheetDialog: FC<{ readonly open: boolean; readonly store: Store; readonly onCancel: () => void }> = ({ open, store, onCancel }) => {
+  const [form] = Form.useForm<{ password: string }>();
+  const handleOk = (): void => {
+    const pwd = form.getFieldValue('password') ?? '';
+    const prot = store.getProtection();
+    if (prot !== undefined && prot.protected && !verifyPassword(pwd, prot.passwordHash)) {
+      message.error('密码错误');
+      return;
+    }
+    store.setProtection(unprotectSheet());
+    message.success('已取消保护');
+    form.resetFields();
+    onCancel();
+  };
+  return <Modal title="取消保护工作表" open={open} onCancel={onCancel} onOk={handleOk} destroyOnHidden>
+    <Form form={form} layout="vertical"><Form.Item name="password" label="密码"><Input.Password placeholder="输入保护密码" /></Form.Item></Form>
+  </Modal>;
+};
 
 const ToggleLabel: FC<{ readonly text: string; readonly checked: boolean }> = ({ text, checked }) => (
   <span className="ss-menu-label"><span>{text}</span><Switch size="small" checked={checked} style={{ pointerEvents: 'none' }} /></span>
@@ -473,5 +528,32 @@ function submitValidation(type: import('../../validation/types').ValidationType,
   }
   execute(ctx, new SetValidationCommand({ ...sel, rule }));
   close();
+}
+
+function submitSparkline(config: SparklineConfig, ctx: MenuContext, close: () => void): void {
+  const sel = ctx.selected ?? Range.single(0, 0).toAddress();
+  const rangeAddr = parseA1Range(config.range);
+  if (rangeAddr === undefined) { message.warning('无法解析范围，请使用 A1:B5 格式'); return; }
+  execute(ctx, new SetSparklineCommand({ ...rangeAddr, type: config.type, targetRow: sel.r1, targetCol: sel.c1 }));
+  close();
+}
+
+function parseA1Range(input: string): import('../../selection/Range').RangeAddress | undefined {
+  const match = input.trim().match(/^([A-Za-z]+)(\d+):([A-Za-z]+)(\d+)$/);
+  if (match === null) return undefined;
+  const c1 = alphaToCol(match[1] ?? '');
+  const r1 = (Number(match[2]) ?? 1) - 1;
+  const c2 = alphaToCol(match[3] ?? '');
+  const r2 = (Number(match[4]) ?? 1) - 1;
+  if (c1 < 0 || c2 < 0) return undefined;
+  return { r1, c1, r2, c2 };
+}
+
+function alphaToCol(alpha: string): number {
+  let col = 0;
+  for (let i = 0; i < alpha.length; i += 1) {
+    col = col * 26 + (alpha.toUpperCase().charCodeAt(i) - 64);
+  }
+  return col - 1;
 }
 export function allSheetRange(): RangeAddress { return { r1: 0, c1: 0, r2: TOTAL_ROWS - 1, c2: TOTAL_COLS - 1 }; }

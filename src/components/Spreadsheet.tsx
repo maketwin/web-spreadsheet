@@ -1,5 +1,5 @@
-import { Button, Divider, Select, Space, Switch, Tooltip, message } from 'antd';
-import { AlignCenterOutlined, AlignLeftOutlined, AlignRightOutlined, BoldOutlined, ClearOutlined, FormatPainterOutlined, ItalicOutlined, SelectOutlined, UnderlineOutlined, ZoomInOutlined, ZoomOutOutlined } from '@ant-design/icons';
+import { Button, Divider, Form, Input, Modal, Radio, Select, Space, Switch, Tooltip, message } from 'antd';
+import { AlignCenterOutlined, AlignLeftOutlined, AlignRightOutlined, BoldOutlined, ClearOutlined, FormatPainterOutlined, ItalicOutlined, LineChartOutlined, LockOutlined, SelectOutlined, UnderlineOutlined, ZoomInOutlined, ZoomOutOutlined } from '@ant-design/icons';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type Dispatch, type FC, type KeyboardEvent as ReactKeyboardEvent, type RefObject, type SetStateAction } from 'react';
@@ -7,6 +7,8 @@ import { ClipboardService } from '../clipboard/ClipboardService';
 import { CommandManager } from '../commands/CommandManager';
 import { SetCellText } from '../commands/impl/SetCellText';
 import { SetRangeStyleCommand } from '../commands/impl/SetRangeStyle';
+import { SetSparklineCommand } from '../commands/impl/SetSparkline';
+import type { SparklineType } from '../sparkline/types';
 import { SetRangeValues } from '../commands/impl/SetRangeValues';
 import { EventBus } from '../events/EventBus';
 import { FormulaEngine } from '../formula/FormulaEngine';
@@ -21,6 +23,7 @@ import { Range, type RangeAddress } from '../selection/Range';
 import { Store, type SheetInfo } from '../store/Store';
 import { applyStoredTheme, setTheme, type Theme } from '../theme';
 import { DataValidationService } from '../validation/DataValidationService';
+import { protectSheet, unprotectSheet, verifyPassword } from '../protection/SheetProtection';
 import { cellFromText, cellId, formulaDependencies, formulaText, normalizeCellInput, type CellInput as CellDataInput } from '../util/cell';
 import { cellSelection, columnSelection, extendSelection, rangeSelection, rowSelection, sheetSelection, type Selection } from '../selection/Selection';
 import { BottomBar } from './BottomBar';
@@ -45,6 +48,8 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const [activeSheetId, setActiveSheetId] = useState(store.getActiveSheetId());
   const [view, setView] = useState<ViewState>({ zoom: 100, showFormula: false, showGrid: true, frozenRows: 0, frozenCols: 0 });
   const [findDialogOpen, setFindDialogOpen] = useState<import('./menu/types').DialogName | null>(null);
+  const [sparklineOpen, setSparklineOpen] = useState(false);
+  const [protectOpen, setProtectOpen] = useState(false);
   const [storeVersion, setStoreVersion] = useState(0);
   const [formulaValue, setFormulaValue] = useState('');
   const [painting, setPainting] = useState(false);
@@ -79,6 +84,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   };
   const commitEditing = (value: string): void => {
     if (editing !== null) {
+      if (store.isSheetProtected()) { message.warning('工作表已保护，无法编辑'); setEditing(null); return; }
       const rule = store.getValidationRule(editing.r, editing.c);
       if (rule !== undefined) {
         const svc = new DataValidationService();
@@ -100,7 +106,9 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
 
   return <div className="ss-root">
     <MenuBar {...menuBarProps(store, cmdManager, selected, selectRange, () => selectSelection(sheetSelection(allSheetRange())), onClose)} view={{ ...view, setZoom: (zoom) => setView((current) => ({ ...current, zoom })), setShowFormula: (showFormula) => setView((current) => ({ ...current, showFormula })), setShowGrid: (showGrid) => setView((current) => ({ ...current, showGrid })), setFreeze: (frozenRows, frozenCols) => setView((current) => ({ ...current, frozenRows, frozenCols })) }} onFindNavigate={(cell) => selectSelection(cellSelection(cell.r, cell.c))} onFindHighlight={(cells) => rendererRef.current?.setHighlightMatches(cells)} openDialogKey={findDialogOpen} />
-    <InteractionToolbar selected={selected} store={store} cmdManager={cmdManager} view={view} setView={setView} selectAll={() => selectSelection(sheetSelection(allSheetRange()))} painting={painting} onTogglePainter={() => { if (painting) { setPainting(false); setSourceStyle(undefined); } else { const cell = selected?.active; const s = cell === undefined ? undefined : store.getCell(cell.r, cell.c)?.styleId === undefined ? undefined : store.getStyle(store.getCell(cell.r, cell.c)!.styleId!); setSourceStyle(s); setPainting(true); } }} />
+    <InteractionToolbar selected={selected} store={store} cmdManager={cmdManager} view={view} setView={setView} selectAll={() => selectSelection(sheetSelection(allSheetRange()))} painting={painting} onTogglePainter={() => { if (painting) { setPainting(false); setSourceStyle(undefined); } else { const cell = selected?.active; const s = cell === undefined ? undefined : store.getCell(cell.r, cell.c)?.styleId === undefined ? undefined : store.getStyle(store.getCell(cell.r, cell.c)!.styleId!); setSourceStyle(s); setPainting(true); } }} onInsertSparkline={() => setSparklineOpen(true)} onToggleProtection={() => setProtectOpen(true)} />
+    <SparklineInsertModal open={sparklineOpen} onClose={() => setSparklineOpen(false)} selected={selected} store={store} cmdManager={cmdManager} />
+    <ProtectionModal open={protectOpen} onClose={() => setProtectOpen(false)} store={store} />
     <FormulaBar selected={selected} value={formulaValue} onChange={setFormulaValue} onCommit={() => commitFormulaValue(selected, formulaValue, store, cmdManager)} />
     <div className="ss-canvas-wrap"><canvas ref={canvasRef} className="ss-canvas" tabIndex={0} onKeyDown={(e) => handleCanvasKeyDown(e, selectedRef.current, store, cmdManager, startEditing, selectSelection, selectRange, setView, setFindDialogOpen)} onDoubleClick={(e) => editFromPointer(e.currentTarget, e.clientX, e.clientY, startEditing, view.zoom)} />
       {editing !== null && <EditorOverlay refEl={inputRef} editing={editing} setEditing={setEditing} commit={commitEditing} zoom={view.zoom} />}</div>
@@ -273,7 +281,67 @@ function commitFormulaValue(selected: Selection | null, value: string, store: St
   setCellText(store, cmdManager, { r: selected.range.r1, c: selected.range.c1 }, value);
 }
 
-const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly store: Store; readonly cmdManager: CommandManager | undefined; readonly view: ViewState; readonly setView: Dispatch<SetStateAction<ViewState>>; readonly selectAll: () => void; readonly painting: boolean; readonly onTogglePainter: () => void }> = ({ selected, store, cmdManager, view, setView, selectAll, painting, onTogglePainter }) => {
+const SparklineInsertModal: FC<{ readonly open: boolean; readonly onClose: () => void; readonly selected: Selection | null; readonly store: Store; readonly cmdManager: CommandManager | undefined }> = ({ open, onClose, selected, store, cmdManager }) => {
+  const [form] = Form.useForm<{ type: SparklineType; range: string }>();
+  const submit = (): void => {
+    const values = form.getFieldsValue();
+    const rangeAddr = parseA1ToRange(values.range);
+    if (rangeAddr === undefined) { message.warning('无法解析范围'); return; }
+    const targetRow = selected?.range.r1 ?? 0;
+    const targetCol = selected?.range.c1 ?? 0;
+    const cmd = new SetSparklineCommand({ ...rangeAddr, type: values.type, targetRow, targetCol });
+    if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store);
+    form.resetFields();
+    onClose();
+  };
+  return <Modal title="插入迷你图" open={open} onCancel={onClose} onOk={submit} destroyOnHidden>
+    <Form form={form} layout="vertical" initialValues={{ type: 'line' as SparklineType, range: '' }}>
+      <Form.Item name="type" label="类型"><Radio.Group><Radio value="line">折线</Radio><Radio value="bar">柱形</Radio><Radio value="winloss">盈亏</Radio></Radio.Group></Form.Item>
+      <Form.Item name="range" label="数据范围" rules={[{ required: true, message: '请输入范围' }]}><Input placeholder="A1:A5" /></Form.Item>
+    </Form>
+  </Modal>;
+};
+
+const ProtectionModal: FC<{ readonly open: boolean; readonly onClose: () => void; readonly store: Store }> = ({ open, onClose, store }) => {
+  const isProtected = store.isSheetProtected();
+  const [form] = Form.useForm<{ password: string }>();
+  const submit = (): void => {
+    const pwd = form.getFieldValue('password') ?? '';
+    if (isProtected) {
+      const prot = store.getProtection();
+      if (prot !== undefined && prot.protected && !verifyPassword(pwd, prot.passwordHash)) { message.error('密码错误'); return; }
+      store.setProtection(unprotectSheet());
+      message.success('已取消保护');
+    } else {
+      store.setProtection(protectSheet(pwd));
+      message.success('工作表已保护');
+    }
+    form.resetFields();
+    onClose();
+  };
+  return <Modal title={isProtected ? '取消保护工作表' : '保护工作表'} open={open} onCancel={onClose} onOk={submit} destroyOnHidden>
+    <Form form={form} layout="vertical"><Form.Item name="password" label="密码"><Input.Password placeholder={isProtected ? '输入保护密码' : '设置保护密码'} /></Form.Item></Form>
+  </Modal>;
+};
+
+function parseA1ToRange(input: string): RangeAddress | undefined {
+  const match = input.trim().match(/^([A-Za-z]+)(\d+):([A-Za-z]+)(\d+)$/);
+  if (match === null) return undefined;
+  const c1 = a1Col(match[1] ?? '');
+  const r1 = (Number(match[2]) ?? 1) - 1;
+  const c2 = a1Col(match[3] ?? '');
+  const r2 = (Number(match[4]) ?? 1) - 1;
+  if (c1 < 0 || c2 < 0) return undefined;
+  return { r1, c1, r2, c2 };
+}
+
+function a1Col(alpha: string): number {
+  let col = 0;
+  for (let i = 0; i < alpha.length; i += 1) col = col * 26 + (alpha.toUpperCase().charCodeAt(i) - 64);
+  return col - 1;
+}
+
+const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly store: Store; readonly cmdManager: CommandManager | undefined; readonly view: ViewState; readonly setView: Dispatch<SetStateAction<ViewState>>; readonly selectAll: () => void; readonly painting: boolean; readonly onTogglePainter: () => void; readonly onInsertSparkline: () => void; readonly onToggleProtection: () => void }> = ({ selected, store, cmdManager, view, setView, selectAll, painting, onTogglePainter, onInsertSparkline, onToggleProtection }) => {
   const range = selected?.range;
   const style = (next: Partial<Style>): void => { if (range !== undefined) applyShortcutStyle(store, cmdManager, range, next); };
   const setZoom = (zoom: number): void => setView((current) => ({ ...current, zoom }));
@@ -291,6 +359,9 @@ const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly sto
       <Tooltip title="左对齐"><Button size="small" icon={<AlignLeftOutlined />} aria-label="Align left" onClick={() => style({ align: 'left' })} /></Tooltip>
       <Tooltip title="居中"><Button size="small" icon={<AlignCenterOutlined />} aria-label="Align center" onClick={() => style({ align: 'center' })} /></Tooltip>
       <Tooltip title="右对齐"><Button size="small" icon={<AlignRightOutlined />} aria-label="Align right" onClick={() => style({ align: 'right' })} /></Tooltip>
+      <Divider type="vertical" />
+      <Tooltip title="迷你图"><Button size="small" icon={<LineChartOutlined />} aria-label="Insert sparkline" onClick={onInsertSparkline} /></Tooltip>
+      <Tooltip title={store.isSheetProtected() ? '取消保护' : '保护工作表'}><Button size="small" icon={<LockOutlined />} aria-label="Sheet protection" onClick={onToggleProtection} /></Tooltip>
       <Divider type="vertical" />
       <Tooltip title="缩小"><Button size="small" icon={<ZoomOutOutlined />} aria-label="Zoom out" onClick={() => setZoom(Math.max(50, view.zoom - 10))} /></Tooltip>
       <Select size="small" aria-label="Zoom level" value={view.zoom} popupMatchSelectWidth={false} onChange={setZoom} options={[50, 75, 100, 125, 150, 200].map((value) => ({ value, label: `${value}%` }))} />
