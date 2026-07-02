@@ -26,9 +26,15 @@ export interface CanvasRendererOptions {
   onRowDblClick?: (r: number) => void; onColDblClick?: (c: number) => void;
   onFill?: (source: RangeAddress, target: RangeAddress, ctrlKey: boolean) => void; devicePixelRatio?: number;
   onHeaderContextMenu?: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => void;
+  onMoveRange?: (source: RangeAddress, target: RangeAddress) => void;
 }
 
 type DragAnchor = { type: 'cell'; r: number; c: number } | { type: 'column'; c: number } | { type: 'row'; r: number };
+
+interface MoveDragState {
+  readonly source: RangeAddress;
+  target: CellAddress;
+}
 
 export class CanvasRenderer {
   private readonly ctx: CanvasRenderingContext2D;
@@ -43,6 +49,7 @@ export class CanvasRenderer {
   private selectionKind: SelectionKind | undefined;
   private activeCell: CellAddress | undefined;
   private dragAnchor: DragAnchor | null = null;
+  private moveDrag: MoveDragState | null = null;
   private rafId: number | null = null;
   private highlightMatches: readonly CellAddress[] = [];
 
@@ -94,13 +101,25 @@ export class CanvasRenderer {
     if (h?.type === 'column') { this.opts.canvas.focus(); this.dragAnchor = { type: 'column', c: h.c }; this.opts.onColumnSelect?.(h.c, ev.shiftKey); return; }
     if (h?.type === 'row') { this.opts.canvas.focus(); this.dragAnchor = { type: 'row', r: h.r }; this.opts.onRowSelect?.(h.r, ev.shiftKey); return; }
     const cell = this.pointerCell(ev.clientX, ev.clientY); if (cell === null) return;
-    this.opts.canvas.focus(); this.dragAnchor = { type: 'cell', ...cell }; this.setSelectedCell(cell);
+    this.opts.canvas.focus();
+    // Check if click is on the selection border (drag-to-move)
+    if (this.selectedRange !== undefined && this.isSelectionBorder(cell) && this.moveDrag === null) {
+      this.moveDrag = { source: this.selectedRange, target: cell };
+      this.opts.canvas.style.cursor = 'move';
+      return;
+    }
+    this.dragAnchor = { type: 'cell', ...cell }; this.setSelectedCell(cell);
     ev.shiftKey ? this.opts.onCellClick?.(cell, true) : this.opts.onCellClick?.(cell);
   };
   private readonly handleMouseMove = (ev: MouseEvent): void => {
     if (this.resizeHandler.isResizing()) { this.resizeHandler.onMouseMove(ev); return; }
     if (this.fillHandle.isDragging()) { this.fillHandle.onMouseMove(ev); return; }
     this.resizeHandler.onMouseMove(ev); this.fillHandle.onMouseMove(ev);
+    if (this.moveDrag !== null) {
+      const cell = this.pointerCell(ev.clientX, ev.clientY);
+      if (cell !== null) { this.moveDrag = { ...this.moveDrag, target: cell }; this.invalidateAll(); }
+      return;
+    }
     if (this.dragAnchor === null) return;
     if (this.dragAnchor.type === 'column') { const c = canvasPointToColumn(this.opts.canvas, ev.clientX, this.scroller.scrollLeft, this.opts.zoom); if (c !== null) this.opts.onColumnSelect?.(c, true); return; }
     if (this.dragAnchor.type === 'row') { const r = canvasPointToRow(this.opts.canvas, ev.clientY, this.scroller.scrollTop, this.opts.zoom); if (r !== null) this.opts.onRowSelect?.(r, true); return; }
@@ -108,7 +127,7 @@ export class CanvasRenderer {
     const range = new Range({ r1: this.dragAnchor.r, c1: this.dragAnchor.c, r2: cell.r, c2: cell.c }).toAddress();
     this.setSelection(range, 'range', cell); this.opts.onSelectionChange?.(range, cell, { r: this.dragAnchor.r, c: this.dragAnchor.c });
   };
-  private readonly handleMouseUp = (): void => { if (this.resizeHandler.isResizing()) { this.resizeHandler.onMouseUp(); return; } if (this.fillHandle.isDragging()) { this.fillHandle.onMouseUp(); return; } this.dragAnchor = null; };
+  private readonly handleMouseUp = (): void => { if (this.resizeHandler.isResizing()) { this.resizeHandler.onMouseUp(); return; } if (this.fillHandle.isDragging()) { this.fillHandle.onMouseUp(); return; } if (this.moveDrag !== null) { this.opts.onMoveRange?.(this.moveDrag.source, Range.single(this.moveDrag.target.r, this.moveDrag.target.c).toAddress()); this.moveDrag = null; this.opts.canvas.style.cursor = ''; this.invalidateAll(); return; } this.dragAnchor = null; };
   private readonly handleDblClick = (ev: MouseEvent): void => { if (this.resizeHandler.onDblClick(ev)) ev.stopPropagation(); };
   private readonly handleThemeChanged = (): void => this.invalidateAll();
   private readonly handleContextMenu = (ev: MouseEvent): void => {
@@ -211,6 +230,7 @@ export class CanvasRenderer {
     if (indicator !== null) { this.ctx.save(); this.ctx.setLineDash([4, 3]); this.ctx.strokeStyle = theme.accent; this.ctx.lineWidth = 1; this.ctx.beginPath(); if (indicator.type === 'row') { this.ctx.moveTo(0, indicator.position); this.ctx.lineTo(this.vpW(), indicator.position); } else { this.ctx.moveTo(indicator.position, 0); this.ctx.lineTo(indicator.position, this.vpH()); } this.ctx.stroke(); this.ctx.setLineDash([]); this.ctx.restore(); }
     const ft = this.fillHandle.getFillTarget();
     if (ft !== undefined) { const { x, y, w, h } = this.rangeRect(ft); this.ctx.save(); this.ctx.setLineDash([3, 3]); this.ctx.strokeStyle = theme.accent; this.ctx.lineWidth = 1.5; this.ctx.strokeRect(x, y, w, h); this.ctx.setLineDash([]); this.ctx.restore(); }
+    this.paintMoveDragOverlay(theme);
     this.paintHighlights(theme);
   }
 
@@ -303,6 +323,34 @@ export class CanvasRenderer {
   private isHighCol(c: number): boolean { return this.selectedRange !== undefined && this.selectionKind !== 'row' && c >= this.selectedRange.c1 && c <= this.selectedRange.c2; }
   private isHighRow(r: number): boolean { return this.selectedRange !== undefined && this.selectionKind !== 'column' && r >= this.selectedRange.r1 && r <= this.selectedRange.r2; }
   private isSelFill(r: number, c: number): boolean { const sr = this.selectedRange; if (sr === undefined || r < sr.r1 || r > sr.r2 || c < sr.c1 || c > sr.c2) return false; return !(this.activeCell?.r === r && this.activeCell.c === c && this.selectionKind !== 'row' && this.selectionKind !== 'column' && this.selectionKind !== 'sheet'); }
+
+  /** Check if a cell is on the border of the current selection (for drag-to-move). */
+  private isSelectionBorder(cell: CellAddress): boolean {
+    const sr = this.selectedRange;
+    if (sr === undefined) return false;
+    const onRow = cell.r === sr.r1 || cell.r === sr.r2;
+    const onCol = cell.c === sr.c1 || cell.c === sr.c2;
+    const inRange = cell.r >= sr.r1 && cell.r <= sr.r2 && cell.c >= sr.c1 && cell.c <= sr.c2;
+    return inRange && (onRow || onCol) && !(cell.r > sr.r1 && cell.r < sr.r2 && cell.c > sr.c1 && cell.c < sr.c2);
+  }
+
+  /** Paint the move-drag target outline. */
+  private paintMoveDragOverlay(theme: CanvasTheme): void {
+    if (this.moveDrag === null) return;
+    const src = this.moveDrag.source;
+    const tgt = this.moveDrag.target;
+    const rows = src.r2 - src.r1 + 1;
+    const cols = src.c2 - src.c1 + 1;
+    const targetRange = { r1: tgt.r, c1: tgt.c, r2: tgt.r + rows - 1, c2: tgt.c + cols - 1 };
+    const { x, y, w, h } = this.rangeRect(targetRange);
+    this.ctx.save();
+    this.ctx.setLineDash([6, 3]);
+    this.ctx.strokeStyle = theme.accent;
+    this.ctx.lineWidth = 2;
+    this.ctx.strokeRect(x, y, w, h);
+    this.ctx.setLineDash([]);
+    this.ctx.restore();
+  }
   private pointerCell(cx: number, cy: number): CellAddress | null { return canvasPointToCell(this.opts.canvas, cx, cy, this.scroller.scrollLeft, this.scroller.scrollTop, this.opts.zoom); }
   private cellVP(r: number, c: number): { x: number; y: number } { const p = this.scroller.cellToPixel(r, c); return { x: ROW_HEADER_WIDTH + p.x - this.scroller.scrollLeft, y: COL_HEADER_HEIGHT + p.y - this.scroller.scrollTop }; }
   private cellStyle(r: number, c: number) { const cell = this.opts.store.getCell(r, c); return cell?.styleId === undefined ? undefined : this.opts.store.getStyle(cell.styleId); }
