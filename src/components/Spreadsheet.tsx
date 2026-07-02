@@ -23,6 +23,7 @@ import { cellFromText, cellId, formulaDependencies, formulaText, normalizeCellIn
 import { cellSelection, columnSelection, extendSelection, rangeSelection, rowSelection, selectionLabel, sheetSelection, type Selection } from '../selection/Selection';
 import { BottomBar } from './BottomBar';
 import { StatusBar } from './StatusBar';
+import { FormulaBar } from './FormulaBar';
 import { MenuBar, allSheetRange } from './menu/MenuBar';
 import { startAutoSave } from '../db/autoSave';
 import { loadWorkbook, DEFAULT_ID, saveWorkbook as saveToDB } from '../db/WorkbookDB';
@@ -258,14 +259,6 @@ function commitFormulaValue(selected: Selection | null, value: string, store: St
   if (selected === null) return;
   setCellText(store, cmdManager, { r: selected.range.r1, c: selected.range.c1 }, value);
 }
-
-const FormulaBar: FC<{ readonly selected: Selection | null; readonly value: string; readonly onChange: (value: string) => void; readonly onCommit: () => void }> = ({ selected, value, onChange, onCommit }) => {
-  const label = selectionLabel(selected);
-  return <div className="ss-formula-bar">
-    <div className="ss-formula-name" aria-label="Selected cell">{label}</div>
-    <input className="ss-formula-input" aria-label="Formula bar" value={value} onChange={(event) => onChange(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') onCommit(); }} />
-  </div>;
-};
 
 const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly store: Store; readonly cmdManager: CommandManager | undefined; readonly view: ViewState; readonly setView: Dispatch<SetStateAction<ViewState>>; readonly selectAll: () => void; readonly painting: boolean; readonly onTogglePainter: () => void }> = ({ selected, store, cmdManager, view, setView, selectAll, painting, onTogglePainter }) => {
   const range = selected?.range;
