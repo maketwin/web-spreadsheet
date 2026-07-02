@@ -50,6 +50,13 @@ export type { Cell, CellValue, ColMeta, RowMeta, StoreEvent, Style, Unsubscribe 
 export { ConditionalService } from './conditional/ConditionalService';
 export type { ConditionalOverlay, ConditionalRule } from './conditional/ConditionalRule';
 export { SetConditionalFormatCommand } from './commands/impl/SetConditionalFormat';
+export { CreateChartCommand } from './commands/impl/CreateChart';
+export type { ChartSpec, ChartType } from './charts/types';
+export { ChartPanel } from './charts/ChartPanel';
+export { SetValidationCommand } from './commands/impl/SetValidation';
+export { DataValidationService } from './validation/DataValidationService';
+export type { ValidationRule, ValidationType } from './validation/types';
+export { FilterService } from './filter/FilterService';
 
 export class Spreadsheet extends SpreadsheetImpl {
   public constructor(root: HTMLElement | string, options: SpreadsheetOptions = {}) {

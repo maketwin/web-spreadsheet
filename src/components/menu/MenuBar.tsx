@@ -1,4 +1,4 @@
-import { BarChartOutlined, EditOutlined, FileOutlined, FormatPainterOutlined, QuestionCircleOutlined, SettingOutlined, TableOutlined } from '@ant-design/icons';
+import { BarChartOutlined, DatabaseOutlined, EditOutlined, FileOutlined, FormatPainterOutlined, QuestionCircleOutlined, SettingOutlined, TableOutlined } from '@ant-design/icons';
 import { Dropdown, Form, InputNumber, Modal, Switch, message } from 'antd';
 import type { MenuProps } from 'antd';
 import { useMemo, useRef, useState, useEffect, type FC, type ReactElement, type ReactNode } from 'react';
@@ -12,6 +12,11 @@ import { SetRangeStyleCommand } from '../../commands/impl/SetRangeStyle';
 import { SetRangeValues } from '../../commands/impl/SetRangeValues';
 import { SetNumberFormatCommand } from '../../commands/impl/SetNumberFormat';
 import { SetConditionalFormatCommand } from '../../commands/impl/SetConditionalFormat';
+import { CreateChartCommand } from '../../commands/impl/CreateChart';
+import type { ChartType } from '../../charts/types';
+import { FilterService } from '../../filter/FilterService';
+import type { ValidationRule } from '../../validation/types';
+import { SetValidationCommand } from '../../commands/impl/SetValidation';
 import { FindReplaceService } from '../../find/FindReplaceService';
 import { TOTAL_COLS, TOTAL_ROWS } from '../../renderer/CanvasRenderer';
 import { Range, type RangeAddress } from '../../selection/Range';
@@ -23,7 +28,8 @@ import { saveWorkbook as saveToDB, DEFAULT_ID } from '../../db/WorkbookDB';
 import { exportXlsx } from '../../io/XlsxExporter';
 import { importXlsx } from '../../io/XlsxImporter';
 import { AboutDialog } from './dialogs/AboutDialog';
-import { ChartStubDialog } from './dialogs/ChartStubDialog';
+import { ChartDialog } from './dialogs/ChartDialog';
+import { DataValidationDialog, type ValidationConfig } from './dialogs/DataValidationDialog';
 import { FindReplaceDialog } from './dialogs/FindReplaceDialog';
 import { InsertColDialog, type InsertColValues } from './dialogs/InsertColDialog';
 import { InsertRowDialog, type InsertRowValues } from './dialogs/InsertRowDialog';
@@ -81,6 +87,7 @@ function topMenus(actions: MenuActions, view: ViewState): readonly TopMenu[] {
     { key: 'view', label: '视图(V)', icon: <TableOutlined />, items: viewItems(view) },
     { key: 'insert', label: '插入(I)', icon: <BarChartOutlined />, items: insertItems() },
     { key: 'format', label: '格式(O)', icon: <FormatPainterOutlined />, items: formatItems() },
+    { key: 'data', label: '数据(D)', icon: <DatabaseOutlined />, items: dataItems() },
     { key: 'tools', label: '工具(T)', icon: <SettingOutlined />, items: toolsItems() },
     { key: 'help', label: '帮助(H)', icon: <QuestionCircleOutlined />, items: helpItems() },
   ];
@@ -172,6 +179,15 @@ function toolsItems(): NonNullable<MenuProps['items']> {
   return [item('tools:macro', '宏...'), item('tools:options', '选项...'), item('tools:plugins', '插件管理...')];
 }
 
+function dataItems(): NonNullable<MenuProps['items']> {
+  return [
+    item('data:validation', '数据验证...'),
+    item('data:filter', '筛选'),
+    item('data:sortAsc', '升序排序'),
+    item('data:sortDesc', '降序排序'),
+  ];
+}
+
 function helpItems(): NonNullable<MenuProps['items']> {
   return [item('help:docs', '文档'), item('help:shortcuts', '快捷键'), divider('help:divider:1'), item('help:about', '关于')];
 }
@@ -194,6 +210,7 @@ function runMenuAction(key: string, ctx: MenuContext, openDialog: (name: DialogN
   else if (key.startsWith('insert:')) runInsertAction(key, ctx, openDialog);
   else if (key.startsWith('format:')) runFormatAction(key, ctx, openDialog);
   else if (key.startsWith('view:')) runViewAction(key, view, openDialog);
+  else if (key.startsWith('data:')) runDataAction(key, ctx, openDialog);
   else if (key.startsWith('tools:')) runToolsAction(key, openDialog);
   else if (key.startsWith('help:')) runHelpAction(key, openDialog);
 }
@@ -255,6 +272,13 @@ function runViewAction(key: string, view: ViewState, openDialog: (name: DialogNa
     else view.setFreeze(1, 1);
   }
   if (key === 'view:fitWidth') view.setZoom(120);
+}
+
+function runDataAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void): void {
+  if (key === 'data:validation') openDialog('dataValidation');
+  if (key === 'data:filter') { message.info('请点击列标头下拉箭头进行筛选'); }
+  if (key === 'data:sortAsc') applySort(ctx, 'asc');
+  if (key === 'data:sortDesc') applySort(ctx, 'desc');
 }
 
 function runToolsAction(key: string, openDialog: (name: DialogName) => void): void {
@@ -366,7 +390,8 @@ function Dialogs({ dialog, setDialog, props, view, findService: svc }: { readonl
     <NumberFormatDialog open={dialog === 'numberFormat'} onCancel={close} onSubmit={(v) => submitNumber(v, props, close)} />
     <AboutDialog open={dialog === 'about'} onCancel={close} />
     <ShortcutsDialog open={dialog === 'shortcuts'} onCancel={close} />
-    <ChartStubDialog open={dialog === 'chart'} onCancel={close} />
+    <ChartDialog open={dialog === 'chart'} onCancel={close} onSubmit={(type: import('../../charts/types').ChartType, title: string) => submitChart(type, title, props, close)} />
+    <DataValidationDialog open={dialog === 'dataValidation'} onCancel={close} onSubmit={(type: import('../../validation/types').ValidationType, config: ValidationConfig) => submitValidation(type, config, props, close)} />
     <OptionsDialog open={dialog === 'options'} onCancel={close} />
     <PluginsDialog open={dialog === 'plugins'} onCancel={close} />
     <HistoryPanel open={dialog === 'history'} onCancel={close} cmdManager={props.cmdManager} />
@@ -419,5 +444,34 @@ function applyConditionalFormula(ctx: MenuContext): void {
   if (formula === null) return;
   const sel = ctx.selected ?? Range.single(0, 0).toAddress();
   execute(ctx, new SetConditionalFormatCommand({ ...sel, rules: [{ type: 'formula', formula, style: { bgcolor: '#FFFF00' } }] }));
+}
+
+function submitChart(type: ChartType, title: string, ctx: MenuContext, close: () => void): void {
+  const sel = ctx.selected ?? Range.single(0, 0).toAddress();
+  const args = title.length > 0 ? { ...sel, type, title } : { ...sel, type };
+  execute(ctx, new CreateChartCommand(args));
+  close();
+}
+
+function applySort(ctx: MenuContext, direction: 'asc' | 'desc'): void {
+  const sel = ctx.selected;
+  if (sel === null) { message.warning('请先选择要排序的范围'); return; }
+  const svc = new FilterService(ctx.store);
+  svc.sortRange(sel.r1, sel.c1, sel.r2, sel.c2, sel.c1, direction);
+}
+
+function submitValidation(type: import('../../validation/types').ValidationType, config: ValidationConfig, ctx: MenuContext, close: () => void): void {
+  const sel = ctx.selected ?? Range.single(0, 0).toAddress();
+  let rule: ValidationRule;
+  if (type === 'list') {
+    const values = (config.listValues ?? '').split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+    rule = { type: 'list', values };
+  } else if (type === 'integer') {
+    rule = { type: 'integer', min: config.min ?? 0, max: config.max ?? 100 };
+  } else {
+    rule = { type: 'date', minDate: config.minDate ?? '2020-01-01', maxDate: config.maxDate ?? '2030-12-31' };
+  }
+  execute(ctx, new SetValidationCommand({ ...sel, rule }));
+  close();
 }
 export function allSheetRange(): RangeAddress { return { r1: 0, c1: 0, r2: TOTAL_ROWS - 1, c2: TOTAL_COLS - 1 }; }

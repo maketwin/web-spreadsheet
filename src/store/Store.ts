@@ -3,6 +3,8 @@ import { SheetData, type SerializedSheetData } from './SheetData';
 import { parseRange } from '../util/cell';
 import type { Cell, ColMeta, RowMeta, StoreEvent, Style, Unsubscribe } from '../types';
 import type { ConditionalRule } from '../conditional/ConditionalRule';
+import type { ChartSpec } from '../charts/types';
+import type { ValidationRule } from '../validation/types';
 
 export interface SheetInfo {
   readonly id: string;
@@ -151,6 +153,38 @@ export class Store {
   public removeConditionalRule(range: string, sheetId = this.activeSheetId): void {
     this.requireSheet(sheetId).removeConditionalRule(range);
     this.notify(eventWithSheet({ type: 'style' as const, id: `cf:${range}`, style: undefined }, sheetId));
+  }
+
+  public getCharts(sheetId = this.activeSheetId): readonly ChartSpec[] {
+    return this.requireSheet(sheetId).getCharts();
+  }
+
+  public addChart(spec: ChartSpec, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).addChart(spec);
+    this.notify(eventWithSheet({ type: 'style' as const, id: `chart:${spec.id}`, style: undefined }, sheetId));
+  }
+
+  public removeChart(id: string, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).removeChart(id);
+    this.notify(eventWithSheet({ type: 'style' as const, id: `chart:${id}`, style: undefined }, sheetId));
+  }
+
+  public getValidationRules(sheetId = this.activeSheetId): readonly [string, ValidationRule][] {
+    return this.requireSheet(sheetId).getValidationRules();
+  }
+
+  public setValidationRule(range: string, rule: ValidationRule, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).setValidationRule(range, rule);
+    this.notify(eventWithSheet({ type: 'style' as const, id: `dv:${range}`, style: undefined }, sheetId));
+  }
+
+  public removeValidationRule(range: string, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).removeValidationRule(range);
+    this.notify(eventWithSheet({ type: 'style' as const, id: `dv:${range}`, style: undefined }, sheetId));
+  }
+
+  public getValidationRule(r: number, c: number, sheetId = this.activeSheetId): ValidationRule | undefined {
+    return this.requireSheet(sheetId).getValidationRule(r, c);
   }
 
   public subscribe(fn: (e: StoreEvent) => void): Unsubscribe {

@@ -53,6 +53,7 @@ export function clamp(value: number, min: number, max: number): number {
 export interface CanvasTheme {
   readonly bg: string; readonly text: string; readonly grid: string; readonly selected: string;
   readonly headerBg: string; readonly accent: string; readonly fontFamily: string; readonly border: string;
+  readonly headerFilter?: string;
 }
 
 export function readCanvasTheme(): CanvasTheme {
@@ -61,6 +62,7 @@ export function readCanvasTheme(): CanvasTheme {
     bg: cssV(s, '--ss-bg', '#fff'), text: cssV(s, '--ss-text', '#333'), grid: cssV(s, '--ss-grid', '#f0f0f0'),
     selected: cssV(s, '--ss-selected', '#e8f0ff'), headerBg: cssV(s, '--ss-header-bg', '#f7f7f7'),
     accent: cssV(s, '--ss-accent', '#1677ff'), fontFamily: cssV(s, '--ss-font-family', 'sans-serif'), border: cssV(s, '--ss-border', '#d9d9d9'),
+    headerFilter: cssV(s, '--ss-header-filter', '#999'),
   };
 }
 

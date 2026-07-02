@@ -1,5 +1,7 @@
 import type { Cell, ColMeta, RowMeta, Style } from '../types';
 import type { ConditionalRule } from '../conditional/ConditionalRule';
+import type { ChartSpec } from '../charts/types';
+import type { ValidationRule } from '../validation/types';
 
 export interface SerializedSheetData {
   readonly cells: Array<[string, Cell]>;
@@ -8,6 +10,8 @@ export interface SerializedSheetData {
   readonly styles: Array<[string, Style]>;
   readonly merges: string[];
   readonly conditionalRules: Array<[string, ConditionalRule[]]>;
+  readonly charts: ChartSpec[];
+  readonly validationRules: Array<[string, ValidationRule]>;
 }
 
 export class SheetData {
@@ -17,6 +21,8 @@ export class SheetData {
   private readonly styles = new Map<string, Style>();
   private readonly merges = new Set<string>();
   private readonly conditionalRules = new Map<string, ConditionalRule[]>();
+  private readonly charts = new Map<string, ChartSpec>();
+  private readonly validationRules = new Map<string, ValidationRule>();
 
   public getCell(r: number, c: number): Cell | undefined {
     return this.cells.get(keyOf(r, c));
@@ -83,6 +89,37 @@ export class SheetData {
     this.conditionalRules.delete(range);
   }
 
+  public getCharts(): readonly ChartSpec[] {
+    return [...this.charts.values()];
+  }
+
+  public addChart(spec: ChartSpec): void {
+    this.charts.set(spec.id, spec);
+  }
+
+  public removeChart(id: string): void {
+    this.charts.delete(id);
+  }
+
+  public getValidationRules(): readonly [string, ValidationRule][] {
+    return [...this.validationRules.entries()];
+  }
+
+  public setValidationRule(range: string, rule: ValidationRule): void {
+    this.validationRules.set(range, rule);
+  }
+
+  public removeValidationRule(range: string): void {
+    this.validationRules.delete(range);
+  }
+
+  public getValidationRule(r: number, c: number): ValidationRule | undefined {
+    for (const [range, rule] of this.validationRules) {
+      if (cellInRange(r, c, range)) return rule;
+    }
+    return undefined;
+  }
+
   public serialize(): SerializedSheetData {
     return {
       cells: [...this.cells.entries()],
@@ -91,6 +128,8 @@ export class SheetData {
       styles: [...this.styles.entries()],
       merges: [...this.merges],
       conditionalRules: [...this.conditionalRules.entries()],
+      charts: [...this.charts.values()],
+      validationRules: [...this.validationRules.entries()],
     };
   }
 
@@ -102,10 +141,19 @@ export class SheetData {
     data.styles.forEach(([key, value]) => sheet.styles.set(key, value));
     data.merges.forEach((merge) => sheet.merges.add(merge));
     data.conditionalRules.forEach(([key, value]) => sheet.conditionalRules.set(key, value));
+    data.charts.forEach((spec) => sheet.charts.set(spec.id, spec));
+    data.validationRules.forEach(([key, value]) => sheet.validationRules.set(key, value));
     return sheet;
   }
 }
 
 function keyOf(r: number, c: number): string {
   return `${r},${c}`;
+}
+
+function cellInRange(r: number, c: number, range: string): boolean {
+  const parts = range.split(':');
+  const start = parts[0]?.split(',').map(Number) ?? [0, 0];
+  const end = parts[1]?.split(',').map(Number) ?? start;
+  return r >= (start[0] ?? 0) && r <= (end[0] ?? 0) && c >= (start[1] ?? 0) && c <= (end[1] ?? 0);
 }
