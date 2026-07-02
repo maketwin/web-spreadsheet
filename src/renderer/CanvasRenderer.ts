@@ -155,7 +155,7 @@ export class CanvasRenderer {
     this.ctx.strokeStyle = theme.border; this.ctx.fillStyle = theme.text; this.ctx.textAlign = 'center'; this.ctx.textBaseline = 'middle';
     this.ctx.font = `${Math.max(12, Math.round(12 * this.zoom()))}px ${theme.fontFamily}`;
     let x = ROW_HEADER_WIDTH - this.scroller.scrollLeft; for (let i = 0; i < vis.startCol; i += 1) x += this.scroller.getColWidth(i);
-    for (let c = vis.startCol; c < vis.endCol; c += 1) { const w = this.scroller.getColWidth(c); if (this.isHighCol(c)) { this.ctx.fillStyle = headerSelectionColor(theme); this.ctx.fillRect(x + 1, 1, w - 2, COL_HEADER_HEIGHT - 2); this.ctx.fillStyle = theme.text; } this.ctx.strokeRect(x, 0, w, COL_HEADER_HEIGHT); this.ctx.fillText(num2alpha(c), x + w / 2, COL_HEADER_HEIGHT / 2); x += w; }
+    for (let c = vis.startCol; c < vis.endCol; c += 1) { const w = this.scroller.getColWidth(c); if (this.isHighCol(c)) { this.ctx.fillStyle = headerSelectionColor(theme); this.ctx.fillRect(x + 1, 1, w - 2, COL_HEADER_HEIGHT - 2); this.ctx.fillStyle = theme.text; } this.ctx.strokeRect(x, 0, w, COL_HEADER_HEIGHT); this.ctx.fillText(num2alpha(c), x + w / 2, COL_HEADER_HEIGHT / 2); this.ctx.fillStyle = theme.headerFilter ?? theme.border; this.ctx.font = `${Math.max(8, Math.round(8 * this.zoom()))}px ${theme.fontFamily}`; this.ctx.fillText('▼', x + w - 10, COL_HEADER_HEIGHT / 2); this.ctx.font = `${Math.max(12, Math.round(12 * this.zoom()))}px ${theme.fontFamily}`; this.ctx.fillStyle = theme.text; x += w; }
     let y = COL_HEADER_HEIGHT - this.scroller.scrollTop; for (let i = 0; i < vis.startRow; i += 1) y += this.scroller.getRowHeight(i);
     for (let r = vis.startRow; r < vis.endRow; r += 1) { const h = this.scroller.getRowHeight(r); if (this.isHighRow(r)) { this.ctx.fillStyle = headerSelectionColor(theme); this.ctx.fillRect(1, y + 1, ROW_HEADER_WIDTH - 2, h - 2); this.ctx.fillStyle = theme.text; } this.ctx.strokeRect(0, y, ROW_HEADER_WIDTH, h); this.ctx.fillText(String(r + 1), ROW_HEADER_WIDTH / 2, y + h / 2); y += h; }
   }
@@ -163,6 +163,8 @@ export class CanvasRenderer {
   private paintCells(vis: VisibleRange, theme: CanvasTheme): void {
     const skip = this.mergeSkipSet(vis);
     for (let r = vis.startRow; r < vis.endRow; r += 1) {
+      const rowMeta = this.opts.store.getRow(r);
+      if (rowMeta?.hide === true) continue;
       for (let c = vis.startCol; c < vis.endCol; c += 1) {
         if (skip.has(`${r},${c}`)) continue;
         const merge = this.opts.store.getMergeAt(r, c);
