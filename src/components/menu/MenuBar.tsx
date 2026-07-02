@@ -66,7 +66,7 @@ export const MenuBar: FC<MenuBarProps> = (props) => {
   useEffect(() => { if (props.openDialogKey !== undefined && props.openDialogKey !== null) setDialog(props.openDialogKey); }, [props.openDialogKey]);
 
   const menus = topMenus(actions, view);
-  return <div className="ss-menu-bar" role="menubar" aria-label="Spreadsheet menu">
+  return <div className="ss-menu-bar" role="menubar" aria-orientation="horizontal" aria-label="Spreadsheet menu">
     <div className="ss-menu-strip">
       {menus.map((menu) => <Dropdown key={menu.key} trigger={['click']} placement="bottomLeft" menu={{ items: menu.items, onClick: ({ key }) => actions.run(String(key)) }}>
         <button className="ss-menu-trigger" type="button" role="menuitem" aria-haspopup="menu">

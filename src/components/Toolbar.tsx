@@ -28,8 +28,8 @@ export const Toolbar: FC<ToolbarProps> = ({
     <Button onClick={onUnderline} aria-label="Underline">
       <u>U</u>
     </Button>
-    <Button onClick={onFontSize}>Font Size</Button>
-    <Button onClick={onAlign}>Align</Button>
-    <Button onClick={onToggleDark}>Dark</Button>
+    <Button onClick={onFontSize} aria-label="Font size">Font Size</Button>
+    <Button onClick={onAlign} aria-label="Alignment">Align</Button>
+    <Button onClick={onToggleDark} aria-label="Toggle dark mode">Dark</Button>
   </div>
 );

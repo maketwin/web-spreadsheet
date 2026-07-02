@@ -38,6 +38,8 @@
     .ss-canvas { width: 100%; height: 100%; display: block; outline: none; }
     .ss-editor-overlay { position: absolute; box-sizing: border-box; padding: 0 5px; border: 2px solid var(--ss-accent); background: var(--ss-bg); color: var(--ss-text); font: 14px -apple-system, sans-serif; outline: none; }
     canvas { display: block; }
+    .ss-canvas:focus-visible, .ss-menu-trigger:focus-visible, .ss-interaction-toolbar .ant-btn-sm:focus-visible, .ss-bottom-bar .ant-btn:focus-visible { outline: 2px solid var(--ss-accent); outline-offset: -2px; }
+    .ss-formula-input:focus-visible { border-color: var(--ss-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--ss-accent) 15%, transparent); }
     @media print {
       .ss-menu-bar, .ss-interaction-toolbar, .ss-formula-bar, .ss-status-bar, .ss-bottom-bar { display: none !important; }
       .ss-root { height: auto; }
