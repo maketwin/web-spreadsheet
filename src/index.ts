@@ -17,6 +17,7 @@ export { DeleteColCommand } from './commands/impl/DeleteCol';
 export { SetCellStyleCommand } from './commands/impl/SetCellStyle';
 export { SetRangeStyleCommand } from './commands/impl/SetRangeStyle';
 export { SpreadsheetComponent } from './components/Spreadsheet';
+export { ErrorBoundary } from './components/ErrorBoundary';
 export type { CellInput, SpreadsheetOptions, SpreadsheetProps } from './components/Spreadsheet';
 export { DependencyGraph } from './formula/dependency';
 export { evaluate } from './formula/evaluator';

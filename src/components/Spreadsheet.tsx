@@ -27,6 +27,7 @@ import { protectSheet, unprotectSheet, verifyPassword } from '../protection/Shee
 import { cellFromText, cellId, formulaDependencies, formulaText, normalizeCellInput, type CellInput as CellDataInput } from '../util/cell';
 import { cellSelection, columnSelection, extendSelection, rangeSelection, rowSelection, sheetSelection, type Selection } from '../selection/Selection';
 import { BottomBar } from './BottomBar';
+import { ErrorBoundary } from './ErrorBoundary';
 import { StatusBar } from './StatusBar';
 import { FormulaBar } from './FormulaBar';
 import { MenuBar, allSheetRange } from './menu/MenuBar';
@@ -104,17 +105,17 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   useAutoSave(store);
   useEffect(() => inputRef.current?.focus(), [editing]);
 
-  return <div className="ss-root">
+  return <ErrorBoundary><div className="ss-root">
     <MenuBar {...menuBarProps(store, cmdManager, selected, selectRange, () => selectSelection(sheetSelection(allSheetRange())), onClose)} view={{ ...view, setZoom: (zoom) => setView((current) => ({ ...current, zoom })), setShowFormula: (showFormula) => setView((current) => ({ ...current, showFormula })), setShowGrid: (showGrid) => setView((current) => ({ ...current, showGrid })), setFreeze: (frozenRows, frozenCols) => setView((current) => ({ ...current, frozenRows, frozenCols })) }} onFindNavigate={(cell) => selectSelection(cellSelection(cell.r, cell.c))} onFindHighlight={(cells) => rendererRef.current?.setHighlightMatches(cells)} openDialogKey={findDialogOpen} />
     <InteractionToolbar selected={selected} store={store} cmdManager={cmdManager} view={view} setView={setView} selectAll={() => selectSelection(sheetSelection(allSheetRange()))} painting={painting} onTogglePainter={() => { if (painting) { setPainting(false); setSourceStyle(undefined); } else { const cell = selected?.active; const s = cell === undefined ? undefined : store.getCell(cell.r, cell.c)?.styleId === undefined ? undefined : store.getStyle(store.getCell(cell.r, cell.c)!.styleId!); setSourceStyle(s); setPainting(true); } }} onInsertSparkline={() => setSparklineOpen(true)} onToggleProtection={() => setProtectOpen(true)} />
     <SparklineInsertModal open={sparklineOpen} onClose={() => setSparklineOpen(false)} selected={selected} store={store} cmdManager={cmdManager} />
     <ProtectionModal open={protectOpen} onClose={() => setProtectOpen(false)} store={store} />
     <FormulaBar selected={selected} value={formulaValue} onChange={setFormulaValue} onCommit={() => commitFormulaValue(selected, formulaValue, store, cmdManager)} />
-    <div className="ss-canvas-wrap"><canvas ref={canvasRef} className="ss-canvas" tabIndex={0} onKeyDown={(e) => handleCanvasKeyDown(e, selectedRef.current, store, cmdManager, startEditing, selectSelection, selectRange, setView, setFindDialogOpen)} onDoubleClick={(e) => editFromPointer(e.currentTarget, e.clientX, e.clientY, startEditing, view.zoom)} />
+    <div className="ss-canvas-wrap"><canvas ref={canvasRef} className="ss-canvas" tabIndex={0} aria-label="Spreadsheet canvas, use arrow keys to navigate" onKeyDown={(e) => handleCanvasKeyDown(e, selectedRef.current, store, cmdManager, startEditing, selectSelection, selectRange, setView, setFindDialogOpen)} onDoubleClick={(e) => editFromPointer(e.currentTarget, e.clientX, e.clientY, startEditing, view.zoom)} />
       {editing !== null && <EditorOverlay refEl={inputRef} editing={editing} setEditing={setEditing} commit={commitEditing} zoom={view.zoom} />}</div>
     <StatusBar store={store} selected={selected?.range ?? null} zoom={view.zoom} />
     <BottomBar sheets={sheets} activeSheetId={activeSheetId} onSheetChange={(id) => store.activateSheet(id)} onAddSheet={() => addSheet(store)} onRenameSheet={(id) => renameSheet(store, id)} onDeleteSheet={(id) => deleteSheet(store, id)} />
-  </div>;
+  </div></ErrorBoundary>;
 };
 
 export class Spreadsheet {
@@ -345,7 +346,7 @@ const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly sto
   const range = selected?.range;
   const style = (next: Partial<Style>): void => { if (range !== undefined) applyShortcutStyle(store, cmdManager, range, next); };
   const setZoom = (zoom: number): void => setView((current) => ({ ...current, zoom }));
-  return <div className="ss-interaction-toolbar" aria-label="Spreadsheet toolbar">
+  return <div className="ss-interaction-toolbar" role="toolbar" aria-label="Spreadsheet toolbar">
     <Space size={4} wrap>
       <Tooltip title="全选"><Button size="small" icon={<SelectOutlined />} aria-label="Select all" onClick={selectAll} /></Tooltip>
       <Tooltip title="清除内容"><Button size="small" icon={<ClearOutlined />} aria-label="Clear contents" onClick={() => { if (range !== undefined) clearRange(store, cmdManager, range); }} /></Tooltip>
