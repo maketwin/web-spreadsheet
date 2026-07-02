@@ -32,6 +32,8 @@ import { ShortcutsDialog } from './dialogs/ShortcutsDialog';
 import { ZoomDialog, type ZoomValues } from './dialogs/ZoomDialog';
 import { shortcutLabel } from './shortcutLabel';
 import type { DialogName, MenuActions, MenuContext, ViewState } from './types';
+import { HistoryPanel } from '../HistoryPanel';
+import { PrintPreview } from '../PrintPreview';
 
 export interface MenuBarProps extends MenuContext {
   readonly view?: Partial<ViewState>;
@@ -96,6 +98,9 @@ function fileItems(): NonNullable<MenuProps['items']> {
     item('file:export', '导出 JSON'),
     item('file:exportXlsx', '导出 xlsx'),
     divider('file:divider:2'),
+    item('file:printPreview', '打印预览...'),
+    item('file:exportPdf', '导出 PDF'),
+    divider('file:divider:3'),
     item('file:close', '关闭演示'),
   ];
 }
@@ -104,6 +109,7 @@ function editItems(): NonNullable<MenuProps['items']> {
   return [
     item('edit:undo', shortcutLabel('撤销', 'Ctrl+Z')),
     item('edit:redo', shortcutLabel('重做', 'Ctrl+Y')),
+    item('edit:history', '撤销历史...'),
     divider('edit:divider:1'),
     item('edit:cut', shortcutLabel('剪切', 'Ctrl+X')),
     item('edit:copy', shortcutLabel('复制', 'Ctrl+C')),
@@ -183,7 +189,7 @@ function makeActions(ctx: MenuContext, openDialog: (name: DialogName) => void, v
 }
 
 function runMenuAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void, view: ViewState, fileInput: React.RefObject<HTMLInputElement | null>, xlsxInput: React.RefObject<HTMLInputElement | null>): void {
-  if (key.startsWith('file:')) runFileAction(key, ctx, fileInput, xlsxInput);
+  if (key.startsWith('file:')) runFileAction(key, ctx, openDialog, fileInput, xlsxInput);
   else if (key.startsWith('edit:')) runEditAction(key, ctx, openDialog);
   else if (key.startsWith('insert:')) runInsertAction(key, ctx, openDialog);
   else if (key.startsWith('format:')) runFormatAction(key, ctx, openDialog);
@@ -192,19 +198,22 @@ function runMenuAction(key: string, ctx: MenuContext, openDialog: (name: DialogN
   else if (key.startsWith('help:')) runHelpAction(key, openDialog);
 }
 
-function runFileAction(key: string, ctx: MenuContext, fileInput: React.RefObject<HTMLInputElement | null>, xlsxInput: React.RefObject<HTMLInputElement | null>): void {
+function runFileAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void, fileInput: React.RefObject<HTMLInputElement | null>, xlsxInput: React.RefObject<HTMLInputElement | null>): void {
   if (key === 'file:new') confirmNew(ctx);
   if (key === 'file:open' || key === 'file:import') fileInput.current?.click();
   if (key === 'file:importXlsx') xlsxInput.current?.click();
   if (key === 'file:save') saveWorkbook(ctx.store);
   if (key === 'file:saveAs' || key === 'file:export') downloadWorkbook(ctx.store);
   if (key === 'file:exportXlsx') downloadXlsx(ctx.store);
+  if (key === 'file:printPreview') openDialog('printPreview');
+  if (key === 'file:exportPdf') openDialog('printPreview');
   if (key === 'file:close') ctx.closeDemo?.();
 }
 
 function runEditAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void): void {
   if (key === 'edit:undo') ctx.cmdManager?.undo();
   if (key === 'edit:redo') ctx.cmdManager?.redo();
+  if (key === 'edit:history') openDialog('history');
   if (key === 'edit:copy' && ctx.selected !== null) void ClipboardService.copy(ctx.store, ctx.selected);
   if (key === 'edit:cut' && ctx.selected !== null) void ClipboardService.cut(ctx.store, ctx.selected).then(ctx.clearRange);
   if (key === 'edit:paste' && ctx.selected !== null) void paste(ctx);
@@ -360,6 +369,8 @@ function Dialogs({ dialog, setDialog, props, view, findService: svc }: { readonl
     <ChartStubDialog open={dialog === 'chart'} onCancel={close} />
     <OptionsDialog open={dialog === 'options'} onCancel={close} />
     <PluginsDialog open={dialog === 'plugins'} onCancel={close} />
+    <HistoryPanel open={dialog === 'history'} onCancel={close} cmdManager={props.cmdManager} />
+    <PrintPreview open={dialog === 'printPreview'} onCancel={close} />
   </>;
 }
 

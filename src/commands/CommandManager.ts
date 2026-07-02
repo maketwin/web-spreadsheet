@@ -2,6 +2,11 @@ import type { EventBus } from '../events/EventBus';
 import type { Store } from '../store/Store';
 import type { Command } from './Command';
 
+export interface HistoryEntry {
+  readonly description: string;
+  readonly index: number;
+}
+
 export class CommandManager {
   private undoStack: Command[] = [];
   private redoStack: Command[] = [];
@@ -46,6 +51,21 @@ export class CommandManager {
 
   public canRedo(): boolean {
     return this.redoStack.length > 0;
+  }
+
+  public getUndoStack(): readonly HistoryEntry[] {
+    return this.undoStack.map((cmd, i) => ({ description: cmd.describe(), index: i }));
+  }
+
+  public getRedoStack(): readonly HistoryEntry[] {
+    return this.redoStack.map((cmd, i) => ({ description: cmd.describe(), index: i }));
+  }
+
+  /** Undo back to a specific index in the undo stack (0-based). */
+  public undoToIndex(targetIndex: number): void {
+    while (this.undoStack.length > targetIndex + 1) {
+      this.undo();
+    }
   }
 
   public clear(): void {

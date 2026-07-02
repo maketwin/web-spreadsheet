@@ -15,7 +15,7 @@ export interface MenuContext {
 
 export type DialogName =
   | 'find' | 'replace' | 'insertRow' | 'insertCol' | 'zoom' | 'numberFormat'
-  | 'about' | 'shortcuts' | 'options' | 'plugins' | 'chart';
+  | 'about' | 'shortcuts' | 'options' | 'plugins' | 'chart' | 'history' | 'printPreview';
 
 export interface ViewState {
   readonly zoom: number;
