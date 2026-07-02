@@ -1,6 +1,6 @@
 {
   "name": "web-spreadsheet",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "A modern TypeScript spreadsheet SDK with 4-layer architecture",
   "type": "module",
   "main": "./dist/web-spreadsheet.umd.js",
