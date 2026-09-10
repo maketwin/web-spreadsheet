@@ -2,7 +2,7 @@ import { Button, ColorPicker, Divider, Dropdown, Form, Input, Modal, Select, Spa
 import { AlignCenterOutlined, AlignLeftOutlined, AlignRightOutlined, BgColorsOutlined, BoldOutlined, BorderBottomOutlined, BorderInnerOutlined, BorderLeftOutlined, BorderOuterOutlined, BorderOutlined, BorderRightOutlined, BorderTopOutlined, ClearOutlined, ColumnHeightOutlined, FontColorsOutlined, FormatPainterOutlined, ItalicOutlined, LockOutlined, SelectOutlined, UnderlineOutlined, ZoomInOutlined, ZoomOutOutlined } from '@ant-design/icons';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type Dispatch, type FC, type KeyboardEvent as ReactKeyboardEvent, type RefObject, type SetStateAction } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type Dispatch, type FC, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type RefObject, type SetStateAction } from 'react';
 import { ClipboardService } from '../clipboard/ClipboardService';
 import type { Command } from '../commands/Command';
 import type { DialogName } from './menu/types';
@@ -228,7 +228,7 @@ export class Spreadsheet {
   }
 }
 
-interface EditorOverlayProps { readonly refEl: RefObject<HTMLTextAreaElement | null>; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly commit: (value: string) => void; readonly zoom: number; readonly store: Store; readonly cellRect?: { x: number; y: number; w: number; h: number } }
+interface EditorOverlayProps { readonly refEl: RefObject<HTMLTextAreaElement>; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly commit: (value: string) => void; readonly zoom: number; readonly store: Store; readonly cellRect?: { x: number; y: number; w: number; h: number } }
 const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editing, setEditing, commit, zoom, store, cellRect }) => {
   const composing = useRef(false);
   const cellStyle = store.getCell(editing.r, editing.c)?.styleId !== undefined
@@ -254,7 +254,7 @@ const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editing, setEditing, com
   />;
 };
 
-function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick: (cell: CellAddress, shift: boolean) => void, onSelectionChange: (selection: Selection) => void, view: ViewState, cmdManager: CommandManager | undefined, onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => void, onCellContextMenu: (cell: CellAddress, x: number, y: number) => void): { canvasRef: RefObject<HTMLCanvasElement | null>; rendererRef: RefObject<CanvasRenderer | null> } {
+function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick: (cell: CellAddress, shift: boolean) => void, onSelectionChange: (selection: Selection) => void, view: ViewState, cmdManager: CommandManager | undefined, onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => void, onCellContextMenu: (cell: CellAddress, x: number, y: number) => void): { canvasRef: RefObject<HTMLCanvasElement>; rendererRef: RefObject<CanvasRenderer | null> } {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<CanvasRenderer | null>(null);
   const callbacks = useRef({ onCellClick, onSelectionChange, onHeaderContextMenu, onCellContextMenu });
@@ -301,7 +301,7 @@ function useFormulaValue(selected: Selection | null, editing: EditingCell | null
     setFormulaValue(cell?.formula ?? cell?.text ?? '');
   }, [selected, editing, store, storeVersion, setFormulaValue]);
 }
-function syncFormulaEvent(event: StoreEvent, engine: FormulaEngine, syncing: RefObject<boolean>): void { if (event.type !== 'cell' || syncing.current) return; syncing.current = true; const sheetId = event.sheetId; syncCellFormula(engine, event.r, event.c, event.cell, sheetId); engine.onCellChanged(cellId(event.r, event.c), sheetId); syncing.current = false; }
+function syncFormulaEvent(event: StoreEvent, engine: FormulaEngine, syncing: MutableRefObject<boolean>): void { if (event.type !== 'cell' || syncing.current) return; syncing.current = true; const sheetId = event.sheetId; syncCellFormula(engine, event.r, event.c, event.cell, sheetId); engine.onCellChanged(cellId(event.r, event.c), sheetId); syncing.current = false; }
 
 function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selected: Selection | null, store: Store, cmdManager: CommandManager | undefined, startEditing: (cell: CellAddress, value?: string) => void, selectSelection: (selection: Selection) => void, selectRange: (range: RangeAddress) => void, setView: Dispatch<SetStateAction<ViewState>>, setFindDialog: (name: DialogName | null) => void): void {
   if (selected === null || event.altKey) return;
@@ -322,7 +322,7 @@ function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selec
 
 function handleEditorKey(
   event: ReactKeyboardEvent<HTMLTextAreaElement>,
-  refEl: RefObject<HTMLTextAreaElement | null>,
+  refEl: RefObject<HTMLTextAreaElement>,
   commit: () => void,
   cancel: () => void,
   setValue: (value: string) => void,

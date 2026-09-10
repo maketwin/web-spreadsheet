@@ -41,7 +41,7 @@ const vitestGlobals = {
 
 export default [
   {
-    ignores: ['dist/**', 'coverage/**', 'node_modules/**', '.pnpm-store/**'],
+    ignores: ['dist/**', 'coverage/**', 'node_modules/**', '.pnpm-store/**', 'docs/.vitepress/dist/**', 'docs/.vitepress/cache/**'],
   },
   ...eslintPlugin.configs['flat/recommended'],
   {
