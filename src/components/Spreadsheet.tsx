@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type Dispatch, type FC, type KeyboardEvent as ReactKeyboardEvent, type RefObject, type SetStateAction } from 'react';
 import { ClipboardService } from '../clipboard/ClipboardService';
 import type { Command } from '../commands/Command';
+import type { DialogName } from './menu/types';
 import { CommandManager } from '../commands/CommandManager';
 import { SetCellText } from '../commands/impl/SetCellText';
 import { SetRangeStyleCommand } from '../commands/impl/SetRangeStyle';
@@ -59,7 +60,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const [sheets, setSheets] = useState<readonly SheetInfo[]>(store.getSheets());
   const [activeSheetId, setActiveSheetId] = useState(store.getActiveSheetId());
   const [view, setView] = useState<ViewState>({ zoom: 100, showFormula: false, showGrid: true, frozenRows: 0, frozenCols: 0 });
-  const [findDialogOpen, setFindDialogOpen] = useState<import('./menu/types').DialogName | null>(null);
+  const [findDialogOpen, setFindDialogOpen] = useState<DialogName | null>(null);
   const [ctxMenu, setCtxMenu] = useState<SpreadsheetContextMenu | null>(null);
   const [protectOpen, setProtectOpen] = useState(false);
   const [storeVersion, setStoreVersion] = useState(0);
@@ -302,7 +303,7 @@ function useFormulaValue(selected: Selection | null, editing: EditingCell | null
 }
 function syncFormulaEvent(event: StoreEvent, engine: FormulaEngine, syncing: RefObject<boolean>): void { if (event.type !== 'cell' || syncing.current) return; syncing.current = true; const sheetId = event.sheetId; syncCellFormula(engine, event.r, event.c, event.cell, sheetId); engine.onCellChanged(cellId(event.r, event.c), sheetId); syncing.current = false; }
 
-function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selected: Selection | null, store: Store, cmdManager: CommandManager | undefined, startEditing: (cell: CellAddress, value?: string) => void, selectSelection: (selection: Selection) => void, selectRange: (range: RangeAddress) => void, setView: Dispatch<SetStateAction<ViewState>>, setFindDialog: (name: import('./menu/types').DialogName | null) => void): void {
+function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selected: Selection | null, store: Store, cmdManager: CommandManager | undefined, startEditing: (cell: CellAddress, value?: string) => void, selectSelection: (selection: Selection) => void, selectRange: (range: RangeAddress) => void, setView: Dispatch<SetStateAction<ViewState>>, setFindDialog: (name: DialogName | null) => void): void {
   if (selected === null || event.altKey) return;
   const range = selected.range;
   const keyboardBase = event.shiftKey ? Range.single(selected.active.r, selected.active.c).toAddress() : range;
@@ -432,7 +433,7 @@ function withClose<T extends Omit<React.ComponentProps<typeof MenuBar>, 'closeDe
   return onClose === undefined ? props : { ...props, closeDemo: onClose };
 }
 
-function handleMenuShortcut(command: MenuShortcutCommand, store: Store, cmdManager: CommandManager | undefined, selected: RangeAddress, selectRange: (range: RangeAddress) => void, setView: Dispatch<SetStateAction<ViewState>>, setFindDialog: (name: import('./menu/types').DialogName | null) => void): void {
+function handleMenuShortcut(command: MenuShortcutCommand, store: Store, cmdManager: CommandManager | undefined, selected: RangeAddress, selectRange: (range: RangeAddress) => void, setView: Dispatch<SetStateAction<ViewState>>, setFindDialog: (name: DialogName | null) => void): void {
   const map: Record<MenuShortcutCommand, () => void> = { save: () => saveToLocal(store), find: () => setFindDialog('find'), replace: () => setFindDialog('replace'), selectAll: () => selectRange(allSheetRange()), bold: () => applyShortcutStyle(store, cmdManager, selected, { bold: true }), italic: () => applyShortcutStyle(store, cmdManager, selected, { italic: true }), underline: () => applyShortcutStyle(store, cmdManager, selected, { underline: true }), zoom100: () => setView((current) => ({ ...current, zoom: 100 })), zoomIn: () => setView((current) => ({ ...current, zoom: Math.min(200, current.zoom + 10) })), zoomOut: () => setView((current) => ({ ...current, zoom: Math.max(50, current.zoom - 10) })), undo: () => cmdManager?.undo(), redo: () => cmdManager?.redo() };
   map[command]();
 }

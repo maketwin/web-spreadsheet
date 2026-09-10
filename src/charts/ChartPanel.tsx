@@ -1,5 +1,5 @@
 import { useEffect, useRef, type FC } from 'react';
-import { Chart, registerables } from 'chart.js';
+import { Chart, registerables, type ChartData } from 'chart.js';
 import type { ChartSpec } from './types';
 import type { Store } from '../store/Store';
 
@@ -44,10 +44,10 @@ export const ChartPanel: FC<ChartPanelProps> = ({ spec, store, onClose }) => {
   );
 };
 
-function readChartData(store: Store, spec: ChartSpec): import('chart.js').ChartData {
+function readChartData(store: Store, spec: ChartSpec): ChartData {
   const { r1, c1, r2, c2 } = parseRangeKey(spec.range);
   const labels: string[] = [];
-  const datasets: import('chart.js').ChartData['datasets'] = [];
+  const datasets: ChartData['datasets'] = [];
 
   for (let c = c1; c <= c2; c += 1) {
     const headerCell = store.getCell(r1, c);

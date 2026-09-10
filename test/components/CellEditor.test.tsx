@@ -1,11 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
-import { Store } from '../../src/store/Store';
 
 // Test the editor overlay through the Spreadsheet component to verify IME + commit/cancel behavior
 describe('CellEditor', () => {
   it('commits on Enter key', () => {
-    const store = new Store();
     const commit = vi.fn();
     const setEditing = vi.fn();
 

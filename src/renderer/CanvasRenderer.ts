@@ -9,7 +9,7 @@ import { FillHandle } from '../fill/FillHandle';
 import { FreezeManager } from '../freeze/FreezeManager';
 import { ResizeHandler } from './ResizeHandler';
 import { VirtualScroller, type VisibleRange } from './VirtualScroller';
-import type { StoreEvent } from '../types';
+import type { StoreEvent, Style } from '../types';
 import { parseRange } from '../util/cell';
 import { formatValue } from '../format/NumberFormatter';
 import { ConditionalService } from '../conditional/ConditionalService';
@@ -157,7 +157,7 @@ export class CanvasRenderer {
       return;
     }
     this.dragAnchor = { type: 'cell', ...cell }; this.setSelectedCell(cell);
-    ev.shiftKey ? this.opts.onCellClick?.(cell, true) : this.opts.onCellClick?.(cell);
+    if (ev.shiftKey) this.opts.onCellClick?.(cell, true); else this.opts.onCellClick?.(cell);
   };
   private readonly handleMouseMove = (ev: MouseEvent): void => {
     if (this.resizeHandler.isResizing()) { this.resizeHandler.onMouseMove(ev); return; }
@@ -340,7 +340,7 @@ export class CanvasRenderer {
     }
   }
 
-  private mergedPaintStyle(r: number, c: number): import('../types').Style | undefined {
+  private mergedPaintStyle(r: number, c: number): Style | undefined {
     const style = this.cellStyle(r, c);
     const overlay = this.conditionalService.computeOverlay(this.opts.store, r, c);
     return { ...style, ...overlay.style };
@@ -476,7 +476,7 @@ export class CanvasRenderer {
     return skip;
   }
 
-  private paintTextWith(r: number, c: number, x: number, y: number, cw: number, rh: number, theme: CanvasTheme, style: import('../types').Style | undefined): void {
+  private paintTextWith(r: number, c: number, x: number, y: number, cw: number, rh: number, theme: CanvasTheme, style: Style | undefined): void {
     const cell = this.opts.store.getCell(r, c); if (cell === undefined || cell.text.length === 0) return;
     const fontSize = Math.max(8, Math.round((style?.fontSize ?? 11) * this.zoom()));
     const fontFamily = style?.fontFamily ?? theme.fontFamily;

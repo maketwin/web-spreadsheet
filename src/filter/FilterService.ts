@@ -1,4 +1,5 @@
 import type { Store } from '../store/Store';
+import type { Cell } from '../types';
 
 /** Service for filtering and sorting sheet data. */
 export class FilterService {
@@ -70,4 +71,4 @@ export class FilterService {
   }
 }
 
-type CellRow = import('../types').Cell | undefined;
+type CellRow = Cell | undefined;

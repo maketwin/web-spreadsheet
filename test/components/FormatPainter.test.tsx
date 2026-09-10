@@ -12,7 +12,7 @@ describe('FormatPainter', () => {
 
   it('toggles painting mode on click', () => {
     const store = new Store();
-    const { rerender } = render(<FormatPainter store={store} activeStyle={{ bold: true }} onApplyStyle={vi.fn()} />);
+    const { } = render(<FormatPainter store={store} activeStyle={{ bold: true }} onApplyStyle={vi.fn()} />);
     const btn = screen.getByLabelText('Format painter');
 
     // Enter painting mode

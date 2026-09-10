@@ -1,5 +1,5 @@
 import type { Store } from '../store/Store';
-import type { Cell } from '../types';
+import type { Cell, Style } from '../types';
 import { evaluate } from '../formula/evaluator';
 import { FormulaParser } from '../formula/parser';
 import type { ConditionalOverlay, ConditionalRule } from './ConditionalRule';
@@ -10,7 +10,7 @@ export class ConditionalService {
   /** Compute the conditional overlay for a cell at (r, c). */
   computeOverlay(store: Store, r: number, c: number): ConditionalOverlay {
     const rules = store.getConditionalRules();
-    let style: Partial<import('../types').Style> | undefined;
+    let style: Partial<Style> | undefined;
     let dataBar: ConditionalOverlay['dataBar'];
 
     for (const [, ruleList] of rules) {

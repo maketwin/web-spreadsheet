@@ -13,14 +13,14 @@ import { SetRangeStyleCommand } from '../../commands/impl/SetRangeStyle';
 import { SetRangeValues } from '../../commands/impl/SetRangeValues';
 import { SetNumberFormatCommand } from '../../commands/impl/SetNumberFormat';
 import { SetConditionalFormatCommand } from '../../commands/impl/SetConditionalFormat';
-import type { ValidationRule } from '../../validation/types';
+import type { ValidationRule, ValidationType } from '../../validation/types';
 import { SetValidationCommand } from '../../commands/impl/SetValidation';
 import { FilterService } from '../../filter/FilterService';
 import { FindReplaceService } from '../../find/FindReplaceService';
 import { protectSheet, unprotectSheet, verifyPassword } from '../../protection/SheetProtection';
 import { TOTAL_COLS, TOTAL_ROWS } from '../../renderer/CanvasRenderer';
 import { Range, type RangeAddress } from '../../selection/Range';
-import { Store } from '../../store/Store';
+import { Store, type SerializedStore } from '../../store/Store';
 import type { Command } from '../../commands/Command';
 import type { Cell, Style } from '../../types';
 import { xy2expr } from '../../util/alphabet';
@@ -37,12 +37,13 @@ import { ShortcutsDialog } from './dialogs/ShortcutsDialog';
 import { ZoomDialog, type ZoomValues } from './dialogs/ZoomDialog';
 import { shortcutLabel } from './shortcutLabel';
 import type { DialogName, MenuActions, MenuContext, ViewState } from './types';
+import type { CellAddress } from '../../renderer/coordinate';
 import { HistoryPanel } from '../HistoryPanel';
 
 export interface MenuBarProps extends MenuContext {
   readonly view?: Partial<ViewState>;
-  readonly onFindNavigate?: (cell: import('../../renderer/coordinate').CellAddress) => void;
-  readonly onFindHighlight?: (cells: readonly import('../../renderer/coordinate').CellAddress[]) => void;
+  readonly onFindNavigate?: (cell: CellAddress) => void;
+  readonly onFindHighlight?: (cells: readonly CellAddress[]) => void;
   readonly openDialogKey?: DialogName | null;
 }
 
@@ -414,7 +415,7 @@ function openXlsxFile(event: React.ChangeEvent<HTMLInputElement>, ctx: MenuConte
 function importText(text: string, ctx: MenuContext): void {
   if (text.trim().startsWith('{')) {
     try {
-      const data = JSON.parse(text) as import('../../store/Store').SerializedStore;
+      const data = JSON.parse(text) as SerializedStore;
       const restored = Store.deserialize(data);
       restored.getCells().forEach(([key, cell]) => { const [r, c] = key.split(',').map(Number); ctx.store.setCell(r ?? 0, c ?? 0, cell); });
       message.success('已导入 JSON 工作簿');
@@ -437,7 +438,7 @@ function Dialogs({ dialog, setDialog, props, view, findService: svc }: { readonl
     <NumberFormatDialog open={dialog === 'numberFormat'} onCancel={close} onSubmit={(v) => submitNumber(v, props, close)} />
     <AboutDialog open={dialog === 'about'} onCancel={close} />
     <ShortcutsDialog open={dialog === 'shortcuts'} onCancel={close} />
-    <DataValidationDialog open={dialog === 'dataValidation'} onCancel={close} onSubmit={(type: import('../../validation/types').ValidationType, config: ValidationConfig) => submitValidation(type, config, props, close)} />
+    <DataValidationDialog open={dialog === 'dataValidation'} onCancel={close} onSubmit={(type: ValidationType, config: ValidationConfig) => submitValidation(type, config, props, close)} />
     <ProtectSheetDialog open={dialog === 'protectSheet'} store={props.store} onCancel={close} />
     <UnprotectSheetDialog open={dialog === 'unprotectSheet'} store={props.store} onCancel={close} />
     <HistoryPanel open={dialog === 'history'} onCancel={close} cmdManager={props.cmdManager} />
@@ -528,7 +529,7 @@ function applySort(ctx: MenuContext, direction: 'asc' | 'desc'): void {
   svc.sortRange(sel.r1, sel.c1, sel.r2, sel.c2, sel.c1, direction);
 }
 
-function submitValidation(type: import('../../validation/types').ValidationType, config: ValidationConfig, ctx: MenuContext, close: () => void): void {
+function submitValidation(type: ValidationType, config: ValidationConfig, ctx: MenuContext, close: () => void): void {
   const sel = ctx.selected ?? Range.single(0, 0).toAddress();
   let rule: ValidationRule;
   if (type === 'list') {
