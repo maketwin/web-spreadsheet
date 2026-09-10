@@ -1,5 +1,5 @@
 import { Button, ColorPicker, Divider, Dropdown, Form, Input, Modal, Select, Space, Switch, Tooltip, message } from 'antd';
-import { AlignCenterOutlined, AlignLeftOutlined, AlignRightOutlined, BgColorsOutlined, BoldOutlined, BorderBottomOutlined, BorderInnerOutlined, BorderLeftOutlined, BorderOuterOutlined, BorderOutlined, BorderRightOutlined, BorderTopOutlined, ClearOutlined, ColumnHeightOutlined, FontColorsOutlined, FormatPainterOutlined, ItalicOutlined, LockOutlined, SelectOutlined, UnderlineOutlined, ZoomInOutlined, ZoomOutOutlined, TableOutlined } from '@ant-design/icons';
+import { AlignCenterOutlined, AlignLeftOutlined, AlignRightOutlined, BgColorsOutlined, BoldOutlined, BorderBottomOutlined, BorderInnerOutlined, BorderLeftOutlined, BorderOuterOutlined, BorderRightOutlined, BorderTopOutlined, ClearOutlined, ColumnHeightOutlined, FontColorsOutlined, FormatPainterOutlined, ItalicOutlined, LockOutlined, SelectOutlined, UnderlineOutlined, ZoomInOutlined, ZoomOutOutlined, TableOutlined } from '@ant-design/icons';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type Dispatch, type FC, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type RefObject, type SetStateAction } from 'react';
@@ -568,7 +568,7 @@ const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly sto
       <Divider type="vertical" />
       <Dropdown trigger={['click']} menu={{
         items: [
-          { key: 'all', icon: <BorderOutlined />, label: '全部边框' },
+          { key: 'all', icon: <TableOutlined />, label: '全部边框' },
           { key: 'outer', icon: <BorderOuterOutlined />, label: '外边框' },
           { key: 'thickOuter', icon: <BorderOuterOutlined />, label: '粗匣边框' },
           { key: 'inner', icon: <BorderInnerOutlined />, label: '内边框' },
