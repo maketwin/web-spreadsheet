@@ -1,8 +1,9 @@
-import { BarChartOutlined, DatabaseOutlined, EditOutlined, FileOutlined, FormatPainterOutlined, LockOutlined, QuestionCircleOutlined, SettingOutlined, TableOutlined } from '@ant-design/icons';
-import { Dropdown, Form, Input, InputNumber, Modal, Switch, message } from 'antd';
+import { BarChartOutlined, DatabaseOutlined, EditOutlined, FileOutlined, CheckOutlined, FormatPainterOutlined, LockOutlined, QuestionCircleOutlined, TableOutlined } from '@ant-design/icons';
+import { Dropdown, Form, Input, Modal, Switch, message } from 'antd';
 import type { MenuProps } from 'antd';
 import { useMemo, useRef, useState, useEffect, type FC, type ReactElement, type ReactNode } from 'react';
 import { ClipboardService } from '../../clipboard/ClipboardService';
+import { autofitRowsForSelection } from '../../util/rowAutofit';
 import { DeleteColCommand } from '../../commands/impl/DeleteCol';
 import { DeleteRowCommand } from '../../commands/impl/DeleteRow';
 import { InsertColCommand } from '../../commands/impl/InsertCol';
@@ -12,12 +13,9 @@ import { SetRangeStyleCommand } from '../../commands/impl/SetRangeStyle';
 import { SetRangeValues } from '../../commands/impl/SetRangeValues';
 import { SetNumberFormatCommand } from '../../commands/impl/SetNumberFormat';
 import { SetConditionalFormatCommand } from '../../commands/impl/SetConditionalFormat';
-import { CreateChartCommand } from '../../commands/impl/CreateChart';
-import { SetSparklineCommand } from '../../commands/impl/SetSparkline';
-import type { ChartType } from '../../charts/types';
-import { FilterService } from '../../filter/FilterService';
 import type { ValidationRule } from '../../validation/types';
 import { SetValidationCommand } from '../../commands/impl/SetValidation';
+import { FilterService } from '../../filter/FilterService';
 import { FindReplaceService } from '../../find/FindReplaceService';
 import { protectSheet, unprotectSheet, verifyPassword } from '../../protection/SheetProtection';
 import { TOTAL_COLS, TOTAL_ROWS } from '../../renderer/CanvasRenderer';
@@ -30,10 +28,8 @@ import { saveWorkbook as saveToDB, DEFAULT_ID } from '../../db/WorkbookDB';
 import { exportXlsx } from '../../io/XlsxExporter';
 import { importXlsx } from '../../io/XlsxImporter';
 import { AboutDialog } from './dialogs/AboutDialog';
-import { ChartDialog } from './dialogs/ChartDialog';
 import { DataValidationDialog, type ValidationConfig } from './dialogs/DataValidationDialog';
 import { FindReplaceDialog } from './dialogs/FindReplaceDialog';
-import { SparklineDialog, type SparklineConfig } from './dialogs/SparklineDialog';
 import { InsertColDialog, type InsertColValues } from './dialogs/InsertColDialog';
 import { InsertRowDialog, type InsertRowValues } from './dialogs/InsertRowDialog';
 import { NumberFormatDialog, type NumberFormatValues } from './dialogs/NumberFormatDialog';
@@ -42,7 +38,6 @@ import { ZoomDialog, type ZoomValues } from './dialogs/ZoomDialog';
 import { shortcutLabel } from './shortcutLabel';
 import type { DialogName, MenuActions, MenuContext, ViewState } from './types';
 import { HistoryPanel } from '../HistoryPanel';
-import { PrintPreview } from '../PrintPreview';
 
 export interface MenuBarProps extends MenuContext {
   readonly view?: Partial<ViewState>;
@@ -65,7 +60,7 @@ export const MenuBar: FC<MenuBarProps> = (props) => {
   const actions = useMemo(() => makeActions(props, setDialog, view, fileInput, xlsxInput), [props, view]);
   useEffect(() => { if (props.openDialogKey !== undefined && props.openDialogKey !== null) setDialog(props.openDialogKey); }, [props.openDialogKey]);
 
-  const menus = topMenus(actions, view);
+  const menus = topMenus(actions, view, props);
   return <div className="ss-menu-bar" role="menubar" aria-orientation="horizontal" aria-label="Spreadsheet menu">
     <div className="ss-menu-strip">
       {menus.map((menu) => <Dropdown key={menu.key} trigger={['click']} placement="bottomLeft" menu={{ items: menu.items, onClick: ({ key }) => actions.run(String(key)) }}>
@@ -82,17 +77,16 @@ export const MenuBar: FC<MenuBarProps> = (props) => {
 
 interface TopMenu { readonly key: string; readonly label: string; readonly icon: ReactElement; readonly items: NonNullable<MenuProps['items']> }
 
-function topMenus(actions: MenuActions, view: ViewState): readonly TopMenu[] {
+function topMenus(actions: MenuActions, view: ViewState, ctx: MenuBarProps): readonly TopMenu[] {
   void actions;
   return [
     { key: 'file', label: '文件(F)', icon: <FileOutlined />, items: fileItems() },
     { key: 'edit', label: '编辑(E)', icon: <EditOutlined />, items: editItems() },
     { key: 'view', label: '视图(V)', icon: <TableOutlined />, items: viewItems(view) },
     { key: 'insert', label: '插入(I)', icon: <BarChartOutlined />, items: insertItems() },
-    { key: 'format', label: '格式(O)', icon: <FormatPainterOutlined />, items: formatItems() },
+    { key: 'format', label: '格式(O)', icon: <FormatPainterOutlined />, items: formatItems(ctx) },
     { key: 'data', label: '数据(D)', icon: <DatabaseOutlined />, items: dataItems() },
     { key: 'review', label: '审阅(R)', icon: <LockOutlined />, items: reviewItems() },
-    { key: 'tools', label: '工具(T)', icon: <SettingOutlined />, items: toolsItems() },
     { key: 'help', label: '帮助(H)', icon: <QuestionCircleOutlined />, items: helpItems() },
   ];
 }
@@ -109,8 +103,7 @@ function fileItems(): NonNullable<MenuProps['items']> {
     item('file:export', '导出 JSON'),
     item('file:exportXlsx', '导出 xlsx'),
     divider('file:divider:2'),
-    item('file:printPreview', '打印预览...'),
-    item('file:exportPdf', '导出 PDF'),
+    item('file:print', '打印...'),
     divider('file:divider:3'),
     item('file:close', '关闭演示'),
   ];
@@ -155,21 +148,54 @@ function insertItems(): NonNullable<MenuProps['items']> {
     item('insert:col', '插入列...'),
     item('insert:deleteRow', '删除行'),
     item('insert:deleteCol', '删除列'),
-    divider('insert:divider:1'),
-    item('insert:image', '图片...'),
-    item('insert:chart', '图表...'),
-    item('insert:sparkline', '迷你图...'),
   ];
 }
 
-function formatItems(): NonNullable<MenuProps['items']> {
+function formatItems(ctx: MenuBarProps): NonNullable<MenuProps['items']> {
   return [
     item('format:bold', shortcutLabel('加粗', 'Ctrl+B')),
     item('format:italic', shortcutLabel('斜体', 'Ctrl+I')),
     item('format:underline', shortcutLabel('下划线', 'Ctrl+U')),
+    divider('format:divider:0'),
+    { key: 'format:font', label: '字体', children: [
+      item('format:font:Calibri', 'Calibri'),
+      item('format:font:Microsoft YaHei', '微软雅黑'),
+      item('format:font:SimSun', '宋体'),
+      item('format:font:Arial', 'Arial'),
+      item('format:font:Times New Roman', 'Times New Roman'),
+      item('format:font:Consolas', 'Consolas'),
+    ] },
+    { key: 'format:fontSize', label: '字号', children: [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 36, 48, 72].map((n) => item(`format:fontSize:${n}`, String(n))) },
+    { key: 'format:color', label: '字体颜色', children: [
+      item('format:color:#000000', '黑色'),
+      item('format:color:#FF0000', '红色'),
+      item('format:color:#0000FF', '蓝色'),
+      item('format:color:#217346', '绿色'),
+      item('format:color:#FF6600', '橙色'),
+      item('format:color:#808080', '灰色'),
+    ] },
+    { key: 'format:fill', label: '填充颜色', children: [
+      item('format:fill:#FFFFFF', '无填充'),
+      item('format:fill:#FFFF00', '黄色'),
+      item('format:fill:#00FF00', '浅绿'),
+      item('format:fill:#00FFFF', '青色'),
+      item('format:fill:#FFC7CE', '浅红'),
+      item('format:fill:#FFEB9C', '浅黄'),
+      item('format:fill:#C6EFCE', '浅绿'),
+      item('format:fill:#BDD7EE', '浅蓝'),
+    ] },
     divider('format:divider:1'),
-    { key: 'format:align', label: '对齐', children: [item('format:align:left', '左对齐'), item('format:align:center', '居中'), item('format:align:right', '右对齐')] },
-    item('format:wrap', '自动换行'),
+    { key: 'format:align', label: '对齐', children: [
+      item('format:align:left', '左对齐'),
+      item('format:align:center', '居中'),
+      item('format:align:right', '右对齐'),
+      { type: 'divider', key: 'format:align:div' },
+      {
+        key: 'format:wrap',
+        label: '自动换行',
+        icon: selectionHasWrap(ctx) ? <CheckOutlined /> : <span style={{ display: 'inline-block', width: 14 }} />,
+      },
+    ] },
     divider('format:divider:2'),
     item('format:merge', '合并单元格'),
     item('format:unmerge', '取消合并'),
@@ -180,14 +206,9 @@ function formatItems(): NonNullable<MenuProps['items']> {
   ];
 }
 
-function toolsItems(): NonNullable<MenuProps['items']> {
-  return [item('tools:macro', '宏...'), item('tools:options', '选项...'), item('tools:plugins', '插件管理...')];
-}
-
 function dataItems(): NonNullable<MenuProps['items']> {
   return [
     item('data:validation', '数据验证...'),
-    item('data:filter', '筛选'),
     item('data:sortAsc', '升序排序'),
     item('data:sortDesc', '降序排序'),
   ];
@@ -224,19 +245,17 @@ function runMenuAction(key: string, ctx: MenuContext, openDialog: (name: DialogN
   else if (key.startsWith('view:')) runViewAction(key, view, openDialog);
   else if (key.startsWith('data:')) runDataAction(key, ctx, openDialog);
   else if (key.startsWith('review:')) runReviewAction(key, ctx, openDialog);
-  else if (key.startsWith('tools:')) runToolsAction(key, openDialog);
   else if (key.startsWith('help:')) runHelpAction(key, openDialog);
 }
 
-function runFileAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void, fileInput: React.RefObject<HTMLInputElement | null>, xlsxInput: React.RefObject<HTMLInputElement | null>): void {
+function runFileAction(key: string, ctx: MenuContext, _openDialog: (name: DialogName) => void, fileInput: React.RefObject<HTMLInputElement | null>, xlsxInput: React.RefObject<HTMLInputElement | null>): void {
   if (key === 'file:new') confirmNew(ctx);
   if (key === 'file:open' || key === 'file:import') fileInput.current?.click();
   if (key === 'file:importXlsx') xlsxInput.current?.click();
   if (key === 'file:save') saveWorkbook(ctx.store);
   if (key === 'file:saveAs' || key === 'file:export') downloadWorkbook(ctx.store);
   if (key === 'file:exportXlsx') downloadXlsx(ctx.store);
-  if (key === 'file:printPreview') openDialog('printPreview');
-  if (key === 'file:exportPdf') openDialog('printPreview');
+  if (key === 'file:print') window.print();
   if (key === 'file:close') ctx.closeDemo?.();
 }
 
@@ -258,20 +277,36 @@ function runInsertAction(key: string, ctx: MenuContext, openDialog: (name: Dialo
   if (key === 'insert:col') openDialog('insertCol');
   if (key === 'insert:deleteRow') execute(ctx, new DeleteRowCommand({ r: ctx.selected?.r1 ?? 0, count: selectedRows(ctx.selected) }));
   if (key === 'insert:deleteCol') execute(ctx, new DeleteColCommand({ c: ctx.selected?.c1 ?? 0, count: selectedCols(ctx.selected) }));
-  if (key === 'insert:image') message.info('图片入口已触发，渲染层待接入');
-  if (key === 'insert:chart') openDialog('chart');
-  if (key === 'insert:sparkline') openDialog('sparkline');
 }
 
 function runFormatAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void): void {
-  const map: Record<string, Partial<Style>> = { 'format:bold': { bold: true }, 'format:italic': { italic: true }, 'format:underline': { underline: true }, 'format:wrap': { wrap: true }, 'format:align:left': { align: 'left' }, 'format:align:center': { align: 'center' }, 'format:align:right': { align: 'right' } };
+  const map: Record<string, Partial<Style>> = { 'format:bold': { bold: true }, 'format:italic': { italic: true }, 'format:underline': { underline: true }, 'format:align:left': { align: 'left' }, 'format:align:center': { align: 'center' }, 'format:align:right': { align: 'right' } };
   if (key === 'format:number') openDialog('numberFormat');
   else if (key === 'format:merge') execute(ctx, new SetMerge({ range: rangeName(ctx.selected), active: true }));
   else if (key === 'format:unmerge') execute(ctx, new SetMerge({ range: rangeName(ctx.selected), active: false }));
   else if (key === 'format:cf:dataBar') applyConditionalDataBar(ctx);
   else if (key === 'format:cf:colorScale') applyConditionalColorScale(ctx);
   else if (key === 'format:cf:formula') applyConditionalFormula(ctx);
+  else if (key === 'format:wrap') {
+    const next = !selectionHasWrap(ctx);
+    applyStyle(ctx, { wrap: next });
+    if (next && ctx.selected !== null) autofitRowsForSelection(ctx.store, ctx.cmdManager, ctx.selected);
+  }
+  else if (key.startsWith('format:font:')) applyStyle(ctx, { fontFamily: key.slice('format:font:'.length) });
+  else if (key.startsWith('format:fontSize:')) {
+    applyStyle(ctx, { fontSize: Number(key.slice('format:fontSize:'.length)) });
+    if (ctx.selected !== null) autofitRowsForSelection(ctx.store, ctx.cmdManager, ctx.selected);
+  }
+  else if (key.startsWith('format:color:')) applyStyle(ctx, { color: key.slice('format:color:'.length) });
+  else if (key.startsWith('format:fill:')) applyStyle(ctx, { bgcolor: key.slice('format:fill:'.length) });
   else applyStyle(ctx, map[key] ?? {});
+}
+
+function selectionHasWrap(ctx: { readonly store: MenuContext['store']; readonly selected: MenuContext['selected'] }): boolean {
+  if (ctx.selected === null) return false;
+  const cell = ctx.store.getCell(ctx.selected.r1, ctx.selected.c1);
+  if (cell?.styleId === undefined) return false;
+  return ctx.store.getStyle(cell.styleId)?.wrap === true;
 }
 
 function runViewAction(key: string, view: ViewState, openDialog: (name: DialogName) => void): void {
@@ -290,7 +325,6 @@ function runViewAction(key: string, view: ViewState, openDialog: (name: DialogNa
 
 function runDataAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void): void {
   if (key === 'data:validation') openDialog('dataValidation');
-  if (key === 'data:filter') { message.info('请点击列标头下拉箭头进行筛选'); }
   if (key === 'data:sortAsc') applySort(ctx, 'asc');
   if (key === 'data:sortDesc') applySort(ctx, 'desc');
 }
@@ -298,12 +332,6 @@ function runDataAction(key: string, ctx: MenuContext, openDialog: (name: DialogN
 function runReviewAction(key: string, _ctx: MenuContext, openDialog: (name: DialogName) => void): void {
   if (key === 'review:protect') openDialog('protectSheet');
   if (key === 'review:unprotect') openDialog('unprotectSheet');
-}
-
-function runToolsAction(key: string, openDialog: (name: DialogName) => void): void {
-  if (key === 'tools:macro') message.info('宏入口已触发');
-  if (key === 'tools:options') openDialog('options');
-  if (key === 'tools:plugins') openDialog('plugins');
 }
 
 function runHelpAction(key: string, openDialog: (name: DialogName) => void): void {
@@ -409,15 +437,10 @@ function Dialogs({ dialog, setDialog, props, view, findService: svc }: { readonl
     <NumberFormatDialog open={dialog === 'numberFormat'} onCancel={close} onSubmit={(v) => submitNumber(v, props, close)} />
     <AboutDialog open={dialog === 'about'} onCancel={close} />
     <ShortcutsDialog open={dialog === 'shortcuts'} onCancel={close} />
-    <ChartDialog open={dialog === 'chart'} onCancel={close} onSubmit={(type: import('../../charts/types').ChartType, title: string) => submitChart(type, title, props, close)} />
     <DataValidationDialog open={dialog === 'dataValidation'} onCancel={close} onSubmit={(type: import('../../validation/types').ValidationType, config: ValidationConfig) => submitValidation(type, config, props, close)} />
-    <SparklineDialog open={dialog === 'sparkline'} onCancel={close} onSubmit={(config: SparklineConfig) => submitSparkline(config, props, close)} />
     <ProtectSheetDialog open={dialog === 'protectSheet'} store={props.store} onCancel={close} />
     <UnprotectSheetDialog open={dialog === 'unprotectSheet'} store={props.store} onCancel={close} />
-    <OptionsDialog open={dialog === 'options'} onCancel={close} />
-    <PluginsDialog open={dialog === 'plugins'} onCancel={close} />
     <HistoryPanel open={dialog === 'history'} onCancel={close} cmdManager={props.cmdManager} />
-    <PrintPreview open={dialog === 'printPreview'} onCancel={close} />
   </>;
 }
 
@@ -430,10 +453,6 @@ function submitNumber(values: NumberFormatValues, ctx: MenuContext, close: () =>
   close();
 }
 
-const OptionsDialog: FC<{ readonly open: boolean; readonly onCancel: () => void }> = ({ open, onCancel }) => <Modal title="选项" open={open} onCancel={onCancel} onOk={onCancel}>
-  <Form layout="vertical"><Form.Item label="默认字号"><InputNumber defaultValue={14} min={8} max={72} /></Form.Item><Form.Item label="默认列宽"><InputNumber defaultValue={100} min={40} max={400} /></Form.Item><Form.Item label="启用网格线"><Switch defaultChecked /></Form.Item></Form>
-</Modal>;
-const PluginsDialog: FC<{ readonly open: boolean; readonly onCancel: () => void }> = ({ open, onCancel }) => <Modal title="插件管理" open={open} onCancel={onCancel} onOk={onCancel}>已装插件：csv-import <Switch size="small" defaultChecked /></Modal>;
 
 const ProtectSheetDialog: FC<{ readonly open: boolean; readonly store: Store; readonly onCancel: () => void }> = ({ open, store, onCancel }) => {
   const [form] = Form.useForm<{ password: string }>();
@@ -501,12 +520,6 @@ function applyConditionalFormula(ctx: MenuContext): void {
   execute(ctx, new SetConditionalFormatCommand({ ...sel, rules: [{ type: 'formula', formula, style: { bgcolor: '#FFFF00' } }] }));
 }
 
-function submitChart(type: ChartType, title: string, ctx: MenuContext, close: () => void): void {
-  const sel = ctx.selected ?? Range.single(0, 0).toAddress();
-  const args = title.length > 0 ? { ...sel, type, title } : { ...sel, type };
-  execute(ctx, new CreateChartCommand(args));
-  close();
-}
 
 function applySort(ctx: MenuContext, direction: 'asc' | 'desc'): void {
   const sel = ctx.selected;
@@ -530,30 +543,6 @@ function submitValidation(type: import('../../validation/types').ValidationType,
   close();
 }
 
-function submitSparkline(config: SparklineConfig, ctx: MenuContext, close: () => void): void {
-  const sel = ctx.selected ?? Range.single(0, 0).toAddress();
-  const rangeAddr = parseA1Range(config.range);
-  if (rangeAddr === undefined) { message.warning('无法解析范围，请使用 A1:B5 格式'); return; }
-  execute(ctx, new SetSparklineCommand({ ...rangeAddr, type: config.type, targetRow: sel.r1, targetCol: sel.c1 }));
-  close();
-}
 
-function parseA1Range(input: string): import('../../selection/Range').RangeAddress | undefined {
-  const match = input.trim().match(/^([A-Za-z]+)(\d+):([A-Za-z]+)(\d+)$/);
-  if (match === null) return undefined;
-  const c1 = alphaToCol(match[1] ?? '');
-  const r1 = (Number(match[2]) ?? 1) - 1;
-  const c2 = alphaToCol(match[3] ?? '');
-  const r2 = (Number(match[4]) ?? 1) - 1;
-  if (c1 < 0 || c2 < 0) return undefined;
-  return { r1, c1, r2, c2 };
-}
 
-function alphaToCol(alpha: string): number {
-  let col = 0;
-  for (let i = 0; i < alpha.length; i += 1) {
-    col = col * 26 + (alpha.toUpperCase().charCodeAt(i) - 64);
-  }
-  return col - 1;
-}
 export function allSheetRange(): RangeAddress { return { r1: 0, c1: 0, r2: TOTAL_ROWS - 1, c2: TOTAL_COLS - 1 }; }

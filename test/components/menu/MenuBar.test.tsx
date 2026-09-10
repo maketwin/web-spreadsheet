@@ -5,7 +5,7 @@ import { Range } from '../../../src/selection/Range';
 import { Store } from '../../../src/store/Store';
 
 describe('MenuBar', () => {
-  it('renders 7 menu items', () => {
+  it('renders 8 menu items', () => {
     render(<MenuBar store={new Store()} selected={Range.single(0, 0).toAddress()} selectRange={() => undefined} clearRange={() => undefined} allRange={() => undefined} />);
 
     expect(screen.getByText('文件(F)')).toBeInTheDocument();
@@ -13,7 +13,7 @@ describe('MenuBar', () => {
     expect(screen.getByText('视图(V)')).toBeInTheDocument();
     expect(screen.getByText('插入(I)')).toBeInTheDocument();
     expect(screen.getByText('格式(O)')).toBeInTheDocument();
-    expect(screen.getByText('工具(T)')).toBeInTheDocument();
+    expect(screen.getByText('数据(D)')).toBeInTheDocument();
     expect(screen.getByText('帮助(H)')).toBeInTheDocument();
   });
 });

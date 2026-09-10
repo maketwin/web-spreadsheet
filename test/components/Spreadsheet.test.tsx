@@ -187,7 +187,7 @@ describe('Spreadsheet', () => {
     installCanvasRect(canvas);
 
     fireEvent.mouseDown(canvas, { clientX: 46 + 5, clientY: 5 });
-    fireEvent.mouseMove(window, { clientX: 46 + 205, clientY: 80 });
+    fireEvent.mouseMove(window, { clientX: 46 + 180, clientY: 80 });
     fireEvent.mouseUp(window);
     await act(async () => undefined);
 
@@ -229,7 +229,7 @@ describe('Spreadsheet', () => {
     const canvas = document.querySelector('canvas') as HTMLCanvasElement;
     installCanvasRect(canvas);
 
-    fireEvent.mouseDown(canvas, { clientX: 46 + 205, clientY: 25 + 55 });
+    fireEvent.mouseDown(canvas, { clientX: 46 + 150, clientY: 25 + 45 });
     fireEvent.mouseMove(window, { clientX: 46 + 5, clientY: 25 + 5 });
     fireEvent.mouseUp(window);
     fireEvent.keyDown(canvas, { key: 'ArrowRight', shiftKey: true });

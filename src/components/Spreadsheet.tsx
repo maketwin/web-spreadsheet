@@ -1,24 +1,28 @@
-import { Button, Divider, Form, Input, Modal, Radio, Select, Space, Switch, Tooltip, message } from 'antd';
-import { AlignCenterOutlined, AlignLeftOutlined, AlignRightOutlined, BoldOutlined, ClearOutlined, FormatPainterOutlined, ItalicOutlined, LineChartOutlined, LockOutlined, SelectOutlined, UnderlineOutlined, ZoomInOutlined, ZoomOutOutlined } from '@ant-design/icons';
+import { Button, ColorPicker, Divider, Dropdown, Form, Input, Modal, Select, Space, Switch, Tooltip, message } from 'antd';
+import { AlignCenterOutlined, AlignLeftOutlined, AlignRightOutlined, BgColorsOutlined, BoldOutlined, BorderBottomOutlined, BorderInnerOutlined, BorderLeftOutlined, BorderOuterOutlined, BorderOutlined, BorderRightOutlined, BorderTopOutlined, ClearOutlined, ColumnHeightOutlined, FontColorsOutlined, FormatPainterOutlined, ItalicOutlined, LockOutlined, SelectOutlined, UnderlineOutlined, ZoomInOutlined, ZoomOutOutlined } from '@ant-design/icons';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type Dispatch, type FC, type KeyboardEvent as ReactKeyboardEvent, type RefObject, type SetStateAction } from 'react';
 import { ClipboardService } from '../clipboard/ClipboardService';
+import type { Command } from '../commands/Command';
 import { CommandManager } from '../commands/CommandManager';
 import { SetCellText } from '../commands/impl/SetCellText';
 import { SetRangeStyleCommand } from '../commands/impl/SetRangeStyle';
-import { SetSparklineCommand } from '../commands/impl/SetSparkline';
-import type { SparklineType } from '../sparkline/types';
+import { SetRangeBorderCommand, type BorderPreset, type BorderLine } from '../commands/impl/SetRangeBorder';
 import { SetRangeValues } from '../commands/impl/SetRangeValues';
 import { EventBus } from '../events/EventBus';
 import { FormulaEngine } from '../formula/FormulaEngine';
 import { KeyboardHandler, type MenuShortcutCommand } from '../keys/KeyboardHandler';
 import { PluginManager, type Plugin } from '../plugin/PluginManager';
-import { CanvasRenderer, COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS, canvasPointToCell, type CellAddress } from '../renderer/CanvasRenderer';
+import { CanvasRenderer, COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS, type CellAddress } from '../renderer/CanvasRenderer';
 import { FillRangeCommand } from '../commands/impl/FillRange';
 import { MoveRange } from '../commands/impl/MoveRange';
 import { SetColWidth } from '../commands/impl/SetColWidth';
 import { SetRowHeight } from '../commands/impl/SetRowHeight';
+import { InsertRowCommand } from '../commands/impl/InsertRow';
+import { InsertColCommand } from '../commands/impl/InsertCol';
+import { DeleteRowCommand } from '../commands/impl/DeleteRow';
+import { DeleteColCommand } from '../commands/impl/DeleteCol';
 import { Range, type RangeAddress } from '../selection/Range';
 import { Store, type SheetInfo } from '../store/Store';
 import { applyStoredTheme, setTheme, type Theme } from '../theme';
@@ -26,6 +30,7 @@ import { DataValidationService } from '../validation/DataValidationService';
 import { protectSheet, unprotectSheet, verifyPassword } from '../protection/SheetProtection';
 import { cellFromText, cellId, formulaDependencies, formulaText, normalizeCellInput, type CellInput as CellDataInput } from '../util/cell';
 import { cellSelection, columnSelection, extendSelection, rangeSelection, rowSelection, sheetSelection, type Selection } from '../selection/Selection';
+import { CellContextMenu, HeaderContextMenu } from './ContextMenu';
 import { BottomBar } from './BottomBar';
 import { ErrorBoundary } from './ErrorBoundary';
 import { StatusBar } from './StatusBar';
@@ -34,6 +39,8 @@ import { MenuBar, allSheetRange } from './menu/MenuBar';
 import { startAutoSave } from '../db/autoSave';
 import { loadWorkbook, DEFAULT_ID, saveWorkbook as saveToDB } from '../db/WorkbookDB';
 import type { Cell, StoreEvent, Style } from '../types';
+import { WRAP_LINE_HEIGHT, wrappedContentHeight } from '../util/wrapText';
+import { autoFitRowHeight, autofitRowsForSelection } from '../util/rowAutofit';
 
 export type CellInput = CellDataInput;
 export interface SheetInput { readonly id?: string; readonly name: string; readonly data?: readonly (readonly CellInput[])[] }
@@ -41,6 +48,10 @@ export interface SpreadsheetOptions { readonly data?: readonly (readonly CellInp
 export interface SpreadsheetProps { readonly store: Store; readonly cmdManager?: CommandManager; readonly formulaEngine?: FormulaEngine; readonly theme?: Theme | false | undefined; readonly onClose?: () => void }
 interface EditingCell extends CellAddress { readonly value: string }
 interface ViewState { readonly zoom: number; readonly showFormula: boolean; readonly showGrid: boolean; readonly frozenRows: number; readonly frozenCols: number }
+type SpreadsheetContextMenu =
+  | { readonly kind: 'cell'; readonly x: number; readonly y: number }
+  | { readonly kind: 'row'; readonly index: number; readonly count: number; readonly x: number; readonly y: number }
+  | { readonly kind: 'column'; readonly index: number; readonly count: number; readonly x: number; readonly y: number };
 
 export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, formulaEngine, theme, onClose }) => {
   const [selected, setSelected] = useState<Selection | null>(cellSelection(0, 0));
@@ -49,13 +60,13 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const [activeSheetId, setActiveSheetId] = useState(store.getActiveSheetId());
   const [view, setView] = useState<ViewState>({ zoom: 100, showFormula: false, showGrid: true, frozenRows: 0, frozenCols: 0 });
   const [findDialogOpen, setFindDialogOpen] = useState<import('./menu/types').DialogName | null>(null);
-  const [sparklineOpen, setSparklineOpen] = useState(false);
+  const [ctxMenu, setCtxMenu] = useState<SpreadsheetContextMenu | null>(null);
   const [protectOpen, setProtectOpen] = useState(false);
   const [storeVersion, setStoreVersion] = useState(0);
   const [formulaValue, setFormulaValue] = useState('');
   const [painting, setPainting] = useState(false);
   const [sourceStyle, setSourceStyle] = useState<Style | undefined>(undefined);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
 
@@ -76,7 +87,51 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     }
     selectSelection(shift && selectedRef.current ? extendSelection(selectedRef.current, cell) : cellSelection(cell.r, cell.c));
   }, [painting, sourceStyle, selectSelection, cmdManager, store]);
-  const { canvasRef, rendererRef } = useCanvasRenderer(store, selected, onCellClick, selectSelection, view, cmdManager);
+  const closeCtxMenu = useCallback(() => setCtxMenu(null), []);
+  const onHeaderContextMenu = useCallback((info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => {
+    const cur = selectedRef.current;
+    if (info.type === 'row') {
+      const keep = cur?.kind === 'row' && info.r >= cur.range.r1 && info.r <= cur.range.r2;
+      if (!keep) flushSync(() => selectSelection(rowSelection(info.r, TOTAL_COLS)));
+      const range = selectedRef.current?.range;
+      setCtxMenu({ kind: 'row', index: range?.r1 ?? info.r, count: range !== undefined ? range.r2 - range.r1 + 1 : 1, x, y });
+    } else {
+      const keep = cur?.kind === 'column' && info.c >= cur.range.c1 && info.c <= cur.range.c2;
+      if (!keep) flushSync(() => selectSelection(columnSelection(info.c, TOTAL_ROWS)));
+      const range = selectedRef.current?.range;
+      setCtxMenu({ kind: 'column', index: range?.c1 ?? info.c, count: range !== undefined ? range.c2 - range.c1 + 1 : 1, x, y });
+    }
+  }, [selectSelection]);
+  const onCellContextMenu = useCallback((cell: CellAddress, x: number, y: number) => {
+    const cur = selectedRef.current;
+    // Excel: right-click inside selection keeps it; outside selects that cell.
+    // Full row/col selection keeps kind and opens the matching header-style menu.
+    if (cur !== null && new Range(cur.range).contains(cell.r, cell.c)) {
+      if (cur.kind === 'row') {
+        setCtxMenu({ kind: 'row', index: cur.range.r1, count: cur.range.r2 - cur.range.r1 + 1, x, y });
+        return;
+      }
+      if (cur.kind === 'column') {
+        setCtxMenu({ kind: 'column', index: cur.range.c1, count: cur.range.c2 - cur.range.c1 + 1, x, y });
+        return;
+      }
+      setCtxMenu({ kind: 'cell', x, y });
+      return;
+    }
+    flushSync(() => selectSelection(cellSelection(cell.r, cell.c)));
+    setCtxMenu({ kind: 'cell', x, y });
+  }, [selectSelection]);
+  const runCtxClipboard = useCallback((type: 'cut' | 'copy' | 'paste' | 'clear') => {
+    const range = selectedRef.current?.range;
+    if (range === undefined) return;
+    if (type === 'clear') clearRange(store, cmdManager, range);
+    else void handleClipboardAction(type, store, cmdManager, range);
+  }, [store, cmdManager]);
+  const execCmd = useCallback((cmd: Command) => {
+    if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store);
+  }, [cmdManager, store]);
+  const { canvasRef, rendererRef } = useCanvasRenderer(store, selected, onCellClick, selectSelection, view, cmdManager, onHeaderContextMenu, onCellContextMenu);
+  useEffect(() => rendererRef.current?.setEditing(editing !== null), [editing, rendererRef]);
   const startEditing = (cell: CellAddress, value = cellEditValue(store, cell)): void => {
     const next = cellSelection(cell.r, cell.c);
     selectedRef.current = next;
@@ -93,6 +148,12 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
         if (!result.valid) { message.warning(result.message ?? '输入值不符合验证规则'); }
       }
       setCellText(store, cmdManager, editing, value);
+      // Excel: Alt+Enter auto-enables Wrap Text and grows the row
+      if (value.includes('\n')) {
+        const range = { r1: editing.r, c1: editing.c, r2: editing.r, c2: editing.c };
+        applyShortcutStyle(store, cmdManager, range, { wrap: true });
+        autofitRowsForSelection(store, cmdManager, range);
+      }
     }
     setEditing(null);
   };
@@ -107,14 +168,32 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
 
   return <ErrorBoundary><div className="ss-root">
     <MenuBar {...menuBarProps(store, cmdManager, selected, selectRange, () => selectSelection(sheetSelection(allSheetRange())), onClose)} view={{ ...view, setZoom: (zoom) => setView((current) => ({ ...current, zoom })), setShowFormula: (showFormula) => setView((current) => ({ ...current, showFormula })), setShowGrid: (showGrid) => setView((current) => ({ ...current, showGrid })), setFreeze: (frozenRows, frozenCols) => setView((current) => ({ ...current, frozenRows, frozenCols })) }} onFindNavigate={(cell) => selectSelection(cellSelection(cell.r, cell.c))} onFindHighlight={(cells) => rendererRef.current?.setHighlightMatches(cells)} openDialogKey={findDialogOpen} />
-    <InteractionToolbar selected={selected} store={store} cmdManager={cmdManager} view={view} setView={setView} selectAll={() => selectSelection(sheetSelection(allSheetRange()))} painting={painting} onTogglePainter={() => { if (painting) { setPainting(false); setSourceStyle(undefined); } else { const cell = selected?.active; const s = cell === undefined ? undefined : store.getCell(cell.r, cell.c)?.styleId === undefined ? undefined : store.getStyle(store.getCell(cell.r, cell.c)!.styleId!); setSourceStyle(s); setPainting(true); } }} onInsertSparkline={() => setSparklineOpen(true)} onToggleProtection={() => setProtectOpen(true)} />
-    <SparklineInsertModal open={sparklineOpen} onClose={() => setSparklineOpen(false)} selected={selected} store={store} cmdManager={cmdManager} />
+    <InteractionToolbar selected={selected} store={store} cmdManager={cmdManager} view={view} setView={setView} selectAll={() => selectSelection(sheetSelection(allSheetRange()))} painting={painting} onTogglePainter={() => { if (painting) { setPainting(false); setSourceStyle(undefined); } else { const cell = selected?.active; const s = cell === undefined ? undefined : store.getCell(cell.r, cell.c)?.styleId === undefined ? undefined : store.getStyle(store.getCell(cell.r, cell.c)!.styleId!); setSourceStyle(s); setPainting(true); } }} onToggleProtection={() => setProtectOpen(true)} />
     <ProtectionModal open={protectOpen} onClose={() => setProtectOpen(false)} store={store} />
     <FormulaBar selected={selected} value={formulaValue} onChange={setFormulaValue} onCommit={() => commitFormulaValue(selected, formulaValue, store, cmdManager)} />
-    <div className="ss-canvas-wrap"><canvas ref={canvasRef} className="ss-canvas" tabIndex={0} aria-label="Spreadsheet canvas, use arrow keys to navigate" onKeyDown={(e) => handleCanvasKeyDown(e, selectedRef.current, store, cmdManager, startEditing, selectSelection, selectRange, setView, setFindDialogOpen)} onDoubleClick={(e) => editFromPointer(e.currentTarget, e.clientX, e.clientY, startEditing, view.zoom)} />
-      {editing !== null && <EditorOverlay refEl={inputRef} editing={editing} setEditing={setEditing} commit={commitEditing} zoom={view.zoom} />}</div>
+    <div className="ss-canvas-wrap"><canvas ref={canvasRef} className="ss-canvas" tabIndex={0} aria-label="Spreadsheet canvas, use arrow keys to navigate" onKeyDown={(e) => handleCanvasKeyDown(e, selectedRef.current, store, cmdManager, startEditing, selectSelection, selectRange, setView, setFindDialogOpen)} onDoubleClick={(e) => { const cell = rendererRef.current?.cellAtPoint(e.clientX, e.clientY); if (cell != null) startEditing(cell); }} />
+      {editing !== null && <EditorOverlay refEl={inputRef} editing={editing} setEditing={setEditing} commit={commitEditing} zoom={view.zoom} store={store} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}</div>
     <StatusBar store={store} selected={selected?.range ?? null} zoom={view.zoom} />
     <BottomBar sheets={sheets} activeSheetId={activeSheetId} onSheetChange={(id) => store.activateSheet(id)} onAddSheet={() => addSheet(store)} onRenameSheet={(id) => renameSheet(store, id)} onDeleteSheet={(id) => deleteSheet(store, id)} />
+    {ctxMenu?.kind === 'cell' && <CellContextMenu
+      x={ctxMenu.x} y={ctxMenu.y} onClose={closeCtxMenu}
+      onCut={() => runCtxClipboard('cut')} onCopy={() => runCtxClipboard('copy')} onPaste={() => runCtxClipboard('paste')} onClear={() => runCtxClipboard('clear')}
+      onInsertRow={() => { const range = selectedRef.current?.range; const r = range?.r1 ?? 0; const count = range !== undefined ? range.r2 - range.r1 + 1 : 1; execCmd(new InsertRowCommand({ r, count, position: 'above' })); }}
+      onInsertCol={() => { const range = selectedRef.current?.range; const c = range?.c1 ?? 0; const count = range !== undefined ? range.c2 - range.c1 + 1 : 1; execCmd(new InsertColCommand({ c, count, position: 'left' })); }}
+      onDeleteRow={() => { const range = selectedRef.current?.range; if (range === undefined) return; execCmd(new DeleteRowCommand({ r: range.r1, count: range.r2 - range.r1 + 1 })); }}
+      onDeleteCol={() => { const range = selectedRef.current?.range; if (range === undefined) return; execCmd(new DeleteColCommand({ c: range.c1, count: range.c2 - range.c1 + 1 })); }}
+      onNumberFormat={() => { setFindDialogOpen(null); queueMicrotask(() => setFindDialogOpen('numberFormat')); }}
+    />}
+    {(ctxMenu?.kind === 'row' || ctxMenu?.kind === 'column') && <HeaderContextMenu
+      x={ctxMenu.x} y={ctxMenu.y} type={ctxMenu.kind} index={ctxMenu.index} count={ctxMenu.count} onClose={closeCtxMenu}
+      onCut={() => runCtxClipboard('cut')} onCopy={() => runCtxClipboard('copy')} onPaste={() => runCtxClipboard('paste')} onClear={() => runCtxClipboard('clear')}
+      onInsertRow={(r, position, count) => execCmd(new InsertRowCommand({ r, count, position }))}
+      onDeleteRow={(r, count) => execCmd(new DeleteRowCommand({ r, count }))}
+      onSetRowHeight={(r, height) => execCmd(new SetRowHeight({ r, height }))}
+      onInsertCol={(c, position, count) => execCmd(new InsertColCommand({ c, count, position }))}
+      onDeleteCol={(c, count) => execCmd(new DeleteColCommand({ c, count }))}
+      onSetColWidth={(c, width) => execCmd(new SetColWidth({ c, width }))}
+    />}
   </div></ErrorBoundary>;
 };
 
@@ -148,29 +227,43 @@ export class Spreadsheet {
   }
 }
 
-interface EditorOverlayProps { readonly refEl: RefObject<HTMLInputElement | null>; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly commit: (value: string) => void; readonly zoom: number }
-const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editing, setEditing, commit, zoom }) => {
+interface EditorOverlayProps { readonly refEl: RefObject<HTMLTextAreaElement | null>; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly commit: (value: string) => void; readonly zoom: number; readonly store: Store; readonly cellRect?: { x: number; y: number; w: number; h: number } }
+const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editing, setEditing, commit, zoom, store, cellRect }) => {
   const composing = useRef(false);
-  return <input ref={refEl} className="ss-editor-overlay" style={editorStyle(editing, zoom)} value={editing.value}
+  const cellStyle = store.getCell(editing.r, editing.c)?.styleId !== undefined
+    ? store.getStyle(store.getCell(editing.r, editing.c)!.styleId!)
+    : undefined;
+  const wrapping = cellStyle?.wrap === true || editing.value.includes('\n');
+  return <textarea
+    ref={refEl}
+    className={`ss-editor-overlay${wrapping ? ' ss-editor-overlay--wrap' : ''}`}
+    style={editorStyle(store, editing, zoom, cellRect, cellStyle, editing.value)}
+    value={editing.value}
+    rows={1}
+    spellCheck={false}
     onChange={(e) => setEditing({ ...editing, value: e.target.value })}
     onCompositionStart={() => { composing.current = true; }}
     onCompositionEnd={() => { composing.current = false; }}
     onBlur={() => commit(refEl.current?.value ?? editing.value)}
-    onKeyDown={(e) => { if (composing.current) return; handleEditorKey(e, () => commit(refEl.current?.value ?? editing.value), () => setEditing(null)); }}
-    aria-label="Cell editor" />;
+    onKeyDown={(e) => {
+      if (composing.current) return;
+      handleEditorKey(e, refEl, () => commit(refEl.current?.value ?? editing.value), () => setEditing(null), (next) => setEditing({ ...editing, value: next }));
+    }}
+    aria-label="Cell editor"
+  />;
 };
 
-function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick: (cell: CellAddress, shift: boolean) => void, onSelectionChange: (selection: Selection) => void, view: ViewState, cmdManager?: CommandManager): { canvasRef: RefObject<HTMLCanvasElement | null>; rendererRef: RefObject<CanvasRenderer | null> } {
+function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick: (cell: CellAddress, shift: boolean) => void, onSelectionChange: (selection: Selection) => void, view: ViewState, cmdManager: CommandManager | undefined, onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => void, onCellContextMenu: (cell: CellAddress, x: number, y: number) => void): { canvasRef: RefObject<HTMLCanvasElement | null>; rendererRef: RefObject<CanvasRenderer | null> } {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<CanvasRenderer | null>(null);
-  const callbacks = useRef({ onCellClick, onSelectionChange });
+  const callbacks = useRef({ onCellClick, onSelectionChange, onHeaderContextMenu, onCellContextMenu });
   const selectedLiveRef = useRef(selected);
-  callbacks.current = { onCellClick, onSelectionChange };
+  callbacks.current = { onCellClick, onSelectionChange, onHeaderContextMenu, onCellContextMenu };
   selectedLiveRef.current = selected;
   useEffect(() => {
     if (canvasRef.current === null) return undefined;
     const currentSelection = selectedLiveRef.current;
-    const base = { canvas: canvasRef.current, store, zoom: view.zoom, showFormula: view.showFormula, showGrid: view.showGrid, frozenRows: view.frozenRows, frozenCols: view.frozenCols, onCellClick: (cell: CellAddress, shift?: boolean) => flushSync(() => callbacks.current.onCellClick(cell, shift === true)), onSelectionChange: (range: RangeAddress, active?: CellAddress, anchor?: CellAddress) => flushSync(() => callbacks.current.onSelectionChange(rangeSelection(range, anchor ?? selectedLiveRef.current?.anchor, active ?? { r: range.r2, c: range.c2 }))), onColumnSelect: (c: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(columnSelection(c, TOTAL_ROWS, shift && current?.kind === 'column' ? current.anchor.c : c)); }), onRowSelect: (r: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(rowSelection(r, TOTAL_COLS, shift && current?.kind === 'row' ? current.anchor.r : r)); }), onSheetSelect: () => flushSync(() => callbacks.current.onSelectionChange(sheetSelection(allSheetRange()))), onRowResize: (r: number, height: number) => { const cmd = new SetRowHeight({ r, height }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColResize: (c: number, width: number) => { const cmd = new SetColWidth({ c, width }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onRowDblClick: (r: number) => { const fit = autoFitRowHeight(store, r); const cmd = new SetRowHeight({ r, height: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColDblClick: (c: number) => { const fit = autoFitColWidth(store, c); const cmd = new SetColWidth({ c, width: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onFill: (source: RangeAddress, target: RangeAddress, ctrlKey: boolean) => { const cmd = new FillRangeCommand({ mode: ctrlKey ? 'series' : 'copy', source, target }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onMoveRange: (source: RangeAddress, target: RangeAddress) => { const cmd = new MoveRange({ source, target }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); } };
+    const base = { canvas: canvasRef.current, store, zoom: view.zoom, showFormula: view.showFormula, showGrid: view.showGrid, frozenRows: view.frozenRows, frozenCols: view.frozenCols, onCellClick: (cell: CellAddress, shift?: boolean) => flushSync(() => callbacks.current.onCellClick(cell, shift === true)), onSelectionChange: (range: RangeAddress, active?: CellAddress, anchor?: CellAddress) => flushSync(() => callbacks.current.onSelectionChange(rangeSelection(range, anchor ?? selectedLiveRef.current?.anchor, active ?? { r: range.r2, c: range.c2 }))), onColumnSelect: (c: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(columnSelection(c, TOTAL_ROWS, shift && current?.kind === 'column' ? current.anchor.c : c)); }), onRowSelect: (r: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(rowSelection(r, TOTAL_COLS, shift && current?.kind === 'row' ? current.anchor.r : r)); }), onSheetSelect: () => flushSync(() => callbacks.current.onSelectionChange(sheetSelection(allSheetRange()))), onRowResize: (r: number, height: number) => { const cmd = new SetRowHeight({ r, height }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColResize: (c: number, width: number) => { const cmd = new SetColWidth({ c, width }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onRowDblClick: (r: number) => { const fit = autoFitRowHeight(store, r); const cmd = new SetRowHeight({ r, height: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColDblClick: (c: number) => { const fit = autoFitColWidth(store, c); const cmd = new SetColWidth({ c, width: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onFill: (source: RangeAddress, target: RangeAddress, ctrlKey: boolean) => { const cmd = new FillRangeCommand({ mode: ctrlKey ? 'series' : 'copy', source, target }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onMoveRange: (source: RangeAddress, target: RangeAddress) => { const cmd = new MoveRange({ source, target }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => callbacks.current.onHeaderContextMenu(info, x, y), onCellContextMenu: (cell: CellAddress, x: number, y: number) => callbacks.current.onCellContextMenu(cell, x, y) };
     const renderer = new CanvasRenderer(currentSelection === null ? base : { ...base, selectedRange: currentSelection.range, selectionKind: currentSelection.kind, activeCell: currentSelection.active });
     rendererRef.current = renderer;
     return () => { renderer.destroy(); rendererRef.current = null; };
@@ -178,13 +271,6 @@ function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick
   useEffect(() => rendererRef.current?.setSelection(selected?.range, selected?.kind, selected?.active), [selected]);
   useEffect(() => rendererRef.current?.setFreeze(view.frozenRows, view.frozenCols), [view.frozenRows, view.frozenCols]);
   return { canvasRef, rendererRef };
-}
-
-function autoFitRowHeight(store: Store, r: number): number {
-  let hasContent = false;
-  for (let c = 0; c < TOTAL_COLS; c += 1) { if (store.getCell(r, c)?.text !== undefined && store.getCell(r, c)!.text.length > 0) { hasContent = true; break; } }
-  if (!hasContent) return ROW_HEIGHT;
-  return clampVal(20, 15, 500);
 }
 
 function autoFitColWidth(store: Store, c: number): number {
@@ -233,11 +319,87 @@ function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selec
   else handleClipboardAction(action.type, store, cmdManager, range);
 }
 
-function handleEditorKey(event: ReactKeyboardEvent<HTMLInputElement>, commit: () => void, cancel: () => void): void { if (event.key === 'Enter') { event.preventDefault(); commit(); } if (event.key === 'Escape') cancel(); }
-function editFromPointer(canvas: HTMLCanvasElement, x: number, y: number, startEditing: (cell: CellAddress) => void, zoom: number): void { const cell = canvasPointToCell(canvas, x, y, 0, 0, zoom); if (cell !== null) startEditing(cell); }
-function editorStyle(cell: CellAddress, zoom: number): CSSProperties {
+function handleEditorKey(
+  event: ReactKeyboardEvent<HTMLTextAreaElement>,
+  refEl: RefObject<HTMLTextAreaElement | null>,
+  commit: () => void,
+  cancel: () => void,
+  setValue: (value: string) => void,
+): void {
+  if (event.key === 'Escape') { cancel(); return; }
+  // Excel: Enter commits; Alt+Enter inserts a line break
+  if (event.key === 'Enter' && !event.altKey) { event.preventDefault(); commit(); return; }
+  if (event.key === 'Enter' && event.altKey) {
+    event.preventDefault();
+    const el = refEl.current;
+    if (el === null) return;
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? el.value.length;
+    const next = `${el.value.slice(0, start)}\n${el.value.slice(end)}`;
+    setValue(next);
+    requestAnimationFrame(() => {
+      const pos = start + 1;
+      el.selectionStart = pos;
+      el.selectionEnd = pos;
+    });
+  }
+}
+
+function editorStyle(
+  store: Store,
+  cell: CellAddress,
+  zoom: number,
+  cellRect: { x: number; y: number; w: number; h: number } | undefined,
+  style: Style | undefined,
+  value: string,
+): CSSProperties {
+  // Borderless inset 2px so it sits inside the canvas accent strokeRect.
+  const inset = 2;
   const scale = zoom / 100;
-  return { left: ROW_HEADER_WIDTH + cell.c * COL_WIDTH * scale + 1, top: COL_HEADER_HEIGHT + cell.r * ROW_HEIGHT * scale + 1, width: COL_WIDTH * scale - 3, height: ROW_HEIGHT * scale - 3 };
+  const fontSize = Math.max(8, Math.round((style?.fontSize ?? 11) * scale));
+  const fontFamily = style?.fontFamily ?? 'Calibri, "Segoe UI", "Microsoft YaHei", sans-serif';
+  const wrapping = style?.wrap === true || value.includes('\n');
+  let left: number;
+  let top: number;
+  let width: number;
+  let height: number;
+  if (cellRect !== undefined) {
+    left = cellRect.x + inset;
+    top = cellRect.y + inset;
+    width = Math.max(0, cellRect.w - inset * 2);
+    height = Math.max(0, cellRect.h - inset * 2);
+  } else {
+    let x = 0;
+    for (let c = 0; c < cell.c; c += 1) x += store.getCol(c)?.width ?? COL_WIDTH;
+    let y = 0;
+    for (let r = 0; r < cell.r; r += 1) y += store.getRow(r)?.height ?? ROW_HEIGHT;
+    const w = store.getCol(cell.c)?.width ?? COL_WIDTH;
+    const h = store.getRow(cell.r)?.height ?? ROW_HEIGHT;
+    left = ROW_HEADER_WIDTH + x * scale + inset;
+    top = COL_HEADER_HEIGHT + y * scale + inset;
+    width = Math.max(0, w * scale - inset * 2);
+    height = Math.max(0, h * scale - inset * 2);
+  }
+  if (wrapping) {
+    const lineCount = Math.max(1, value.split(/\r?\n/).length);
+    height = Math.max(height, wrappedContentHeight(lineCount, fontSize));
+  }
+  return {
+    left,
+    top,
+    width,
+    height,
+    fontSize,
+    fontFamily,
+    fontWeight: style?.bold === true ? 700 : 400,
+    fontStyle: style?.italic === true ? 'italic' : 'normal',
+    color: style?.color ?? undefined,
+    textAlign: style?.align ?? 'left',
+    lineHeight: `${WRAP_LINE_HEIGHT}`,
+    whiteSpace: wrapping ? 'pre-wrap' : 'nowrap',
+    overflow: wrapping ? 'auto' : 'hidden',
+    resize: 'none',
+  };
 }
 function setCellText(store: Store, cmdManager: CommandManager | undefined, cell: CellAddress, text: string): void { if (cmdManager === undefined) store.setCell(cell.r, cell.c, cellFromText(store.getCell(cell.r, cell.c), text)); else cmdManager.execute(new SetCellText({ r: cell.r, c: cell.c, text })); }
 function cellEditValue(store: Store, cell: CellAddress): string { const current = store.getCell(cell.r, cell.c); return current?.formula ?? current?.text ?? ''; }
@@ -275,6 +437,7 @@ function handleMenuShortcut(command: MenuShortcutCommand, store: Store, cmdManag
   map[command]();
 }
 function applyShortcutStyle(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress, style: Partial<Style>): void { const cmd = new SetRangeStyleCommand({ ...range, style }); if (cmdManager === undefined) cmd.execute(store); else cmdManager.execute(cmd); }
+function applyRangeBorder(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress, preset: BorderPreset, line: BorderLine = 'solid'): void { const cmd = new SetRangeBorderCommand({ ...range, preset, line }); if (cmdManager === undefined) cmd.execute(store); else cmdManager.execute(cmd); }
 function saveToLocal(store: Store): void { void saveToDB(DEFAULT_ID, store.serialize()).then(() => message.success('已保存到 IndexedDB')); }
 function dispatchThemeChanged(): void { window.dispatchEvent(new CustomEvent('ss:theme-changed')); }
 function commitFormulaValue(selected: Selection | null, value: string, store: Store, cmdManager: CommandManager | undefined): void {
@@ -282,26 +445,6 @@ function commitFormulaValue(selected: Selection | null, value: string, store: St
   setCellText(store, cmdManager, { r: selected.range.r1, c: selected.range.c1 }, value);
 }
 
-const SparklineInsertModal: FC<{ readonly open: boolean; readonly onClose: () => void; readonly selected: Selection | null; readonly store: Store; readonly cmdManager: CommandManager | undefined }> = ({ open, onClose, selected, store, cmdManager }) => {
-  const [form] = Form.useForm<{ type: SparklineType; range: string }>();
-  const submit = (): void => {
-    const values = form.getFieldsValue();
-    const rangeAddr = parseA1ToRange(values.range);
-    if (rangeAddr === undefined) { message.warning('无法解析范围'); return; }
-    const targetRow = selected?.range.r1 ?? 0;
-    const targetCol = selected?.range.c1 ?? 0;
-    const cmd = new SetSparklineCommand({ ...rangeAddr, type: values.type, targetRow, targetCol });
-    if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store);
-    form.resetFields();
-    onClose();
-  };
-  return <Modal title="插入迷你图" open={open} onCancel={onClose} onOk={submit} destroyOnHidden>
-    <Form form={form} layout="vertical" initialValues={{ type: 'line' as SparklineType, range: '' }}>
-      <Form.Item name="type" label="类型"><Radio.Group><Radio value="line">折线</Radio><Radio value="bar">柱形</Radio><Radio value="winloss">盈亏</Radio></Radio.Group></Form.Item>
-      <Form.Item name="range" label="数据范围" rules={[{ required: true, message: '请输入范围' }]}><Input placeholder="A1:A5" /></Form.Item>
-    </Form>
-  </Modal>;
-};
 
 const ProtectionModal: FC<{ readonly open: boolean; readonly onClose: () => void; readonly store: Store }> = ({ open, onClose, store }) => {
   const isProtected = store.isSheetProtected();
@@ -325,27 +468,30 @@ const ProtectionModal: FC<{ readonly open: boolean; readonly onClose: () => void
   </Modal>;
 };
 
-function parseA1ToRange(input: string): RangeAddress | undefined {
-  const match = input.trim().match(/^([A-Za-z]+)(\d+):([A-Za-z]+)(\d+)$/);
-  if (match === null) return undefined;
-  const c1 = a1Col(match[1] ?? '');
-  const r1 = (Number(match[2]) ?? 1) - 1;
-  const c2 = a1Col(match[3] ?? '');
-  const r2 = (Number(match[4]) ?? 1) - 1;
-  if (c1 < 0 || c2 < 0) return undefined;
-  return { r1, c1, r2, c2 };
-}
 
-function a1Col(alpha: string): number {
-  let col = 0;
-  for (let i = 0; i < alpha.length; i += 1) col = col * 26 + (alpha.toUpperCase().charCodeAt(i) - 64);
-  return col - 1;
-}
 
-const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly store: Store; readonly cmdManager: CommandManager | undefined; readonly view: ViewState; readonly setView: Dispatch<SetStateAction<ViewState>>; readonly selectAll: () => void; readonly painting: boolean; readonly onTogglePainter: () => void; readonly onInsertSparkline: () => void; readonly onToggleProtection: () => void }> = ({ selected, store, cmdManager, view, setView, selectAll, painting, onTogglePainter, onInsertSparkline, onToggleProtection }) => {
+const FONT_FAMILIES = [
+  'Calibri',
+  'Microsoft YaHei',
+  'SimSun',
+  'Arial',
+  'Times New Roman',
+  'Consolas',
+  'Segoe UI',
+] as const;
+
+const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72] as const;
+
+const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly store: Store; readonly cmdManager: CommandManager | undefined; readonly view: ViewState; readonly setView: Dispatch<SetStateAction<ViewState>>; readonly selectAll: () => void; readonly painting: boolean; readonly onTogglePainter: () => void; readonly onToggleProtection: () => void }> = ({ selected, store, cmdManager, view, setView, selectAll, painting, onTogglePainter, onToggleProtection }) => {
   const range = selected?.range;
+  const current = activeCellStyle(store, selected);
   const style = (next: Partial<Style>): void => { if (range !== undefined) applyShortcutStyle(store, cmdManager, range, next); };
-  const setZoom = (zoom: number): void => setView((current) => ({ ...current, zoom }));
+  const setZoom = (zoom: number): void => setView((currentView) => ({ ...currentView, zoom }));
+  const fontFamily = current?.fontFamily ?? 'Calibri';
+  const fontSize = current?.fontSize ?? 11;
+  const fontColor = current?.color ?? '#000000';
+  const fillColor = current?.bgcolor ?? '#FFFFFF';
+  const wrapping = current?.wrap === true;
   return <div className="ss-interaction-toolbar" role="toolbar" aria-label="Spreadsheet toolbar">
     <Space size={4} wrap>
       <Tooltip title="全选"><Button size="small" icon={<SelectOutlined />} aria-label="Select all" onClick={selectAll} /></Tooltip>
@@ -353,23 +499,107 @@ const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly sto
       <Divider type="vertical" />
       <Tooltip title={painting ? '退出格式刷' : '格式刷'}><Button size="small" type={painting ? 'primary' : 'default'} icon={<FormatPainterOutlined />} aria-label="Format painter" onClick={onTogglePainter} /></Tooltip>
       <Divider type="vertical" />
-      <Tooltip title="加粗"><Button size="small" icon={<BoldOutlined />} aria-label="Bold" onClick={() => style({ bold: true })} /></Tooltip>
-      <Tooltip title="斜体"><Button size="small" icon={<ItalicOutlined />} aria-label="Italic" onClick={() => style({ italic: true })} /></Tooltip>
-      <Tooltip title="下划线"><Button size="small" icon={<UnderlineOutlined />} aria-label="Underline" onClick={() => style({ underline: true })} /></Tooltip>
+      <Select
+        size="small"
+        aria-label="Font family"
+        style={{ width: 120 }}
+        value={fontFamily}
+        popupMatchSelectWidth={false}
+        options={FONT_FAMILIES.map((value) => ({ value, label: value }))}
+        onChange={(value) => style({ fontFamily: value })}
+      />
+      <Select
+        size="small"
+        aria-label="Font size"
+        style={{ width: 64 }}
+        value={fontSize}
+        popupMatchSelectWidth={false}
+        options={FONT_SIZES.map((value) => ({ value, label: String(value) }))}
+        onChange={(value) => {
+          style({ fontSize: value });
+          if (range !== undefined) autofitRowsForSelection(store, cmdManager, range);
+        }}
+      />
+      <Tooltip title="加粗"><Button size="small" type={current?.bold === true ? 'primary' : 'default'} icon={<BoldOutlined />} aria-label="Bold" onClick={() => style({ bold: !(current?.bold === true) })} /></Tooltip>
+      <Tooltip title="斜体"><Button size="small" type={current?.italic === true ? 'primary' : 'default'} icon={<ItalicOutlined />} aria-label="Italic" onClick={() => style({ italic: !(current?.italic === true) })} /></Tooltip>
+      <Tooltip title="下划线"><Button size="small" type={current?.underline === true ? 'primary' : 'default'} icon={<UnderlineOutlined />} aria-label="Underline" onClick={() => style({ underline: !(current?.underline === true) })} /></Tooltip>
+      <Tooltip title="字体颜色">
+        <ColorPicker
+          size="small"
+          value={fontColor}
+          disabledAlpha
+          arrow={false}
+          onChange={(value) => style({ color: value.toHexString() })}
+        >
+          <Button size="small" aria-label="Font color" icon={<FontColorsOutlined />} style={{ color: fontColor }} />
+        </ColorPicker>
+      </Tooltip>
+      <Tooltip title="单元格填充">
+        <ColorPicker
+          size="small"
+          value={fillColor}
+          disabledAlpha
+          arrow={false}
+          onChange={(value) => style({ bgcolor: value.toHexString() })}
+        >
+          <Button size="small" aria-label="Fill color" icon={<BgColorsOutlined />} style={{ color: fillColor === '#FFFFFF' || fillColor.toLowerCase() === '#fff' ? '#666' : fillColor }} />
+        </ColorPicker>
+      </Tooltip>
       <Divider type="vertical" />
-      <Tooltip title="左对齐"><Button size="small" icon={<AlignLeftOutlined />} aria-label="Align left" onClick={() => style({ align: 'left' })} /></Tooltip>
-      <Tooltip title="居中"><Button size="small" icon={<AlignCenterOutlined />} aria-label="Align center" onClick={() => style({ align: 'center' })} /></Tooltip>
-      <Tooltip title="右对齐"><Button size="small" icon={<AlignRightOutlined />} aria-label="Align right" onClick={() => style({ align: 'right' })} /></Tooltip>
+      <Tooltip title="左对齐"><Button size="small" type={current?.align === 'left' ? 'primary' : 'default'} icon={<AlignLeftOutlined />} aria-label="Align left" onClick={() => style({ align: 'left' })} /></Tooltip>
+      <Tooltip title="居中"><Button size="small" type={current?.align === 'center' ? 'primary' : 'default'} icon={<AlignCenterOutlined />} aria-label="Align center" onClick={() => style({ align: 'center' })} /></Tooltip>
+      <Tooltip title="右对齐"><Button size="small" type={current?.align === 'right' ? 'primary' : 'default'} icon={<AlignRightOutlined />} aria-label="Align right" onClick={() => style({ align: 'right' })} /></Tooltip>
+      <Tooltip title="自动换行">
+        <Button
+          size="small"
+          type={wrapping ? 'primary' : 'default'}
+          className="ss-wrap-btn"
+          aria-label="自动换行"
+          aria-pressed={wrapping}
+          icon={<ColumnHeightOutlined />}
+          onClick={() => {
+            const next = !wrapping;
+            style({ wrap: next });
+            if (next && range !== undefined) autofitRowsForSelection(store, cmdManager, range);
+          }}
+        >自动换行</Button>
+      </Tooltip>
       <Divider type="vertical" />
-      <Tooltip title="迷你图"><Button size="small" icon={<LineChartOutlined />} aria-label="Insert sparkline" onClick={onInsertSparkline} /></Tooltip>
+      <Dropdown trigger={['click']} menu={{
+        items: [
+          { key: 'all', icon: <BorderOutlined />, label: '全部边框' },
+          { key: 'outer', icon: <BorderOuterOutlined />, label: '外边框' },
+          { key: 'thickOuter', icon: <BorderOuterOutlined />, label: '粗匣边框' },
+          { key: 'inner', icon: <BorderInnerOutlined />, label: '内边框' },
+          { type: 'divider' },
+          { key: 'top', icon: <BorderTopOutlined />, label: '上边框' },
+          { key: 'bottom', icon: <BorderBottomOutlined />, label: '下边框' },
+          { key: 'left', icon: <BorderLeftOutlined />, label: '左边框' },
+          { key: 'right', icon: <BorderRightOutlined />, label: '右边框' },
+          { type: 'divider' },
+          { key: 'none', icon: <ClearOutlined />, label: '无边框' },
+        ],
+        onClick: ({ key }) => { if (range === undefined) return; if (key === 'thickOuter') applyRangeBorder(store, cmdManager, range, 'outer', 'thick'); else applyRangeBorder(store, cmdManager, range, key as BorderPreset); },
+      }}>
+        <Tooltip title="边框"><Button size="small" icon={<BorderOutlined />} aria-label="Borders" /></Tooltip>
+      </Dropdown>
+      <Divider type="vertical" />
       <Tooltip title={store.isSheetProtected() ? '取消保护' : '保护工作表'}><Button size="small" icon={<LockOutlined />} aria-label="Sheet protection" onClick={onToggleProtection} /></Tooltip>
       <Divider type="vertical" />
       <Tooltip title="缩小"><Button size="small" icon={<ZoomOutOutlined />} aria-label="Zoom out" onClick={() => setZoom(Math.max(50, view.zoom - 10))} /></Tooltip>
       <Select size="small" aria-label="Zoom level" value={view.zoom} popupMatchSelectWidth={false} onChange={setZoom} options={[50, 75, 100, 125, 150, 200].map((value) => ({ value, label: `${value}%` }))} />
       <Tooltip title="放大"><Button size="small" icon={<ZoomInOutlined />} aria-label="Zoom in" onClick={() => setZoom(Math.min(200, view.zoom + 10))} /></Tooltip>
       <Divider type="vertical" />
-      <span className="ss-toolbar-toggle"><Switch size="small" checked={view.showFormula} onChange={(showFormula) => setView((current) => ({ ...current, showFormula }))} />公式</span>
-      <span className="ss-toolbar-toggle"><Switch size="small" checked={view.showGrid} onChange={(showGrid) => setView((current) => ({ ...current, showGrid }))} />网格</span>
+      <span className="ss-toolbar-toggle"><Switch size="small" checked={view.showFormula} onChange={(showFormula) => setView((currentView) => ({ ...currentView, showFormula }))} />公式</span>
+      <span className="ss-toolbar-toggle"><Switch size="small" checked={view.showGrid} onChange={(showGrid) => setView((currentView) => ({ ...currentView, showGrid }))} />网格</span>
     </Space>
   </div>;
 };
+
+function activeCellStyle(store: Store, selected: Selection | null): Style | undefined {
+  const cell = selected?.active;
+  if (cell === undefined) return undefined;
+  const data = store.getCell(cell.r, cell.c);
+  if (data?.styleId === undefined) return undefined;
+  return store.getStyle(data.styleId);
+}

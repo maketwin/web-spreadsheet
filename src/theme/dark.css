@@ -1,11 +1,22 @@
+/* Excel-ish dark chrome */
 :root[data-spreadsheet-theme="dark"] {
   --ss-bg: #1e1e1e;
-  --ss-color: #d4d4d4;
-  --ss-border: #3c3c3c;
-  --ss-grid: #2d2d2d;
-  --ss-selected: #264f78;
-  --ss-header-bg: #252526;
-  --ss-toolbar-bg: #333333;
-  --ss-text: #d4d4d4;
-  --ss-text-light: #999999;
+  --ss-color: #f3f3f3;
+  --ss-border: #454545;
+  --ss-grid: #2b2b2b;
+  --ss-selected: #1f3d2c;
+  --ss-header-bg: #2d2d2d;
+  --ss-toolbar-bg: #2d2d2d;
+  --ss-ribbon-bg: #2d2d2d;
+  --ss-menu-bg: #185c37;
+  --ss-menu-text: #ffffff;
+  --ss-text: #f3f3f3;
+  --ss-text-light: #b3b3b3;
+  --ss-accent: #3fb950;
+  --ss-accent-hover: #56d364;
+  --ss-selection-border: #3fb950;
+  --ss-tab-active-bg: #1e1e1e;
+  --ss-tab-inactive-bg: #2d2d2d;
+  --ss-status-bg: #185c37;
+  --ss-status-text: #ffffff;
 }

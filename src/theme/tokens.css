@@ -1,14 +1,26 @@
+/* Excel-inspired light chrome (Win / Microsoft 365) */
 :root {
   --ss-bg: #ffffff;
-  --ss-color: #333333;
-  --ss-border: #e0e0e0;
-  --ss-grid: #f0f0f0;
-  --ss-selected: #e8f0ff;
-  --ss-header-bg: #f7f7f7;
-  --ss-toolbar-bg: #ffffff;
-  --ss-text: #333333;
-  --ss-text-light: #666666;
-  --ss-accent: #1677ff;
-  --ss-row-height: 25px;
-  --ss-col-width: 100px;
+  --ss-color: #000000;
+  --ss-border: #bdbdbd;
+  --ss-grid: #e0e0e0;
+  --ss-selected: #e2efda;
+  --ss-header-bg: #ececec;
+  --ss-toolbar-bg: #f3f3f3;
+  --ss-ribbon-bg: #f3f3f3;
+  --ss-menu-bg: #217346;
+  --ss-menu-text: #ffffff;
+  --ss-text: #000000;
+  --ss-text-light: #605e5c;
+  --ss-header-text: #444444;
+  --ss-accent: #217346;
+  --ss-accent-hover: #185c37;
+  --ss-selection-border: #217346;
+  --ss-tab-active-bg: #ffffff;
+  --ss-tab-inactive-bg: #f3f3f3;
+  --ss-status-bg: #217346;
+  --ss-status-text: #ffffff;
+  --ss-font-family: Calibri, "Segoe UI", "Microsoft YaHei", sans-serif;
+  --ss-row-height: 20px;
+  --ss-col-width: 64px;
 }

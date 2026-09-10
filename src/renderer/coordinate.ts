@@ -1,9 +1,9 @@
 export const TOTAL_ROWS = 1_000;
 export const TOTAL_COLS = 26;
-export const ROW_HEIGHT = 25;
-export const COL_WIDTH = 100;
+export const ROW_HEIGHT = 20;
+export const COL_WIDTH = 64;
 export const ROW_HEADER_WIDTH = 46;
-export const COL_HEADER_HEIGHT = 25;
+export const COL_HEADER_HEIGHT = 20;
 
 export interface CellAddress { readonly r: number; readonly c: number }
 
@@ -59,9 +59,9 @@ export interface CanvasTheme {
 export function readCanvasTheme(): CanvasTheme {
   const s = typeof document === 'undefined' ? null : getComputedStyle(document.documentElement);
   return {
-    bg: cssV(s, '--ss-bg', '#fff'), text: cssV(s, '--ss-text', '#333'), grid: cssV(s, '--ss-grid', '#f0f0f0'),
-    selected: cssV(s, '--ss-selected', '#e8f0ff'), headerBg: cssV(s, '--ss-header-bg', '#f7f7f7'),
-    accent: cssV(s, '--ss-accent', '#1677ff'), fontFamily: cssV(s, '--ss-font-family', 'sans-serif'), border: cssV(s, '--ss-border', '#d9d9d9'),
+    bg: cssV(s, '--ss-bg', '#fff'), text: cssV(s, '--ss-text', '#000000'), grid: cssV(s, '--ss-grid', '#e0e0e0'),
+    selected: cssV(s, '--ss-selected', '#e7f1ea'), headerBg: cssV(s, '--ss-header-bg', '#ececec'),
+    accent: cssV(s, '--ss-accent', '#217346'), fontFamily: cssV(s, '--ss-font-family', 'Calibri, "Segoe UI", "Microsoft YaHei", sans-serif'), border: cssV(s, '--ss-border', '#bdbdbd'),
     headerFilter: cssV(s, '--ss-header-filter', '#999'),
   };
 }

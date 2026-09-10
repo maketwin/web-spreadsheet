@@ -1,4 +1,3 @@
-import { Button } from 'antd';
 import type { FC, MouseEvent } from 'react';
 import type { SheetInfo } from '../store/Store';
 
@@ -26,9 +25,10 @@ export const BottomBar: FC<BottomBarProps> = ({
       const info = sheetInfo(sheet);
       const active = activeSheetId === undefined ? info.name === activeSheet : info.id === activeSheetId;
       return (
-        <Button
+        <button
           key={info.id}
-          type={active ? 'primary' : 'default'}
+          type="button"
+          className={`ss-sheet-tab${active ? ' ss-sheet-tab--active' : ''}`}
           role="tab"
           aria-selected={active}
           onClick={() => onSheetChange?.(info.id)}
@@ -36,12 +36,12 @@ export const BottomBar: FC<BottomBarProps> = ({
           onContextMenu={(event) => handleContextMenu(event, info.id, onDeleteSheet)}
         >
           {info.name}
-        </Button>
+        </button>
       );
     })}
-    <Button onClick={onAddSheet} aria-label="Add sheet">
+    <button type="button" className="ss-sheet-add" onClick={onAddSheet} aria-label="Add sheet">
       +
-    </Button>
+    </button>
   </div>
 );
 

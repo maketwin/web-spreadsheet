@@ -16,6 +16,8 @@ export { DeleteRowCommand } from './commands/impl/DeleteRow';
 export { DeleteColCommand } from './commands/impl/DeleteCol';
 export { SetCellStyleCommand } from './commands/impl/SetCellStyle';
 export { SetRangeStyleCommand } from './commands/impl/SetRangeStyle';
+export { SetRangeBorderCommand, edgesForPreset } from './commands/impl/SetRangeBorder';
+export type { BorderPreset, BorderLine } from './commands/impl/SetRangeBorder';
 export { SpreadsheetComponent } from './components/Spreadsheet';
 export { ErrorBoundary } from './components/ErrorBoundary';
 export type { CellInput, SpreadsheetOptions, SpreadsheetProps } from './components/Spreadsheet';

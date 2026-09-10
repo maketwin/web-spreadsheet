@@ -5,8 +5,8 @@ function makeScroller(): VirtualScroller {
   return new VirtualScroller({
     totalRows: 100,
     totalCols: 10,
-    defaultRowHeight: 25,
-    defaultColWidth: 100,
+    defaultRowHeight: 20,
+    defaultColWidth: 64,
     viewportW: 1_000,
     viewportH: 600,
   });
@@ -18,7 +18,7 @@ describe('VirtualScroller', () => {
 
     expect(scroller.getVisibleRange()).toEqual({
       startRow: 0,
-      endRow: 24,
+      endRow: 30,
       startCol: 0,
       endCol: 10,
     });
@@ -29,14 +29,14 @@ describe('VirtualScroller', () => {
 
     scroller.setScroll(1_000, 0);
 
-    expect(scroller.getVisibleRange().startRow).toBe(40);
+    expect(scroller.getVisibleRange().startRow).toBe(50);
   });
 
   it('converts cell coordinates to pixels', () => {
     const scroller = makeScroller();
 
     expect(scroller.cellToPixel(0, 0)).toEqual({ x: 0, y: 0 });
-    expect(scroller.cellToPixel(2, 3)).toEqual({ x: 300, y: 50 });
+    expect(scroller.cellToPixel(2, 3)).toEqual({ x: 192, y: 40 });
   });
 
   it('uses custom row height in visible range and pixel calculation', () => {
@@ -45,6 +45,6 @@ describe('VirtualScroller', () => {
     scroller.setRowHeight(0, 50);
 
     expect(scroller.getRowHeight(0)).toBe(50);
-    expect(scroller.cellToPixel(2, 0)).toEqual({ x: 0, y: 75 });
+    expect(scroller.cellToPixel(2, 0)).toEqual({ x: 0, y: 70 });
   });
 });

@@ -1,6 +1,6 @@
 import { fireEvent } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { CanvasRenderer, canvasPointToCell, canvasPointToHeader } from '../../src/renderer/CanvasRenderer';
+import { CanvasRenderer, canvasPointToCell, canvasPointToHeader, ROW_HEADER_WIDTH, COL_HEADER_HEIGHT, ROW_HEIGHT, COL_WIDTH } from '../../src/renderer/CanvasRenderer';
 import { Store } from '../../src/store/Store';
 
 function makeCanvas(): HTMLCanvasElement {
@@ -70,14 +70,14 @@ describe('CanvasRenderer', () => {
   it('converts canvas coordinates to cell addresses', () => {
     const canvas = makeCanvas();
 
-    expect(canvasPointToCell(canvas, 10 + 46 + 5, 20 + 25 + 5)).toEqual({ r: 0, c: 0 });
-    expect(canvasPointToCell(canvas, 10 + 46 + 205, 20 + 25 + 55)).toEqual({ r: 2, c: 2 });
+    expect(canvasPointToCell(canvas, 10 + ROW_HEADER_WIDTH + 5, 20 + COL_HEADER_HEIGHT + 5)).toEqual({ r: 0, c: 0 });
+    expect(canvasPointToCell(canvas, 10 + ROW_HEADER_WIDTH + COL_WIDTH * 2 + 5, 20 + COL_HEADER_HEIGHT + ROW_HEIGHT * 2 + 5)).toEqual({ r: 2, c: 2 });
   });
 
   it('converts zoomed canvas coordinates to cell addresses', () => {
     const canvas = makeCanvas();
 
-    expect(canvasPointToCell(canvas, 10 + 46 + 205, 20 + 25 + 55, 0, 0, 200)).toEqual({ r: 1, c: 1 });
+    expect(canvasPointToCell(canvas, 10 + ROW_HEADER_WIDTH + COL_WIDTH * 2 + 5, 20 + COL_HEADER_HEIGHT + ROW_HEIGHT * 2 + 5, 0, 0, 200)).toEqual({ r: 1, c: 1 });
   });
 
   it('ignores row and column headers during coordinate conversion', () => {
@@ -90,7 +90,7 @@ describe('CanvasRenderer', () => {
   it('converts zoomed header coordinates to column addresses', () => {
     const canvas = makeCanvas();
 
-    expect(canvasPointToHeader(canvas, 10 + 46 + 205, 20 + 5, 0, 0, 200)).toEqual({ type: 'column', c: 1 });
+    expect(canvasPointToHeader(canvas, 10 + ROW_HEADER_WIDTH + COL_WIDTH * 2 + 5, 20 + 5, 0, 0, 200)).toEqual({ type: 'column', c: 1 });
   });
 
   it('emits mousedown cell clicks with converted coordinates', () => {
@@ -99,10 +99,80 @@ describe('CanvasRenderer', () => {
     const onCellClick = vi.fn();
     const renderer = new CanvasRenderer({ canvas: makeCanvas(), store: new Store(), onCellClick });
 
-    fireEvent.mouseDown(document.querySelector('canvas') as HTMLCanvasElement, { clientX: 10 + 46 + 130, clientY: 20 + 25 + 30 });
+    fireEvent.mouseDown(document.querySelector('canvas') as HTMLCanvasElement, { clientX: 10 + ROW_HEADER_WIDTH + COL_WIDTH + 30, clientY: 20 + COL_HEADER_HEIGHT + ROW_HEIGHT + 5 });
 
     expect(onCellClick).toHaveBeenCalledWith({ r: 1, c: 1 });
     expect(callbacks.length).toBe(1);
+    renderer.destroy();
+  });
+
+  it('starts a normal range drag from the inside of an edge cell', () => {
+    installCanvasContext();
+    installAnimationFrames();
+    const onCellClick = vi.fn();
+    const onSelectionChange = vi.fn();
+    const onMoveRange = vi.fn();
+    const canvas = makeCanvas();
+    const renderer = new CanvasRenderer({
+      canvas,
+      store: new Store(),
+      selectedRange: { r1: 0, c1: 0, r2: 2, c2: 2 },
+      selectionKind: 'range',
+      activeCell: { r: 0, c: 0 },
+      onCellClick,
+      onSelectionChange,
+      onMoveRange,
+    });
+
+    fireEvent.mouseDown(canvas, { clientX: 10 + ROW_HEADER_WIDTH + COL_WIDTH + 50, clientY: 20 + COL_HEADER_HEIGHT + 12 });
+    fireEvent.mouseMove(window, { clientX: 10 + ROW_HEADER_WIDTH + COL_WIDTH * 3 + 50, clientY: 20 + COL_HEADER_HEIGHT + ROW_HEIGHT * 2 + 12 });
+
+    expect(onCellClick).toHaveBeenCalledWith({ r: 0, c: 1 });
+    expect(onSelectionChange).toHaveBeenCalledWith({ r1: 0, c1: 1, r2: 2, c2: 3 }, { r: 2, c: 3 }, { r: 0, c: 1 });
+    expect(onMoveRange).not.toHaveBeenCalled();
+    renderer.destroy();
+  });
+
+  it('moves a selected range only when dragging the rendered selection border', () => {
+    installCanvasContext();
+    installAnimationFrames();
+    const onMoveRange = vi.fn();
+    const canvas = makeCanvas();
+    const renderer = new CanvasRenderer({
+      canvas,
+      store: new Store(),
+      selectedRange: { r1: 0, c1: 0, r2: 2, c2: 2 },
+      selectionKind: 'range',
+      activeCell: { r: 0, c: 0 },
+      onMoveRange,
+    });
+
+    fireEvent.mouseDown(canvas, { clientX: 10 + ROW_HEADER_WIDTH + COL_WIDTH + 50, clientY: 20 + COL_HEADER_HEIGHT + 2 });
+    fireEvent.mouseMove(window, { clientX: 10 + ROW_HEADER_WIDTH + COL_WIDTH * 5 + 50, clientY: 20 + COL_HEADER_HEIGHT + 2 });
+    fireEvent.mouseUp(window);
+
+    expect(onMoveRange).toHaveBeenCalledWith({ r1: 0, c1: 0, r2: 2, c2: 2 }, { r1: 0, c1: 4, r2: 0, c2: 4 });
+    renderer.destroy();
+  });
+
+  it('does not move a range when the selection border is clicked without dragging', () => {
+    installCanvasContext();
+    installAnimationFrames();
+    const onMoveRange = vi.fn();
+    const canvas = makeCanvas();
+    const renderer = new CanvasRenderer({
+      canvas,
+      store: new Store(),
+      selectedRange: { r1: 0, c1: 0, r2: 2, c2: 2 },
+      selectionKind: 'range',
+      activeCell: { r: 0, c: 0 },
+      onMoveRange,
+    });
+
+    fireEvent.mouseDown(canvas, { clientX: 10 + ROW_HEADER_WIDTH + COL_WIDTH + 50, clientY: 20 + COL_HEADER_HEIGHT + 2 });
+    fireEvent.mouseUp(window);
+
+    expect(onMoveRange).not.toHaveBeenCalled();
     renderer.destroy();
   });
 
@@ -113,8 +183,8 @@ describe('CanvasRenderer', () => {
     const canvas = makeCanvas();
     const renderer = new CanvasRenderer({ canvas, store: new Store(), onColumnSelect });
 
-    fireEvent.mouseDown(canvas, { clientX: 10 + 46 + 5, clientY: 20 + 5 });
-    fireEvent.mouseMove(window, { clientX: 10 + 46 + 205, clientY: 20 + 5 });
+    fireEvent.mouseDown(canvas, { clientX: 10 + ROW_HEADER_WIDTH + 5, clientY: 20 + 5 });
+    fireEvent.mouseMove(window, { clientX: 10 + ROW_HEADER_WIDTH + COL_WIDTH * 2 + 5, clientY: 20 + 5 });
 
     expect(onColumnSelect).toHaveBeenNthCalledWith(1, 0, false);
     expect(onColumnSelect).toHaveBeenNthCalledWith(2, 2, true);
@@ -128,8 +198,8 @@ describe('CanvasRenderer', () => {
     const canvas = makeCanvas();
     const renderer = new CanvasRenderer({ canvas, store: new Store(), onRowSelect });
 
-    fireEvent.mouseDown(canvas, { clientX: 10 + 5, clientY: 20 + 25 + 5 });
-    fireEvent.mouseMove(window, { clientX: 10 + 5, clientY: 20 + 25 + 55 });
+    fireEvent.mouseDown(canvas, { clientX: 10 + 5, clientY: 20 + COL_HEADER_HEIGHT + 5 });
+    fireEvent.mouseMove(window, { clientX: 10 + 5, clientY: 20 + COL_HEADER_HEIGHT + ROW_HEIGHT * 2 + 5 });
 
     expect(onRowSelect).toHaveBeenNthCalledWith(1, 0, false);
     expect(onRowSelect).toHaveBeenNthCalledWith(2, 2, true);
@@ -157,7 +227,7 @@ describe('CanvasRenderer', () => {
     callbacks[0]?.(0);
 
     expect(ctx.fillRect).toHaveBeenCalledWith(0, 0, 300, 150);
-    expect(ctx.fillStyle).toBe('#333');
+    expect(ctx.fillStyle).toBe('#444444');
     document.documentElement.style.removeProperty('--ss-bg');
     renderer.destroy();
   });

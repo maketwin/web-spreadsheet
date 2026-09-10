@@ -29,8 +29,8 @@ export const FormatMenu: FC<FormatMenuProps> = ({ actions }) => <Menu selectable
 
 const FONT_OPTIONS = ['Arial', 'Calibri', 'Microsoft YaHei', 'PingFang SC', 'Times New Roman'].map((value) => ({ value, label: value }));
 
-const FontPanel: FC<FormatMenuProps> = ({ actions }) => <Select style={{ width: 180 }} options={FONT_OPTIONS} defaultValue="Arial" onChange={(fontFamily: string) => actions.applyStyle({ fontFamily })} />;
-const SizePanel: FC<FormatMenuProps> = ({ actions }) => <InputNumber min={8} max={72} defaultValue={14} onChange={(fontSize) => applySize(actions, fontSize)} />;
+const FontPanel: FC<FormatMenuProps> = ({ actions }) => <Select style={{ width: 180 }} options={FONT_OPTIONS} defaultValue="Calibri" onChange={(fontFamily: string) => actions.applyStyle({ fontFamily })} />;
+const SizePanel: FC<FormatMenuProps> = ({ actions }) => <InputNumber min={8} max={72} defaultValue={11} onChange={(fontSize) => applySize(actions, fontSize)} />;
 
 const ColorPanel: FC<{ readonly title: string; readonly onChange: (color: string) => void }> = ({ title, onChange }) => (
   <Space><span>{title}</span><ColorPicker onChangeComplete={(color: Color) => onChange(color.toHexString())} /></Space>
