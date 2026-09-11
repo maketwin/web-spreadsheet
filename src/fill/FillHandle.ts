@@ -32,6 +32,8 @@ export class FillHandle {
       this.opts.canvas.style.cursor = this.isOverHandle(event.clientX, event.clientY) ? 'crosshair' : '';
       return;
     }
+    // Excel tracks the toggle for the whole gesture, not just the press.
+    this.ctrlKey = event.ctrlKey || event.metaKey;
     const range = this.opts.selectedRange();
     if (range === undefined) return;
     const cell = this.clientToCell(event.clientX, event.clientY);
@@ -85,13 +87,25 @@ export class FillHandle {
 }
 
 function computeFillTarget(source: RangeAddress, r: number, c: number): RangeAddress {
-  const isVertical = Math.abs(r - source.r2) >= Math.abs(c - source.c2);
-  if (isVertical) {
-    const r2 = r < source.r1 ? source.r1 : Math.max(r, source.r2);
-    return { r1: source.r1, c1: source.c1, r2, c2: source.c2 };
+  // Axis = how far the pointer moved beyond each edge of the source (0 while
+  // inside), so a horizontal drag across a tall selection stays horizontal.
+  const dR = r < source.r1 ? source.r1 - r : r > source.r2 ? r - source.r2 : 0;
+  const dC = c < source.c1 ? source.c1 - c : c > source.c2 ? c - source.c2 : 0;
+  if (dR <= 0 && dC <= 0) return { ...source };
+  if (dR >= dC) {
+    return {
+      r1: Math.min(source.r1, r),
+      c1: source.c1,
+      r2: Math.max(source.r2, r),
+      c2: source.c2,
+    };
   }
-  const c2 = c < source.c1 ? source.c1 : Math.max(c, source.c2);
-  return { r1: source.r1, c1: source.c1, r2: source.r2, c2 };
+  return {
+    r1: source.r1,
+    c1: Math.min(source.c1, c),
+    r2: source.r2,
+    c2: Math.max(source.c2, c),
+  };
 }
 
 function normalizeFillTarget(source: RangeAddress, target: RangeAddress): RangeAddress {

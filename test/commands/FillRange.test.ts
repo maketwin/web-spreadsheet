@@ -3,11 +3,10 @@ import { FillRangeCommand, shiftFormula } from '../../src/commands/impl/FillRang
 import { Store } from '../../src/store/Store';
 
 describe('FillRangeCommand', () => {
-  it('copies text in copy mode', () => {
+  it('copies plain text', () => {
     const store = new Store();
     store.setCell(0, 0, { text: 'hello' });
     const cmd = new FillRangeCommand({
-      mode: 'copy',
       source: { r1: 0, c1: 0, r2: 0, c2: 0 },
       target: { r1: 0, c1: 0, r2: 2, c2: 0 },
     });
@@ -19,12 +18,11 @@ describe('FillRangeCommand', () => {
     expect(store.getCell(2, 0)?.text).toBe('hello');
   });
 
-  it('increments numbers in series mode', () => {
+  it('continues an arithmetic number series by default (Excel)', () => {
     const store = new Store();
     store.setCell(0, 0, { text: '1' });
     store.setCell(1, 0, { text: '2' });
     const cmd = new FillRangeCommand({
-      mode: 'series',
       source: { r1: 0, c1: 0, r2: 1, c2: 0 },
       target: { r1: 0, c1: 0, r2: 4, c2: 0 },
     });
@@ -38,11 +36,10 @@ describe('FillRangeCommand', () => {
     expect(store.getCell(4, 0)?.text).toBe('5');
   });
 
-  it('shifts formula references in copy mode', () => {
+  it('shifts formula references when copying', () => {
     const store = new Store();
     store.setCell(0, 0, { text: '3', formula: '=A1+B1' });
     const cmd = new FillRangeCommand({
-      mode: 'copy',
       source: { r1: 0, c1: 0, r2: 0, c2: 0 },
       target: { r1: 0, c1: 0, r2: 2, c2: 0 },
     });
@@ -57,7 +54,6 @@ describe('FillRangeCommand', () => {
   it('handles empty target cells gracefully', () => {
     const store = new Store();
     const cmd = new FillRangeCommand({
-      mode: 'copy',
       source: { r1: 0, c1: 0, r2: 0, c2: 0 },
       target: { r1: 0, c1: 0, r2: 2, c2: 0 },
     });
@@ -76,5 +72,17 @@ describe('shiftFormula', () => {
 
   it('does not shift $-prefixed references', () => {
     expect(shiftFormula('=$A$1+B2', 1, 0)).toBe('=$A$1+B3');
+  });
+
+  it('keeps an absolute column fixed but shifts the row ($A1)', () => {
+    expect(shiftFormula('=$A1+B2', 1, 1)).toBe('=$A2+C3');
+  });
+
+  it('keeps an absolute row fixed but shifts the column (A$1)', () => {
+    expect(shiftFormula('=A$1+B2', 1, 1)).toBe('=B$1+C3');
+  });
+
+  it('does not touch sheet names or function names', () => {
+    expect(shiftFormula('=SUM(Sheet2!A1:B3)+LOG10(100)', 1, 0)).toBe('=SUM(Sheet2!A2:B4)+LOG10(100)');
   });
 });

@@ -8,7 +8,6 @@ describe('FillRangeCommand smart series (T2.2)', () => {
     store.setCell(0, 0, { text: '2' });
     store.setCell(1, 0, { text: '4' });
     new FillRangeCommand({
-      mode: 'series',
       source: { r1: 0, c1: 0, r2: 1, c2: 0 },
       target: { r1: 0, c1: 0, r2: 4, c2: 0 },
     }).execute(store);
@@ -20,7 +19,6 @@ describe('FillRangeCommand smart series (T2.2)', () => {
     const store = new Store();
     store.setCell(0, 0, { text: '2026-01-30' });
     new FillRangeCommand({
-      mode: 'series',
       source: { r1: 0, c1: 0, r2: 0, c2: 0 },
       target: { r1: 0, c1: 0, r2: 2, c2: 0 },
     }).execute(store);
@@ -33,7 +31,6 @@ describe('FillRangeCommand smart series (T2.2)', () => {
     const store = new Store();
     store.setCell(0, 0, { text: 'Mon' });
     new FillRangeCommand({
-      mode: 'series',
       source: { r1: 0, c1: 0, r2: 0, c2: 0 },
       target: { r1: 0, c1: 0, r2: 0, c2: 2 },
     }).execute(store);
@@ -46,7 +43,6 @@ describe('FillRangeCommand smart series (T2.2)', () => {
     const store = new Store();
     store.setCell(0, 0, { text: 'Item1' });
     new FillRangeCommand({
-      mode: 'series',
       source: { r1: 0, c1: 0, r2: 0, c2: 0 },
       target: { r1: 0, c1: 0, r2: 2, c2: 0 },
     }).execute(store);
@@ -59,7 +55,6 @@ describe('FillRangeCommand smart series (T2.2)', () => {
     const store = new Store();
     store.setCell(0, 0, { text: '1', formula: '=B1*2' });
     new FillRangeCommand({
-      mode: 'series',
       source: { r1: 0, c1: 0, r2: 0, c2: 0 },
       target: { r1: 0, c1: 0, r2: 2, c2: 0 },
     }).execute(store);
@@ -72,7 +67,6 @@ describe('FillRangeCommand smart series (T2.2)', () => {
     const store = new Store();
     store.setCell(0, 0, { text: 'hello' });
     new FillRangeCommand({
-      mode: 'series',
       source: { r1: 0, c1: 0, r2: 0, c2: 0 },
       target: { r1: 0, c1: 0, r2: 2, c2: 0 },
     }).execute(store);
@@ -81,16 +75,16 @@ describe('FillRangeCommand smart series (T2.2)', () => {
     expect(store.getCell(2, 0)?.text).toBe('hello');
   });
 
-  it('series fill is undoable in one step', () => {
+  it('Ctrl-drag on a lone number increments and is undoable in one step', () => {
     const store = new Store();
     store.setCell(0, 0, { text: '1' });
     const cmd = new FillRangeCommand({
-      mode: 'series',
+      ctrlKey: true,
       source: { r1: 0, c1: 0, r2: 0, c2: 0 },
       target: { r1: 0, c1: 0, r2: 3, c2: 0 },
     });
     cmd.execute(store);
-    expect(store.getCell(3, 0)?.text).toBe('4');
+    expect([1, 2, 3].map((r) => store.getCell(r, 0)?.text)).toEqual(['2', '3', '4']);
 
     cmd.getUndo().execute(store);
     expect(store.getCell(0, 0)?.text).toBe('1');
