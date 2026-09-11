@@ -1,4 +1,5 @@
 import type { Style } from '../types';
+import { formatCustom } from './CustomFormat';
 
 export type NumberFormatType = NonNullable<Style['numberFormat']>;
 
@@ -20,7 +21,10 @@ export function formatValue(value: unknown, fmt: NumberFormatType): FormatResult
     case 'date': return formatDate(value);
     case 'time': return formatTime(value);
     case 'scientific': return formatScientific(value);
-    default: return { text: String(value), formatted: false };
+    default: {
+      const custom = formatCustom(value, fmt);
+      return custom === undefined ? { text: String(value), formatted: false } : { text: custom, formatted: true };
+    }
   }
 }
 

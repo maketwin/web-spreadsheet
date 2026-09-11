@@ -28,7 +28,12 @@ export interface Style {
   valign?: 'top' | 'middle' | 'bottom';
   fontSize?: number;
   fontFamily?: string;
-  numberFormat?: 'general' | 'number' | 'currency' | 'percent' | 'date' | 'time' | 'scientific';
+  /**
+   * Built-in names ('general' | 'number' | 'currency' | 'percent' | 'date' |
+   * 'time' | 'scientific') or an Excel-style custom format string such as
+   * '#,##0.00' or 'yyyy-mm-dd'.
+   */
+  numberFormat?: string;
   wrap?: boolean;
   border?: { top?: string; bottom?: string; left?: string; right?: string };
 }

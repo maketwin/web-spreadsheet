@@ -4,6 +4,8 @@ import type { Cell } from '../types';
 export interface SheetImport {
   readonly name: string;
   readonly cells: readonly (readonly Partial<Cell>[])[];
+  /** Excel number format strings per cell (from the xlsx `z` field). */
+  readonly numberFormats: readonly (readonly (string | undefined)[])[];
 }
 
 export interface ImportResult {
@@ -11,7 +13,7 @@ export interface ImportResult {
 }
 
 export function importXlsx(buffer: ArrayBuffer): ImportResult {
-  const wb = XLSX.read(buffer, { type: 'array' });
+  const wb = XLSX.read(buffer, { type: 'array', cellNF: true });
   const sheets: SheetImport[] = [];
 
   for (const name of wb.SheetNames) {
@@ -21,10 +23,24 @@ export function importXlsx(buffer: ArrayBuffer): ImportResult {
     const cells = aoa.map((row) =>
       (row as (string | number | null | undefined)[]).map(cellFromValue)
     );
-    sheets.push({ name, cells });
+    const numberFormats = extractNumberFormats(ws, cells.length, cells[0]?.length ?? 0);
+    sheets.push({ name, cells, numberFormats });
   }
 
   return { sheets };
+}
+
+function extractNumberFormats(ws: XLSX.WorkSheet, rows: number, cols: number): readonly (readonly (string | undefined)[])[] {
+  const out: (string | undefined)[][] = [];
+  for (let r = 0; r < rows; r += 1) {
+    const row: (string | undefined)[] = [];
+    for (let c = 0; c < cols; c += 1) {
+      const cell = ws[XLSX.utils.encode_cell({ r, c })] as XLSX.CellObject | undefined;
+      row.push(typeof cell?.z === 'string' ? cell.z : undefined);
+    }
+    out.push(row);
+  }
+  return out;
 }
 
 function cellFromValue(val: string | number | null | undefined): Partial<Cell> {

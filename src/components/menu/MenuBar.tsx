@@ -430,9 +430,25 @@ function openXlsxFile(event: React.ChangeEvent<HTMLInputElement>, ctx: MenuConte
     if (first === undefined) { message.info('xlsx 文件为空'); return; }
     const values = first.cells;
     execute(ctx, new SetRangeValues({ r1: 0, c1: 0, r2: values.length - 1, c2: (values[0]?.length ?? 1) - 1, values }));
+    applyImportedFormats(ctx, first.numberFormats);
     message.success(`已导入 xlsx (${result.sheets.length} 个工作表)`);
   });
   event.currentTarget.value = '';
+}
+
+/** Apply imported xlsx number formats, grouped into same-format row runs. */
+function applyImportedFormats(ctx: MenuContext, formats: readonly (readonly (string | undefined)[])[]): void {
+  formats.forEach((row, r) => {
+    let c = 0;
+    while (c < row.length) {
+      const fmt = row[c];
+      if (fmt === undefined) { c += 1; continue; }
+      let end = c;
+      while (end + 1 < row.length && row[end + 1] === fmt) end += 1;
+      execute(ctx, new SetNumberFormatCommand({ r1: r, c1: c, r2: r, c2: end, numberFormat: fmt }));
+      c = end + 1;
+    }
+  });
 }
 
 function importText(text: string, ctx: MenuContext): void {
