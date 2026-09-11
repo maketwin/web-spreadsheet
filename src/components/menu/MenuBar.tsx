@@ -16,6 +16,9 @@ import { SetConditionalFormatCommand } from '../../commands/impl/SetConditionalF
 import type { ValidationRule, ValidationType } from '../../validation/types';
 import { SetValidationCommand } from '../../commands/impl/SetValidation';
 import { FilterService } from '../../filter/FilterService';
+import { SetAutoFilterCommand } from '../../commands/impl/SetAutoFilter';
+import { SetAutoFilterCriteriaCommand } from '../../commands/impl/SetAutoFilterCriteria';
+import { SortRangeCommand } from '../../commands/impl/SortRange';
 import { FindReplaceService } from '../../find/FindReplaceService';
 import { protectSheet, unprotectSheet, verifyPassword } from '../../protection/SheetProtection';
 import { TOTAL_COLS, TOTAL_ROWS } from '../../renderer/CanvasRenderer';
@@ -86,7 +89,7 @@ function topMenus(actions: MenuActions, view: ViewState, ctx: MenuBarProps): rea
     { key: 'view', label: '视图(V)', icon: <TableOutlined />, items: viewItems(view) },
     { key: 'insert', label: '插入(I)', icon: <BarChartOutlined />, items: insertItems() },
     { key: 'format', label: '格式(O)', icon: <FormatPainterOutlined />, items: formatItems(ctx) },
-    { key: 'data', label: '数据(D)', icon: <DatabaseOutlined />, items: dataItems() },
+    { key: 'data', label: '数据(D)', icon: <DatabaseOutlined />, items: dataItems(ctx) },
     { key: 'review', label: '审阅(R)', icon: <LockOutlined />, items: reviewItems() },
     { key: 'help', label: '帮助(H)', icon: <QuestionCircleOutlined />, items: helpItems() },
   ];
@@ -191,6 +194,10 @@ function formatItems(ctx: MenuBarProps): NonNullable<MenuProps['items']> {
       item('format:align:center', '居中'),
       item('format:align:right', '右对齐'),
       { type: 'divider', key: 'format:align:div' },
+      item('format:valign:top', '顶端对齐'),
+      item('format:valign:middle', '垂直居中'),
+      item('format:valign:bottom', '底端对齐'),
+      { type: 'divider', key: 'format:valign:div' },
       {
         key: 'format:wrap',
         label: '自动换行',
@@ -207,9 +214,17 @@ function formatItems(ctx: MenuBarProps): NonNullable<MenuProps['items']> {
   ];
 }
 
-function dataItems(): NonNullable<MenuProps['items']> {
+function dataItems(ctx: MenuBarProps): NonNullable<MenuProps['items']> {
+  const filter = new FilterService(ctx.store).getAutoFilter();
+  const active = filter !== undefined;
+  const hasCriteria = filter !== undefined && Object.keys(filter.criteria).length > 0;
   return [
     item('data:validation', '数据验证...'),
+    divider('data:divider:1'),
+    item('data:autoFilter', active ? <span className="ss-menu-check"><CheckOutlined /> 筛选</span> : <span className="ss-menu-check"><span style={{ display: 'inline-block', width: 14 }} /> 筛选</span>),
+    item('data:clearFilter', '清除筛选', !hasCriteria),
+    item('data:reapplyFilter', '重新应用', !active),
+    divider('data:divider:2'),
     item('data:sortAsc', '升序排序'),
     item('data:sortDesc', '降序排序'),
   ];
@@ -226,8 +241,8 @@ function helpItems(): NonNullable<MenuProps['items']> {
   return [item('help:docs', '文档'), item('help:shortcuts', '快捷键'), divider('help:divider:1'), item('help:about', '关于')];
 }
 
-function item(key: string, label: ReactNode): NonNullable<MenuProps['items']>[number] {
-  return { key, label };
+function item(key: string, label: ReactNode, disabled = false): NonNullable<MenuProps['items']>[number] {
+  return { key, label, disabled };
 }
 
 function divider(key: string): NonNullable<MenuProps['items']>[number] {
@@ -281,7 +296,7 @@ function runInsertAction(key: string, ctx: MenuContext, openDialog: (name: Dialo
 }
 
 function runFormatAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void): void {
-  const map: Record<string, Partial<Style>> = { 'format:bold': { bold: true }, 'format:italic': { italic: true }, 'format:underline': { underline: true }, 'format:align:left': { align: 'left' }, 'format:align:center': { align: 'center' }, 'format:align:right': { align: 'right' } };
+  const map: Record<string, Partial<Style>> = { 'format:bold': { bold: true }, 'format:italic': { italic: true }, 'format:underline': { underline: true }, 'format:align:left': { align: 'left' }, 'format:align:center': { align: 'center' }, 'format:align:right': { align: 'right' }, 'format:valign:top': { valign: 'top' }, 'format:valign:middle': { valign: 'middle' }, 'format:valign:bottom': { valign: 'bottom' } };
   if (key === 'format:number') openDialog('numberFormat');
   else if (key === 'format:merge') execute(ctx, new SetMerge({ range: rangeName(ctx.selected), active: true }));
   else if (key === 'format:unmerge') execute(ctx, new SetMerge({ range: rangeName(ctx.selected), active: false }));
@@ -326,8 +341,16 @@ function runViewAction(key: string, view: ViewState, openDialog: (name: DialogNa
 
 function runDataAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void): void {
   if (key === 'data:validation') openDialog('dataValidation');
+  if (key === 'data:autoFilter') toggleAutoFilter(ctx);
+  if (key === 'data:clearFilter') execute(ctx, new SetAutoFilterCriteriaCommand({ column: 0, mode: 'clearAll' }));
+  if (key === 'data:reapplyFilter') reapplyAutoFilter(ctx.store);
   if (key === 'data:sortAsc') applySort(ctx, 'asc');
   if (key === 'data:sortDesc') applySort(ctx, 'desc');
+}
+
+function reapplyAutoFilter(store: Store): void {
+  const service = new FilterService(store);
+  if (service.getAutoFilter() !== undefined) service.applyFilters();
 }
 
 function runReviewAction(key: string, _ctx: MenuContext, openDialog: (name: DialogName) => void): void {
@@ -522,11 +545,38 @@ function applyConditionalFormula(ctx: MenuContext): void {
 }
 
 
+function toggleAutoFilter(ctx: MenuContext): void {
+  const svc = new FilterService(ctx.store);
+  const existing = svc.getAutoFilter();
+  if (existing !== undefined) {
+    execute(ctx, new SetAutoFilterCommand({ ...existing.range, enabled: false }));
+    return;
+  }
+  // Excel 规则：部分多格选区按精确范围；整列选择只筛所选列；单格/整行取当前区域。
+  const range = svc.autoFilterRangeFor(ctx.selected);
+  execute(ctx, new SetAutoFilterCommand({ ...range, enabled: true }));
+}
+
+/** Excel CurrentRegion: grow a seed range until a blank row/column borders it. */
+function expandToDataBlock(store: Store, seed: RangeAddress): RangeAddress {
+  return new FilterService(store).inferDataRegion(seed);
+}
+
 function applySort(ctx: MenuContext, direction: 'asc' | 'desc'): void {
   const sel = ctx.selected;
   if (sel === null) { message.warning('请先选择要排序的范围'); return; }
-  const svc = new FilterService(ctx.store);
-  svc.sortRange(sel.r1, sel.c1, sel.r2, sel.c2, sel.c1, direction);
+  const filter = new FilterService(ctx.store).getAutoFilter();
+  const single = sel.r1 === sel.r2 && sel.c1 === sel.c2;
+  const inFilter = filter !== undefined
+    && sel.r1 >= filter.range.r1 && sel.r1 <= filter.range.r2
+    && sel.c1 >= filter.range.c1 && sel.c1 <= filter.range.c2;
+  // Excel 默认“扩展选定区域”排序：按整个数据区域排序，避免只搬部分列导致行错位。
+  const range = single && inFilter && filter !== undefined ? filter.range : expandToDataBlock(ctx.store, sel);
+  const dataRange = filter !== undefined && range.r1 === filter.range.r1 && range.r2 === filter.range.r2
+    ? { ...range, r1: range.r1 + 1 } // Excel keeps the AutoFilter header row in place.
+    : range;
+  if (dataRange.r1 > dataRange.r2) return;
+  execute(ctx, new SortRangeCommand({ ...dataRange, sortCol: sel.c1, direction }));
 }
 
 function submitValidation(type: ValidationType, config: ValidationConfig, ctx: MenuContext, close: () => void): void {

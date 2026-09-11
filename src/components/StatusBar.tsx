@@ -17,10 +17,17 @@ export const StatusBar: FC<StatusBarProps> = ({ store, selected, zoom, autoSaveS
   const filledCount = cells.filter(([, cell]) => cell.text.length > 0).length;
 
   const stats = computeSelectionStats(store, selected);
+  const filterCount = computeFilterCount(store);
 
   return (
     <div className="ss-status-bar" role="status" aria-label="Status bar">
       <span className="ss-status-item">单元格: {filledCount}</span>
+      {filterCount !== null && (
+        <>
+          <span className="ss-status-divider">|</span>
+          <span className="ss-status-item">找到 {filterCount.visible} 条记录（共 {filterCount.total} 条）</span>
+        </>
+      )}
       {stats !== null && (
         <>
           <span className="ss-status-divider">|</span>
@@ -34,6 +41,26 @@ export const StatusBar: FC<StatusBarProps> = ({ store, selected, zoom, autoSaveS
       <span className="ss-status-item">{zoom}%</span>
     </div>
   );
+};
+
+/** Excel shows "N of M records found" while AutoFilter criteria hide rows. */
+function computeFilterCount(store: Store): { readonly total: number; readonly visible: number } | null {
+  const filter = store.getAutoFilter();
+  if (filter === undefined || Object.keys(filter.criteria).length === 0) return null;
+  let total = 0;
+  let visible = 0;
+  for (let r = filter.range.r1 + 1; r <= filter.range.r2; r += 1) {
+    let hasData = false;
+    for (let c = filter.range.c1; c <= filter.range.c2; c += 1) {
+      const cell = store.getCell(r, c);
+      if (cell !== undefined && cell.text !== '') { hasData = true; break; }
+    }
+    if (hasData) {
+      total += 1;
+      if (store.getRow(r)?.hide !== true) visible += 1;
+    }
+  }
+  return { total, visible };
 };
 
 interface SelectionStats {

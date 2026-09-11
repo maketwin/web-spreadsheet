@@ -103,6 +103,34 @@
     .ss-excel-ctx__shortcut { color: #666; font-size: 11px; white-space: nowrap; }
     .ss-excel-ctx__divider { height: 1px; margin: 4px 0; background: #e0e0e0; }
 
+    .ss-filter-dropdown {
+      position: fixed;
+      z-index: 1150;
+      width: 280px;
+      padding: 10px;
+      background: #ffffff;
+      border: 1px solid #c6c6c6;
+      box-shadow: 0 4px 12px rgba(0,0,0,.18);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font: 12px "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+    .ss-filter-dropdown__sort { display: flex; gap: 6px; }
+    .ss-filter-dropdown__list { max-height: 250px; overflow: auto; border: 1px solid #e0e0e0; padding: 6px 4px; }
+    .ss-filter-dropdown__list .ant-checkbox-wrapper { display: flex; align-items: center; min-height: 24px; padding: 0 4px; }
+    .ss-filter-dropdown__list .ant-checkbox-wrapper:hover { background: #cce8ff; }
+    .ss-filter-dropdown__value { flex: 1; display: inline-flex; justify-content: space-between; gap: 12px; min-width: 0; }
+    .ss-filter-dropdown__text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .ss-filter-dropdown__count { color: #888; font-size: 11px; }
+    .ss-filter-dropdown__empty { color: #666; text-align: center; padding: 8px 0; }
+    .ss-filter-dropdown__footer { display: flex; justify-content: flex-end; gap: 6px; border-top: 1px solid #e0e0e0; padding-top: 8px; }
+    .ss-filter-dropdown__cond { display: flex; flex-direction: column; gap: 6px; border: 1px solid #e0e0e0; padding: 8px; background: #fafafa; }
+    .ss-filter-dropdown__cond-row { display: flex; gap: 6px; align-items: center; }
+    .ss-filter-dropdown__cond-row .ant-select { min-width: 96px; }
+    .ss-filter-dropdown__cond-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
+    .ss-menu-check { display: inline-flex; align-items: center; gap: 6px; }
     .ss-interaction-toolbar .ss-wrap-btn.ant-btn-sm {
       width: auto;
       min-width: auto;

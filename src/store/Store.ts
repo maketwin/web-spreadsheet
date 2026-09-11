@@ -8,6 +8,7 @@ import type { ValidationRule } from '../validation/types';
 import type { SparklineSpec } from '../sparkline/types';
 import type { NamedRangeDef } from '../namedrange/types';
 import type { SheetProtectionState } from '../protection/SheetProtection';
+import type { AutoFilterState } from '../types';
 
 export interface SheetInfo {
   readonly id: string;
@@ -20,6 +21,11 @@ export class Store {
   private readonly subscribers = new Set<(e: StoreEvent) => void>();
   private activeSheetId = 'sheet-1';
   private nextSheetNumber = 2;
+  private batchDepth = 0;
+  private batchedEvents = new Map<string, StoreEvent>();
+  private batchSeq = 0;
+  private flushing = false;
+  private readonly batchEndListeners = new Set<() => void>();
 
   public constructor() {
     this.sheets.set(this.activeSheetId, new SheetData());
@@ -239,10 +245,58 @@ export class Store {
     return this.requireSheet(sheetId).getProtection()?.protected === true;
   }
 
+  public getAutoFilter(sheetId = this.activeSheetId): AutoFilterState | undefined {
+    return this.requireSheet(sheetId).getAutoFilter();
+  }
+
+  public setAutoFilter(state: AutoFilterState | undefined, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).setAutoFilter(state);
+    this.notify({ type: 'autofilter', sheetId });
+  }
+
   public subscribe(fn: (e: StoreEvent) => void): Unsubscribe {
     this.subscribers.add(fn);
     return () => {
       this.subscribers.delete(fn);
+    };
+  }
+
+  /**
+   * Run `fn` with subscriber notifications deferred. Events are coalesced
+   * per target (last write wins) and delivered once after the batch, so
+   * bulk mutations such as sorting never expose half-updated state to
+   * formula recalculation or rendering.
+   */
+  public batch(fn: () => void): void {
+    this.batchDepth += 1;
+    try {
+      fn();
+    } finally {
+      this.batchDepth -= 1;
+      if (this.batchDepth === 0 && this.batchedEvents.size > 0) {
+        this.flushing = true;
+        try {
+          const events = [...this.batchedEvents.values()];
+          this.batchedEvents.clear();
+          events.forEach((event) => this.notifyNow(event));
+          this.batchEndListeners.forEach((fn2) => fn2());
+        } finally {
+          this.flushing = false;
+        }
+      }
+    }
+  }
+
+  /** True while a batch's coalesced events are being delivered to subscribers. */
+  public isFlushing(): boolean {
+    return this.flushing;
+  }
+
+  /** Invoked after a batch's coalesced events are delivered; never mid-batch. */
+  public onBatchEnd(fn: () => void): Unsubscribe {
+    this.batchEndListeners.add(fn);
+    return () => {
+      this.batchEndListeners.delete(fn);
     };
   }
 
@@ -267,6 +321,15 @@ export class Store {
   }
 
   private notify(e: StoreEvent): void {
+    if (this.batchDepth === 0) {
+      this.notifyNow(e);
+      return;
+    }
+    const key = eventKey(e);
+    this.batchedEvents.set(key === undefined ? `\0${this.batchSeq += 1}` : key, e);
+  }
+
+  private notifyNow(e: StoreEvent): void {
     this.subscribers.forEach((fn) => fn(e));
   }
 
@@ -307,6 +370,19 @@ export class Store {
 
 function eventWithSheet<T extends StoreEvent>(event: T, sheetId: string): T {
   return sheetId === 'sheet-1' ? event : { ...event, sheetId };
+}
+
+/** Coalescing key for deferred batch events; undefined events always fire in order. */
+function eventKey(e: StoreEvent): string | undefined {
+  const sheet = e.sheetId ?? 'sheet-1';
+  switch (e.type) {
+    case 'cell': return `cell:${sheet}:${e.r},${e.c}`;
+    case 'row': return `row:${sheet}:${e.r}`;
+    case 'col': return `col:${sheet}:${e.c}`;
+    case 'style': return `style:${sheet}:${e.id}`;
+    case 'merge': return `merge:${sheet}:${e.range}`;
+    default: return undefined;
+  }
 }
 
 export interface SerializedStore {

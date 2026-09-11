@@ -1,4 +1,4 @@
-import type { Cell, ColMeta, RowMeta, Style } from '../types';
+import type { AutoFilterState, Cell, ColMeta, RowMeta, Style } from '../types';
 import type { ConditionalRule } from '../conditional/ConditionalRule';
 import type { ChartSpec } from '../charts/types';
 import type { ValidationRule } from '../validation/types';
@@ -18,6 +18,7 @@ export interface SerializedSheetData {
   readonly sparklines: SparklineSpec[];
   readonly namedRanges: Array<[string, NamedRangeDef]>;
   readonly protection?: SheetProtectionState | undefined;
+  readonly autoFilter?: AutoFilterState | undefined;
 }
 
 export class SheetData {
@@ -32,6 +33,7 @@ export class SheetData {
   private readonly sparklines = new Map<string, SparklineSpec>();
   private readonly namedRanges = new Map<string, NamedRangeDef>();
   private protection: SheetProtectionState | undefined;
+  private autoFilter: AutoFilterState | undefined;
 
   public getCell(r: number, c: number): Cell | undefined {
     return this.cells.get(keyOf(r, c));
@@ -172,6 +174,14 @@ export class SheetData {
     this.protection = state;
   }
 
+  public getAutoFilter(): AutoFilterState | undefined {
+    return this.autoFilter;
+  }
+
+  public setAutoFilter(state: AutoFilterState | undefined): void {
+    this.autoFilter = state;
+  }
+
   public serialize(): SerializedSheetData {
     return {
       cells: [...this.cells.entries()],
@@ -185,6 +195,7 @@ export class SheetData {
       sparklines: [...this.sparklines.values()],
       namedRanges: [...this.namedRanges.entries()],
       protection: this.protection,
+      autoFilter: this.autoFilter,
     };
   }
 
@@ -201,6 +212,7 @@ export class SheetData {
     data.sparklines.forEach((spec) => sheet.sparklines.set(spec.id, spec));
     data.namedRanges.forEach(([key, value]) => sheet.namedRanges.set(key, value));
     if (data.protection !== undefined) sheet.protection = data.protection;
+    sheet.autoFilter = data.autoFilter;
     return sheet;
   }
 }

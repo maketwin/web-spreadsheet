@@ -23,6 +23,10 @@ export const FormatMenu: FC<FormatMenuProps> = ({ actions }) => <Menu selectable
     { key: 'format:align:left', label: '左对齐' },
     { key: 'format:align:center', label: '居中' },
     { key: 'format:align:right', label: '右对齐' },
+    { type: 'divider' },
+    { key: 'format:valign:top', label: '顶端对齐' },
+    { key: 'format:valign:middle', label: '垂直居中' },
+    { key: 'format:valign:bottom', label: '底端对齐' },
   ] },
   { key: 'format:wrap', label: '自动换行' },
 ]} />;

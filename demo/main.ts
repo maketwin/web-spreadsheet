@@ -22,6 +22,7 @@ document.body.append(root);
 
 const ss = new Spreadsheet(root, { data });
 ss.mount();
+(window as unknown as { __ss: Spreadsheet }).__ss = ss; // debug/test handle
 
 const info = document.createElement('div');
 info.id = 'info';

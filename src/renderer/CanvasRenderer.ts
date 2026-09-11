@@ -30,6 +30,7 @@ export interface CanvasRendererOptions {
   onHeaderContextMenu?: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => void;
   onCellContextMenu?: (cell: CellAddress, x: number, y: number) => void;
   onMoveRange?: (source: RangeAddress, target: RangeAddress) => void;
+  onAutoFilterClick?: (r: number, c: number, x: number, y: number) => void;
 }
 
 type DragAnchor = { type: 'cell'; r: number; c: number } | { type: 'column'; c: number } | { type: 'row'; r: number };
@@ -42,6 +43,9 @@ interface MoveDragState {
 }
 
 const SELECTION_BORDER_HIT_PX = 4;
+const AUTO_FILTER_BUTTON_WIDTH = 16;
+/** Excel colors the row numbers surviving a filter in blue (not the theme accent). */
+const FILTERED_ROW_NUMBER_COLOR = '#0057C2';
 
 /** Logical border edges for the current paint pass (deduped in edge-space). */
 
@@ -145,6 +149,13 @@ export class CanvasRenderer {
     if (h?.type === 'column') { this.opts.canvas.focus(); this.dragAnchor = { type: 'column', c: h.c }; this.opts.onColumnSelect?.(h.c, ev.shiftKey); return; }
     if (h?.type === 'row') { this.opts.canvas.focus(); this.dragAnchor = { type: 'row', r: h.r }; this.opts.onRowSelect?.(h.r, ev.shiftKey); return; }
     const cell = this.pointerCell(ev.clientX, ev.clientY); if (cell === null) return;
+    const filter = this.autoFilterAtPoint(ev.clientX, ev.clientY);
+    if (filter !== null) {
+      this.opts.canvas.focus();
+      this.dragAnchor = null;
+      this.opts.onAutoFilterClick?.(filter.r, filter.c, ev.clientX, ev.clientY);
+      return;
+    }
     this.opts.canvas.focus();
     if (this.selectedRange !== undefined && this.isSelectionBorderHit(ev.clientX, ev.clientY) && this.moveDrag === null) {
       this.moveDrag = {
@@ -269,12 +280,15 @@ export class CanvasRenderer {
     rowYs.push(y);
     for (let r = vis.startRow; r < vis.endRow; r += 1) {
       const h = this.scroller.getRowHeight(r);
-      const level = this.rowHeaderLevel(r);
-      this.paintHeaderHighlight(level, 0.5, y + 0.5, ROW_HEADER_WIDTH - 1, h - 1, theme);
-      this.ctx.fillStyle = level === 'solid' ? theme.bg : headerText;
-      this.ctx.fillText(String(r + 1), ROW_HEADER_WIDTH / 2, y + h / 2);
+      if (this.opts.store.getRow(r)?.hide !== true) {
+        const level = this.rowHeaderLevel(r);
+        this.paintHeaderHighlight(level, 0.5, y + 0.5, ROW_HEADER_WIDTH - 1, h - 1, theme);
+        // Excel colors the surviving row numbers blue while a filter hides rows.
+        this.ctx.fillStyle = level === 'solid' ? theme.bg : this.filteredRowNumberColor(r, theme);
+        this.ctx.fillText(String(r + 1), ROW_HEADER_WIDTH / 2, y + h / 2);
+        rowYs.push(y + h);
+      }
       y += h;
-      rowYs.push(y);
     }
     if (this.selectionKind === 'sheet') { this.ctx.fillStyle = headerSelectionColor(theme); this.ctx.fillRect(1, 1, ROW_HEADER_WIDTH - 2, COL_HEADER_HEIGHT - 2); }
     // Hairline header separators (once per edge)
@@ -294,6 +308,62 @@ export class CanvasRenderer {
       this.ctx.moveTo(0.5, ly); this.ctx.lineTo(rightH - 0.5, ly);
     }
     this.ctx.stroke();
+    this.paintAutoFilterIcons(vis, theme);
+  }
+
+  /** Excel paints visible row numbers blue inside the AutoFilter range while criteria hide rows. */
+  private filteredRowNumberColor(r: number, theme: CanvasTheme): string {
+    const filter = this.opts.store.getAutoFilter();
+    if (filter === undefined || Object.keys(filter.criteria).length === 0) return cssHeaderText(theme);
+    return r > filter.range.r1 && r <= filter.range.r2 ? FILTERED_ROW_NUMBER_COLOR : cssHeaderText(theme);
+  }
+
+  private paintAutoFilterIcons(vis: VisibleRange, theme: CanvasTheme): void {
+    const filter = this.opts.store.getAutoFilter();
+    if (filter === undefined) return;
+    // Excel draws the dropdown button inside each header-row cell, not on
+    // the column-letter header.
+    const headerRow = filter.range.r1;
+    if (headerRow < vis.startRow || headerRow >= vis.endRow) return;
+    const rowHeight = this.scroller.getRowHeight(headerRow);
+    const { y } = this.cellVP(headerRow, filter.range.c1);
+    const first = Math.max(vis.startCol, filter.range.c1);
+    const last = Math.min(vis.endCol - 1, filter.range.c2);
+    for (let c = first; c <= last; c += 1) {
+      const { x } = this.cellVP(headerRow, c);
+      const w = this.scroller.getColWidth(c);
+      const active = filter.criteria[c] !== undefined;
+      this.paintAutoFilterIcon(x + w - AUTO_FILTER_BUTTON_WIDTH - 4, y + rowHeight / 2, theme, active);
+    }
+  }
+
+  private paintAutoFilterIcon(x: number, y: number, theme: CanvasTheme, active: boolean): void {
+    this.ctx.save();
+    this.ctx.fillStyle = active ? theme.accent : cssHeaderText(theme);
+    this.ctx.strokeStyle = this.ctx.fillStyle;
+    this.ctx.lineWidth = 1;
+    this.ctx.beginPath();
+    if (active) {
+      // Excel's active funnel icon
+      const left = x + 2;
+      const right = x + AUTO_FILTER_BUTTON_WIDTH - 2;
+      const top = y - 5;
+      const bottom = y + 6;
+      this.ctx.moveTo(left, top); this.ctx.lineTo(right, top);
+      this.ctx.lineTo(x + AUTO_FILTER_BUTTON_WIDTH / 2 + 1, y + 1);
+      this.ctx.lineTo(x + AUTO_FILTER_BUTTON_WIDTH / 2 + 1, bottom);
+      this.ctx.lineTo(x + AUTO_FILTER_BUTTON_WIDTH / 2 - 1, bottom - 1);
+      this.ctx.lineTo(x + AUTO_FILTER_BUTTON_WIDTH / 2 - 1, y + 1);
+      this.ctx.closePath();
+      this.ctx.fill();
+    } else {
+      // Excel's idle dropdown chevron
+      this.ctx.moveTo(x + 4, y - 2);
+      this.ctx.lineTo(x + AUTO_FILTER_BUTTON_WIDTH / 2, y + 3);
+      this.ctx.lineTo(x + AUTO_FILTER_BUTTON_WIDTH - 4, y - 2);
+      this.ctx.stroke();
+    }
+    this.ctx.restore();
   }
 
   private paintCellBackgrounds(vis: VisibleRange, theme: CanvasTheme): void {
@@ -485,6 +555,7 @@ export class CanvasRenderer {
     const fr = nf !== undefined && nf !== 'general' ? formatValue(cell.value, nf) : undefined;
     const text = fr?.formatted === true ? fr.text : rawText;
     const align = style?.align ?? 'left';
+    const valign = style?.valign ?? 'middle';
     const wrapping = style?.wrap === true;
 
     this.ctx.save();
@@ -508,7 +579,13 @@ export class CanvasRenderer {
     const maxW = Math.max(4, cw - 6);
     const lines = wrapping ? wrapTextLinesCanvas(this.ctx, text, maxW) : [text.replace(/\r?\n/g, '')];
     const lineH = fontSize * WRAP_LINE_HEIGHT;
-    const startY = wrapping ? y + 2 + fontSize * 0.55 : y + rh / 2;
+    const contentHeight = lines.length * lineH;
+    const contentTop = valign === 'top'
+      ? y + 2
+      : valign === 'middle'
+        ? y + rh / 2 - contentHeight / 2
+        : y + rh - 2 - contentHeight;
+    const startY = contentTop + lineH / 2;
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i]!;
       const ly = startY + i * lineH;
@@ -826,6 +903,18 @@ export class CanvasRenderer {
     return r >= TOTAL_ROWS ? TOTAL_ROWS - 1 : r;
   }
 
+  private autoFilterAtPoint(clientX: number, clientY: number): CellAddress | null {
+    const filter = this.opts.store.getAutoFilter();
+    if (filter === undefined) return null;
+    const cell = this.pointerCell(clientX, clientY);
+    if (cell === null || cell.r !== filter.range.r1) return null;
+    if (cell.c < filter.range.c1 || cell.c > filter.range.c2) return null;
+    const { x } = this.cellVP(cell.r, cell.c);
+    const w = this.scroller.getColWidth(cell.c);
+    const px = clientX - this.opts.canvas.getBoundingClientRect().left;
+    return px >= x + w - AUTO_FILTER_BUTTON_WIDTH - 6 && px <= x + w - 2 ? cell : null;
+  }
+
   private headerAtPoint(clientX: number, clientY: number): HeaderHit {
     const rect = this.opts.canvas.getBoundingClientRect();
     const mx = clientX - rect.left;
@@ -849,13 +938,22 @@ export class CanvasRenderer {
 
   private syncSizesFromStore(): void {
     const z = this.zoom();
-    for (let r = 0; r < TOTAL_ROWS; r += 1) { const h = this.opts.store.getRow(r)?.height; if (h !== undefined) this.scroller.setRowHeight(r, h * z); }
+    for (let r = 0; r < TOTAL_ROWS; r += 1) {
+      const meta = this.opts.store.getRow(r);
+      // Excel collapses AutoFilter-hidden rows to zero height so lower rows shift up.
+      if (meta?.hide === true) this.scroller.setRowHeight(r, 0);
+      else if (meta?.height !== undefined) this.scroller.setRowHeight(r, meta.height * z);
+    }
     for (let c = 0; c < TOTAL_COLS; c += 1) { const w = this.opts.store.getCol(c)?.width; if (w !== undefined) this.scroller.setColWidth(c, w * z); }
   }
 
   private onStoreEvent(e: StoreEvent): void {
     const z = this.zoom();
-    if (e.type === 'row') { const h = e.meta?.height; this.scroller.setRowHeight(e.r, h !== undefined ? h * z : this.defaultRowHeight()); }
+    if (e.type === 'row') {
+      const hidden = e.meta?.hide === true;
+      const h = e.meta?.height;
+      this.scroller.setRowHeight(e.r, hidden ? 0 : h !== undefined ? h * z : this.defaultRowHeight());
+    }
     if (e.type === 'col') { const w = e.meta?.width; this.scroller.setColWidth(e.c, w !== undefined ? w * z : this.defaultColWidth()); }
     this.invalidateAll();
   }

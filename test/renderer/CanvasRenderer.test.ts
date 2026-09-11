@@ -245,6 +245,27 @@ describe('CanvasRenderer', () => {
     renderer.destroy();
   });
 
+  it('aligns cell text vertically and defaults to middle', () => {
+    const paintText = (valign?: 'top' | 'middle' | 'bottom'): number => {
+      const ctx = installCanvasContext();
+      const callbacks = installAnimationFrames();
+      const store = new Store();
+      store.setCell(0, 0, { text: 'A1', styleId: 'style-1' });
+      store.setStyle('style-1', valign === undefined ? {} : { valign });
+      const renderer = new CanvasRenderer({ canvas: makeCanvas(), store });
+      callbacks[0]?.(0);
+      const call = (ctx.fillText as ReturnType<typeof vi.fn>).mock.calls.find((items) => items[0] === 'A1');
+      renderer.destroy();
+      document.body.innerHTML = '';
+      vi.restoreAllMocks();
+      if (call === undefined) throw new Error('Text was not painted');
+      return Number(call[2]);
+    };
+
+    expect(paintText()).toBe(paintText('middle'));
+    expect(paintText('bottom')).toBeGreaterThan(paintText('top'));
+  });
+
   it('skips non-first cells in merged regions', () => {
     const ctx = installCanvasContext();
     const callbacks = installAnimationFrames();
@@ -279,3 +300,80 @@ function installAnimationFrames(): FrameRequestCallback[] {
   vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => undefined);
   return callbacks;
 }
+
+describe('CanvasRenderer AutoFilter header-row buttons', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.innerHTML = '';
+  });
+
+  it('opens the filter popup only when the in-cell dropdown button is clicked', () => {
+    installCanvasContext();
+    installAnimationFrames();
+    const onAutoFilterClick = vi.fn();
+    const store = new Store();
+    store.setCell(0, 0, { text: 'Name' });
+    store.setCell(1, 0, { text: 'Alice' });
+    store.setAutoFilter({ range: { r1: 0, c1: 0, r2: 1, c2: 0 }, criteria: {} });
+    const canvas = makeCanvas();
+    const renderer = new CanvasRenderer({ canvas, store, onAutoFilterClick });
+
+    // Middle of the header cell: plain cell click, no popup.
+    fireEvent.mouseDown(canvas, { clientX: 10 + ROW_HEADER_WIDTH + 20, clientY: 20 + COL_HEADER_HEIGHT + 10 });
+    expect(onAutoFilterClick).not.toHaveBeenCalled();
+
+    // Column-letter header: selects the column, no popup.
+    fireEvent.mouseDown(canvas, { clientX: 10 + ROW_HEADER_WIDTH + 30, clientY: 20 + 10 });
+    expect(onAutoFilterClick).not.toHaveBeenCalled();
+
+    // Right edge of the header-row cell (the Excel dropdown button zone).
+    fireEvent.mouseDown(canvas, { clientX: 10 + ROW_HEADER_WIDTH + COL_WIDTH - 8, clientY: 20 + COL_HEADER_HEIGHT + 10 });
+    expect(onAutoFilterClick).toHaveBeenCalledWith(0, 0, expect.any(Number), expect.any(Number));
+    renderer.destroy();
+  });
+});
+
+describe('CanvasRenderer collapsed (hidden) rows', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    document.body.innerHTML = '';
+  });
+
+  function setup(): { renderer: CanvasRenderer; store: Store } {
+    installCanvasContext();
+    installAnimationFrames();
+    const store = new Store();
+    for (let r = 0; r < 5; r += 1) store.setCell(r, 0, { text: `v${r}` });
+    const canvas = makeCanvas();
+    const renderer = new CanvasRenderer({ canvas, store });
+    return { renderer, store };
+  }
+
+  it('collapses a hidden row to zero height and shifts lower rows up', () => {
+    const { renderer, store } = setup();
+    expect(renderer.getCellViewportRect(3, 0)).toEqual({ x: ROW_HEADER_WIDTH, y: COL_HEADER_HEIGHT + 3 * ROW_HEIGHT, w: COL_WIDTH, h: ROW_HEIGHT });
+    store.setRow(2, { hide: true });
+    expect(renderer.getCellViewportRect(2, 0).h).toBe(0);
+    // Excel fold-up: row 3's data now renders where row 2 was.
+    expect(renderer.getCellViewportRect(3, 0).y).toBe(COL_HEADER_HEIGHT + 2 * ROW_HEIGHT);
+    renderer.destroy();
+  });
+
+  it('restores the row height when unhidden', () => {
+    const { renderer, store } = setup();
+    store.setRow(2, { hide: true });
+    store.setRow(2, { hide: false });
+    expect(renderer.getCellViewportRect(2, 0).h).toBe(ROW_HEIGHT);
+    expect(renderer.getCellViewportRect(3, 0).y).toBe(COL_HEADER_HEIGHT + 3 * ROW_HEIGHT);
+    renderer.destroy();
+  });
+
+  it('maps clicks in the collapsed slot to the next visible row', () => {
+    const { renderer, store } = setup();
+    store.setRow(2, { hide: true });
+    // Canvas y inside the collapsed slot's former area maps to row 3 (canvas top = 20).
+    const hit = renderer.rowAtPoint(20 + COL_HEADER_HEIGHT + 2 * ROW_HEIGHT + 5);
+    expect(hit).toBe(3);
+    renderer.destroy();
+  });
+});

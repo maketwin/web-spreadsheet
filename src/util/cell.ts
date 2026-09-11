@@ -1,4 +1,5 @@
-import type { Cell, CellValue } from '../types';
+import type { Cell, CellValue, Style } from '../types';
+import { formatValue } from '../format/NumberFormatter';
 import { alpha2num } from './alphabet';
 
 export interface CellAddress {
@@ -55,6 +56,69 @@ export function formulaText(cell: Cell | undefined): string | undefined {
 
 export function cellId(r: number, c: number): string {
   return `${r},${c}`;
+}
+
+/**
+ * The value a cell shows on screen: number-formatted text when a
+ * non-general numberFormat applies, otherwise the raw text. Excel's filter
+ * UI operates on this display value, not the underlying input.
+ */
+export function displayTextOf(cell: Cell | undefined, style: Style | undefined): string {
+  if (cell === undefined) return '';
+  const nf = style?.numberFormat;
+  if (nf !== undefined && nf !== 'general') {
+    const result = formatValue(cell.value, nf);
+    if (result.formatted) return result.text;
+  }
+  return cell.text;
+}
+
+const REF_OR_RANGE_TOKEN = /\$?[A-Za-z]{1,3}\$?[1-9]\d*(?::\$?[A-Za-z]{1,3}\$?[1-9]\d*)?(?![\w(])/g;
+
+/**
+ * Rewrite same-sheet A1 references pointing inside the sorted range through
+ * the row permutation, mirroring Excel sort semantics: moved formulas keep
+ * referencing the same logical data. Range endpoints are re-normalized so a
+ * permutation cannot flip a range like B2:B4 into B5:B3. References outside
+ * the range (and cross-sheet references) are left untouched.
+ */
+export function remapFormulaRows(formula: string, rows: ReadonlyMap<number, number>, c1: number, c2: number): string {
+  return formula.replace(REF_OR_RANGE_TOKEN, (token, offset: number) => {
+    // A token glued to a preceding identifier, number, '!', or '.' is part
+    // of a function name, scientific literal, or cross-sheet reference.
+    const prev = formula[offset - 1];
+    if (prev !== undefined && /[\w$!.]/.test(prev)) return token;
+    const parts = token.split(':');
+    const start = parseRefToken(parts[0] ?? '');
+    if (start === null) return token;
+    const end = parts[1] !== undefined ? parseRefToken(parts[1]) : undefined;
+    const startTarget = inSortDomain(start.c, c1, c2) ? rows.get(start.r) : undefined;
+    const endTarget = end !== null && end !== undefined && inSortDomain(end.c, c1, c2) ? rows.get(end.r) : undefined;
+    if (startTarget === undefined && endTarget === undefined) return token;
+    let from = { ...start, r: startTarget ?? start.r };
+    let to = end === null || end === undefined ? null : { ...end, r: endTarget ?? end.r };
+    if (to !== null && (to.r < from.r || (to.r === from.r && to.c < from.c))) {
+      const swap = from;
+      from = to;
+      to = swap;
+    }
+    const rebuilt = rebuildRefToken(parts[0] ?? '', from.r);
+    return to === null ? rebuilt : `${rebuilt}:${rebuildRefToken(parts[1] ?? '', to.r)}`;
+  });
+}
+
+function inSortDomain(col: number, c1: number, c2: number): boolean {
+  return col >= c1 && col <= c2;
+}
+
+function rebuildRefToken(token: string, r0: number): string {
+  return token.replace(/[1-9]\d*$/, String(r0 + 1));
+}
+
+function parseRefToken(token: string): { readonly r: number; readonly c: number } | null {
+  const match = token.match(/^(\$?)([A-Za-z]{1,3})(\$?)([1-9]\d*)$/);
+  if (match === null || match[2] === undefined || match[4] === undefined) return null;
+  return { r: Number(match[4]) - 1, c: alpha2num(match[2].toUpperCase()) };
 }
 
 export function formulaDependencies(formula: string): string[] {

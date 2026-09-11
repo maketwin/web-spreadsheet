@@ -23,6 +23,7 @@ describe('domain types', () => {
   it('supports style alignment and borders', () => {
     expectTypeOf<Style>().toMatchTypeOf<{
       align?: 'left' | 'center' | 'right';
+      valign?: 'top' | 'middle' | 'bottom';
       border?: { top?: string; bottom?: string; left?: string; right?: string };
     }>();
   });
@@ -35,6 +36,7 @@ describe('domain types', () => {
       | { type: 'style'; id: string; style: Style | undefined }
       | { type: 'merge'; range: string }
       | { type: 'sheet'; action: 'activate' | 'add' | 'rename' | 'delete'; sheetId: string; name?: string }
+      | { type: 'autofilter'; sheetId: string }
     >();
   });
 
