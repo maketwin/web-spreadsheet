@@ -12,6 +12,7 @@ export function exportXlsxBuffer(store: Store): ArrayBuffer {
     const cells = sheetData.getCells();
     const aoa = buildAoa(cells);
     const ws = XLSX.utils.aoa_to_sheet(aoa);
+    applyNumberFormats(ws, cells, store, id);
     XLSX.utils.book_append_sheet(wb, ws, name);
   }
 
@@ -21,6 +22,29 @@ export function exportXlsxBuffer(store: Store): ArrayBuffer {
 export function exportXlsx(store: Store): Blob {
   const buf = exportXlsxBuffer(store);
   return new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+const BUILT_IN_NUMFMT: Readonly<Record<string, string>> = {
+  number: '#,##0.00',
+  currency: '¥#,##0.00',
+  percent: '0.00%',
+  date: 'yyyy-mm-dd',
+  time: 'hh:mm:ss',
+  scientific: '0.00E+00',
+};
+
+/** Write each styled cell's number format into the xlsx cell `z` field. */
+function applyNumberFormats(ws: XLSX.WorkSheet, cells: readonly [string, Cell][], store: Store, sheetId: string): void {
+  for (const [key, cell] of cells) {
+    if (cell.styleId === undefined) continue;
+    const nf = store.getStyle(cell.styleId, sheetId)?.numberFormat;
+    if (nf === undefined || nf === 'general') continue;
+    const [r, c] = key.split(',').map(Number);
+    const addr = XLSX.utils.encode_cell({ r: r ?? 0, c: c ?? 0 });
+    const existing = ws[addr] as XLSX.CellObject | undefined;
+    if (existing === undefined) continue;
+    existing.z = BUILT_IN_NUMFMT[nf] ?? nf;
+  }
 }
 
 function buildAoa(cells: readonly [string, Cell][]): (string | number | null)[][] {
