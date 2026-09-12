@@ -43,7 +43,8 @@ VirtualScroller 的全部坐标换算（`cellToPixel`、`rowAtPixel`、`colAtPix
 - **网格层**（主 canvas）：背景、网格线、单元格文本/样式、边框、表头、条件格式。
   仅在数据/样式/滚动/尺寸变化时重绘。
 - **覆盖层**（`.ss-overlay-canvas`，`pointer-events: none`）：选区框、填充柄、
-  填充拖拽目标、移动拖拽虚线框、查找高亮、resize 指示线。选区等高频交互只重画
+  填充拖拽目标、移动拖拽虚线框、剪贴板蚂蚁线（120ms 步进的流动虚线框，与选中
+  范围重合时替换选区实线边框）、查找高亮、resize 指示线。选区等高频交互只重画
   覆盖层，网格层最多重绘表头染色条带。
 
 ## 滚动：blit 快照 + 滚轮支持
@@ -75,8 +76,8 @@ VirtualScroller 的全部坐标换算（`cellToPixel`、`rowAtPixel`、`colAtPix
 
 - 所有失效走 `invalidateAll()` / 脏矩形 → `requestAnimationFrame` 合并到下一帧；
 - 常用公共方法：`setSelection` / `setSelectedRange` / `setEditing` / `setFreeze` /
-  `setHighlightMatches` / `scrollBy` / `cellAtPoint` / `rowAtPoint` / `columnAtPoint` /
-  `getCellViewportRect` / `scrollState` / `destroy`。
+  `setClipboardRange`（蚂蚁线）/ `setHighlightMatches` / `scrollBy` / `cellAtPoint` /
+  `rowAtPoint` / `columnAtPoint` / `getCellViewportRect` / `scrollState` / `destroy`。
 
 ## 性能基准
 

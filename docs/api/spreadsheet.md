@@ -207,7 +207,9 @@ new VirtualScroller(opts: VirtualScrollerOptions)
 
 ## ClipboardService
 
-剪贴板服务（全静态方法）。
+剪贴板服务（全静态方法）。`ClipboardService` 本身无状态；内置 UI 在其上实现了
+剪贴板会话（复制/剪切蚂蚁线、剪切移动语义），详见
+[文件 I/O 与持久化 → 应用内剪贴板会话](/guide/io#应用内剪贴板会话-蚂蚁线)。
 
 | 方法 | 说明 |
 |------|------|
@@ -227,7 +229,7 @@ new VirtualScroller(opts: VirtualScrollerOptions)
 
 | 类 | 职责 | 文档 |
 |----|------|------|
-| `FilterService` | 自动筛选条件、下拉项、排序 | [数据功能](/guide/data-features) |
+| `FilterService` | 自动筛选条件、下拉项、排序、筛选范围推断（`autoFilterRangeFor`） | [数据功能](/guide/data-features) |
 | `DataValidationService` | 数据验证（`validate(value, rule)`） | [格式化](/guide/formatting) |
 | `ConditionalService` | 条件格式覆盖层（`computeOverlay(store, r, c)`） | [格式化](/guide/formatting) |
 | `NamedRangeService` | 命名区域增删查与公式解析 | [数据功能](/guide/data-features) |
