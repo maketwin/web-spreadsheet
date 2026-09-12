@@ -24,7 +24,7 @@ web-spreadsheet 是一个分层清晰的 TypeScript SDK：上层业务只接触 
 | Store | `src/store/` | 响应式数据层：单元格、样式、合并、各功能规则；变更通过 `subscribe` 广播 |
 | Formula | `src/formula/` | 解析器 → 依赖图 → 求值器，增量重算 |
 | Events | `src/events/` | `EventBus`：命令执行/撤销/重做等事件的发布订阅 |
-| Renderer | `src/renderer/` | Canvas 渲染：`VirtualScroller` 虚拟滚动 + `DirtyRegionTracker` 脏区域重绘 + `FillHandle` 填充柄 + `FreezeManager` 冻结 |
+| Renderer | `src/renderer/` | Canvas 渲染：`VirtualScroller`（AxisIndex 前缀和索引）+ `DirtyRegionTracker` 脏区域重绘 + 双 canvas 分层 + 滚动 blit 缓存 + `FreezeManager` 四象限冻结，详见 [渲染层](./rendering.md) |
 | Components | `src/components/` | React UI：菜单栏、工具栏、编辑器、底部状态栏、Sheet 标签页 |
 
 ## 周边功能模块
@@ -47,9 +47,14 @@ web-spreadsheet 是一个分层清晰的 TypeScript SDK：上层业务只接触 
 
 ## 渲染性能要点
 
-- **虚拟滚动**：`VirtualScroller` 只计算可视区域（默认 1000×26 的画布网格），行高列宽可变。
+- **虚拟滚动**：`VirtualScroller` 只计算可视区域（默认 1000×26 的画布网格），行高列宽可变；坐标查询由 `AxisIndex` 前缀和索引支撑，O(log n)。
+- **双 canvas 分层**：网格层与覆盖层（选区/手柄/拖拽框）分离，高频交互不再触发网格重绘。
+- **滚动 blit 缓存**：纯滚动平移上一帧快照，只重绘新暴露条带与钉住的表头区域。
+- **文本测量缓存**：`TextMetricsCache`（LRU 5000）消除热路径中的 `measureText` 调用。
 - **脏区域重绘**：`DirtyRegionTracker` 合并重绘矩形，避免整画布刷新。
 - **缩放**：`zoom` 影响 `defaultRowHeight/ColWidth` 的计算（行高 × zoom）。
+
+完整的渲染层设计见 [渲染层](./rendering.md)。
 
 ## 数据流示例：用户编辑一个单元格
 

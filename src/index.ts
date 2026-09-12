@@ -44,6 +44,7 @@ export type { PixelPosition, VisibleRange, VirtualScrollerOptions } from './rend
 export { Store } from './store/Store';
 export { SheetData } from './store/SheetData';
 export { Range } from './selection/Range';
+export { currentRegion, excelSelectAll } from './selection/currentRegion';
 export { ClipboardService } from './clipboard/ClipboardService';
 export { KeyboardHandler } from './keys/KeyboardHandler';
 export type { SerializedStore } from './store/Store';

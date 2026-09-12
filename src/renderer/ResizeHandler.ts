@@ -32,6 +32,11 @@ export interface ResizeHandlerOptions {
   onRowDblClick?: ((r: number) => void) | undefined;
   onColDblClick?: ((c: number) => void) | undefined;
   invalidate: () => void;
+  /** Freeze-aware viewport mappings from the owning renderer (fallback: scroll-only math). */
+  rowTopAt?: (r: number) => number;
+  colLeftAt?: (c: number) => number;
+  frozenRows?: () => number;
+  frozenCols?: () => number;
 }
 
 const BORDER_THRESHOLD = 3;
@@ -113,10 +118,8 @@ export class ResizeHandler {
     const scaledMax = maxSize * zoom;
     d.size = clamp(d.startSize + delta, scaledMin, scaledMax);
     d.position = d.type === 'row'
-      ? COL_HEADER_HEIGHT + this.rowBottom(d.index) - this.opts.scroller.scrollTop
-        + (d.size - this.opts.scroller.getRowHeight(d.index))
-      : ROW_HEADER_WIDTH + this.colRight(d.index) - this.opts.scroller.scrollLeft
-        + (d.size - this.opts.scroller.getColWidth(d.index));
+      ? this.rowTopAt(d.index) + d.size
+      : this.colLeftAt(d.index) + d.size;
     this.opts.invalidate();
   }
 
@@ -125,40 +128,48 @@ export class ResizeHandler {
     const mx = clientX - rect.left;
     const my = clientY - rect.top;
     if (mx >= 0 && mx < ROW_HEADER_WIDTH) {
-      const gy = my - COL_HEADER_HEIGHT + this.opts.scroller.scrollTop;
-      let y = 0;
       const range = this.opts.scroller.getVisibleRange();
-      for (let r = range.startRow; r < range.endRow; r += 1) {
-        y += this.opts.scroller.getRowHeight(r);
-        if (Math.abs(gy - y) <= BORDER_THRESHOLD) {
-          return { type: 'row', index: r, canvasPos: COL_HEADER_HEIGHT + y - this.opts.scroller.scrollTop };
+      const rEnd = Math.max(range.endRow, this.opts.frozenRows?.() ?? 0);
+      for (let r = 0; r < rEnd; r += 1) {
+        const edge = this.rowTopAt(r) + this.opts.scroller.getRowHeight(r);
+        if (Math.abs(my - edge) <= BORDER_THRESHOLD) {
+          return { type: 'row', index: r, canvasPos: edge };
         }
       }
     }
     if (my >= 0 && my < COL_HEADER_HEIGHT) {
-      const gx = mx - ROW_HEADER_WIDTH + this.opts.scroller.scrollLeft;
-      let x = 0;
       const range = this.opts.scroller.getVisibleRange();
-      for (let c = range.startCol; c < range.endCol; c += 1) {
-        x += this.opts.scroller.getColWidth(c);
-        if (Math.abs(gx - x) <= BORDER_THRESHOLD) {
-          return { type: 'col', index: c, canvasPos: ROW_HEADER_WIDTH + x - this.opts.scroller.scrollLeft };
+      const cEnd = Math.max(range.endCol, this.opts.frozenCols?.() ?? 0);
+      for (let c = 0; c < cEnd; c += 1) {
+        const edge = this.colLeftAt(c) + this.opts.scroller.getColWidth(c);
+        if (Math.abs(mx - edge) <= BORDER_THRESHOLD) {
+          return { type: 'col', index: c, canvasPos: edge };
         }
       }
     }
     return null;
   }
 
-  private rowBottom(r: number): number {
-    let y = 0;
-    for (let i = 0; i <= r; i += 1) y += this.opts.scroller.getRowHeight(i);
-    return y;
+  /** Viewport y of a row's top edge — freeze-aware when the renderer provides a mapping. */
+  private rowTopAt(r: number): number {
+    if (this.opts.rowTopAt !== undefined) return this.opts.rowTopAt(r);
+    return COL_HEADER_HEIGHT + this.pixelTop(r) - this.opts.scroller.scrollTop;
   }
 
-  private colRight(c: number): number {
-    let x = 0;
-    for (let i = 0; i <= c; i += 1) x += this.opts.scroller.getColWidth(i);
-    return x;
+  /** Viewport x of a column's left edge — freeze-aware when the renderer provides a mapping. */
+  private colLeftAt(c: number): number {
+    if (this.opts.colLeftAt !== undefined) return this.opts.colLeftAt(c);
+    return ROW_HEADER_WIDTH + this.pixelLeft(c) - this.opts.scroller.scrollLeft;
+  }
+
+  private pixelTop(r: number): number {
+    const pos = this.opts.scroller.cellToPixel(r, 0);
+    return pos.y;
+  }
+
+  private pixelLeft(c: number): number {
+    const pos = this.opts.scroller.cellToPixel(0, c);
+    return pos.x;
   }
 }
 

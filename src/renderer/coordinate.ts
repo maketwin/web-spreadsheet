@@ -52,7 +52,7 @@ export function clamp(value: number, min: number, max: number): number {
 
 export interface CanvasTheme {
   readonly bg: string; readonly text: string; readonly grid: string; readonly selected: string;
-  readonly headerBg: string; readonly accent: string; readonly fontFamily: string; readonly border: string;
+  readonly headerBg: string; readonly accent: string; readonly fontFamily: string; readonly border: string; readonly freezeLine: string;
   readonly headerFilter?: string;
 }
 
@@ -61,7 +61,7 @@ export function readCanvasTheme(): CanvasTheme {
   return {
     bg: cssV(s, '--ss-bg', '#fff'), text: cssV(s, '--ss-text', '#000000'), grid: cssV(s, '--ss-grid', '#e0e0e0'),
     selected: cssV(s, '--ss-selected', '#e7f1ea'), headerBg: cssV(s, '--ss-header-bg', '#ececec'),
-    accent: cssV(s, '--ss-accent', '#217346'), fontFamily: cssV(s, '--ss-font-family', 'Calibri, "Segoe UI", "Microsoft YaHei", sans-serif'), border: cssV(s, '--ss-border', '#bdbdbd'),
+    accent: cssV(s, '--ss-accent', '#217346'), fontFamily: cssV(s, '--ss-font-family', 'Calibri, "Segoe UI", "Microsoft YaHei", sans-serif'), border: cssV(s, '--ss-border', '#bdbdbd'), freezeLine: cssV(s, '--ss-freeze-line', '#6f6f6f'),
     headerFilter: cssV(s, '--ss-header-filter', '#999'),
   };
 }

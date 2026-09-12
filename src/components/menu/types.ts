@@ -7,6 +7,8 @@ export interface MenuContext {
   readonly store: Store;
   readonly cmdManager?: CommandManager;
   readonly selected: RangeAddress | null;
+  /** Active cell for Excel Freeze Panes (rows above / cols left). */
+  readonly activeCell?: { readonly r: number; readonly c: number } | null;
   readonly selectRange: (range: RangeAddress) => void;
   readonly clearRange: () => void;
   readonly allRange: () => void;

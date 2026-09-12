@@ -12,6 +12,10 @@ function makeHandle(selected: RangeAddress, onFill: (source: RangeAddress, targe
     cellToPixel: (r: number, c: number) => ({ x: c * CELL_W, y: r * CELL_H }),
     getColWidth: () => CELL_W,
     getRowHeight: () => CELL_H,
+    rowAtPixel: (y: number) => Math.floor(y / CELL_H),
+    colAtPixel: (x: number) => Math.floor(x / CELL_W),
+    totalWidth: () => Number.MAX_SAFE_INTEGER,
+    totalHeight: () => Number.MAX_SAFE_INTEGER,
     scrollLeft: 0,
     scrollTop: 0,
   } as unknown as VirtualScroller;

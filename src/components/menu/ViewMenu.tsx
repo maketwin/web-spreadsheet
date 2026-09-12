@@ -14,7 +14,11 @@ export const ViewMenu: FC<ViewMenuProps> = ({ actions, view }) => <Menu selectab
   { key: 'view:formula', label: <ToggleLabel text="显示公式" checked={view.showFormula} onChange={view.setShowFormula} /> },
   { key: 'view:grid', label: <ToggleLabel text="显示网格线" checked={view.showGrid} onChange={view.setShowGrid} /> },
   { type: 'divider' },
-  { key: 'view:freeze', label: '冻结窗格' },
+  { key: 'view:freezeMenu', label: '冻结窗格', children: [
+    { key: 'view:freeze:panes', label: '冻结窗格' },
+    { key: 'view:freeze:topRow', label: '冻结首行' },
+    { key: 'view:freeze:firstCol', label: '冻结首列' },
+  ] },
   { key: 'view:fitWidth', label: '适应窗口宽度' },
 ]} />;
 

@@ -63,6 +63,10 @@ export const MenuBar: FC<MenuBarProps> = (props) => {
   const view = makeView(props.view, zoom, showFormula, showGrid, frozenRows, frozenCols, setZoom, setShowFormula, setShowGrid, setFrozenRows, setFrozenCols);
   const actions = useMemo(() => makeActions(props, setDialog, view, fileInput, xlsxInput), [props, view]);
   useEffect(() => { if (props.openDialogKey !== undefined && props.openDialogKey !== null) setDialog(props.openDialogKey); }, [props.openDialogKey]);
+  useEffect(() => {
+    if (props.view?.frozenRows !== undefined) setFrozenRows(props.view.frozenRows);
+    if (props.view?.frozenCols !== undefined) setFrozenCols(props.view.frozenCols);
+  }, [props.view?.frozenRows, props.view?.frozenCols]);
 
   const menus = topMenus(actions, view, props);
   return <div className="ss-menu-bar" role="menubar" aria-orientation="horizontal" aria-label="Spreadsheet menu">
@@ -132,6 +136,7 @@ function editItems(): NonNullable<MenuProps['items']> {
 }
 
 function viewItems(view: ViewState): NonNullable<MenuProps['items']> {
+  const frozen = view.frozenRows > 0 || view.frozenCols > 0;
   return [
     item('view:zoom100', shortcutLabel('100%', 'Ctrl+0')),
     item('view:zoom', '缩放级别...'),
@@ -141,7 +146,12 @@ function viewItems(view: ViewState): NonNullable<MenuProps['items']> {
     item('view:formula', <ToggleLabel text="显示公式" checked={view.showFormula} />),
     item('view:grid', <ToggleLabel text="显示网格线" checked={view.showGrid} />),
     divider('view:divider:2'),
-    item('view:freeze', view.frozenRows > 0 || view.frozenCols > 0 ? '取消冻结窗格' : '冻结窗格'),
+    // Excel 视图 → 冻结窗格：冻结窗格 / 冻结首行 / 冻结首列
+    { key: 'view:freezeMenu', label: '冻结窗格', children: [
+      item('view:freeze:panes', frozen ? '取消冻结窗格' : '冻结窗格'),
+      item('view:freeze:topRow', '冻结首行'),
+      item('view:freeze:firstCol', '冻结首列'),
+    ] },
     item('view:fitWidth', '适应窗口宽度'),
   ];
 }
@@ -258,7 +268,7 @@ function runMenuAction(key: string, ctx: MenuContext, openDialog: (name: DialogN
   else if (key.startsWith('edit:')) runEditAction(key, ctx, openDialog);
   else if (key.startsWith('insert:')) runInsertAction(key, ctx, openDialog);
   else if (key.startsWith('format:')) runFormatAction(key, ctx, openDialog);
-  else if (key.startsWith('view:')) runViewAction(key, view, openDialog);
+  else if (key.startsWith('view:')) runViewAction(key, view, openDialog, ctx);
   else if (key.startsWith('data:')) runDataAction(key, ctx, openDialog);
   else if (key.startsWith('review:')) runReviewAction(key, ctx, openDialog);
   else if (key.startsWith('help:')) runHelpAction(key, openDialog);
@@ -325,18 +335,33 @@ function selectionHasWrap(ctx: { readonly store: MenuContext['store']; readonly 
   return ctx.store.getStyle(cell.styleId)?.wrap === true;
 }
 
-function runViewAction(key: string, view: ViewState, openDialog: (name: DialogName) => void): void {
+function runViewAction(key: string, view: ViewState, openDialog: (name: DialogName) => void, ctx: MenuContext): void {
   if (key === 'view:zoom100') view.setZoom(100);
   if (key === 'view:zoom') openDialog('zoom');
   if (key === 'view:zoomIn') view.setZoom(Math.min(200, view.zoom + 10));
   if (key === 'view:zoomOut') view.setZoom(Math.max(50, view.zoom - 10));
   if (key === 'view:formula') view.setShowFormula(!view.showFormula);
   if (key === 'view:grid') view.setShowGrid(!view.showGrid);
-  if (key === 'view:freeze') {
+  if (key === 'view:freeze:panes' || key === 'view:freeze') {
+    // Excel: when already frozen → unfreeze; else freeze rows above / cols left of active cell
     if (view.frozenRows > 0 || view.frozenCols > 0) view.setFreeze(0, 0);
-    else view.setFreeze(1, 1);
+    else {
+      const cell = freezeActiveCell(ctx);
+      view.setFreeze(cell.r, cell.c);
+    }
   }
+  if (key === 'view:freeze:topRow') view.setFreeze(1, 0);
+  if (key === 'view:freeze:firstCol') view.setFreeze(0, 1);
   if (key === 'view:fitWidth') view.setZoom(120);
+}
+
+/** Excel Freeze Panes uses the active cell: freeze everything above and to the left. */
+function freezeActiveCell(ctx: MenuContext): { r: number; c: number } {
+  if (ctx.activeCell !== undefined && ctx.activeCell !== null) {
+    return { r: Math.max(0, ctx.activeCell.r), c: Math.max(0, ctx.activeCell.c) };
+  }
+  if (ctx.selected !== null) return { r: Math.max(0, ctx.selected.r1), c: Math.max(0, ctx.selected.c1) };
+  return { r: 0, c: 0 };
 }
 
 function runDataAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void): void {

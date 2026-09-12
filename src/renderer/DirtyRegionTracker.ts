@@ -27,7 +27,7 @@ export class DirtyRegionTracker {
   }
 
   public invalidateAll(): void {
-    this.regions = [{ x: 0, y: 0, w: Number.MAX_SAFE_INTEGER, h: Number.MAX_SAFE_INTEGER }];
+    this.regions = [{ x: 0, y: 0, w: 1 << 24, h: 1 << 24 }];
   }
 
   public drain(): Rect[] {

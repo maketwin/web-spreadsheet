@@ -37,6 +37,7 @@ import { ErrorBoundary } from './ErrorBoundary';
 import { StatusBar } from './StatusBar';
 import { FormulaBar } from './FormulaBar';
 import { MenuBar, allSheetRange } from './menu/MenuBar';
+import { excelSelectAll } from '../selection/currentRegion';
 import { FilterDropdown } from './FilterDropdown';
 import { startAutoSave } from '../db/autoSave';
 import { loadWorkbook, DEFAULT_ID, saveWorkbook as saveToDB } from '../db/WorkbookDB';
@@ -348,6 +349,7 @@ function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selec
   else if (action.type === 'clear') clearRange(store, cmdManager, range);
   else if (action.type === 'cancel') selectRange(Range.single(range.r1, range.c1).toAddress());
   else if (action.type === 'type' && action.text !== undefined) { setCellText(store, cmdManager, { r: range.r1, c: range.c1 }, action.text); startEditing({ r: range.r1, c: range.c1 }, action.text); }
+  else if (action.type === 'menu' && action.command === 'selectAll') selectSelection(excelSelectAll(store, selected, TOTAL_ROWS, TOTAL_COLS));
   else if (action.type === 'menu' && action.command !== undefined) handleMenuShortcut(action.command, store, cmdManager, range, selectRange, setView, setFindDialog);
   else handleClipboardAction(action.type, store, cmdManager, range);
 }
@@ -468,7 +470,8 @@ function loadValues(cmd: CommandManager, data: readonly (readonly CellInput[])[]
 
 function menuBarProps(store: Store, cmdManager: CommandManager | undefined, selected: Selection | null, selectRange: (range: RangeAddress) => void, allRange: () => void, onClose: (() => void) | undefined): React.ComponentProps<typeof MenuBar> {
   const range = selected?.range ?? null;
-  const props = { store, selected: range, selectRange, clearRange: () => { if (range !== null) clearRange(store, cmdManager, range); }, allRange };
+  const activeCell = selected?.active ?? null;
+  const props = { store, selected: range, activeCell, selectRange, clearRange: () => { if (range !== null) clearRange(store, cmdManager, range); }, allRange };
   return cmdManager === undefined ? withClose(props, onClose) : withClose({ ...props, cmdManager }, onClose);
 }
 function withClose<T extends Omit<React.ComponentProps<typeof MenuBar>, 'closeDemo'>>(props: T, onClose: (() => void) | undefined): React.ComponentProps<typeof MenuBar> {

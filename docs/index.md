@@ -74,6 +74,7 @@ ss.mount();
 |------|------|
 | [快速开始](/guide/getting-started) | 安装、第一个表格、主题、插件 |
 | [数据模型](/guide/data-model) | Cell / Style / Sheet / 序列化 |
+| [渲染层](/guide/rendering) | 双 canvas 分层、AxisIndex、blit 缓存、冻结四象限 |
 | [公式引擎](/guide/formulas) | 语法、函数表、已知限制 |
 | [命令与撤销](/guide/commands) | 22 个命令、undo/redo、自定义命令 |
 | [智能填充](/guide/fill) | 序列识别规则、Ctrl 行为 |

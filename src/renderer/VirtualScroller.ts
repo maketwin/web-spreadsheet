@@ -1,3 +1,5 @@
+import { AxisIndex } from './AxisIndex';
+
 export interface VirtualScrollerOptions {
   totalRows: number;
   totalCols: number;
@@ -19,20 +21,32 @@ export interface PixelPosition {
   y: number;
 }
 
+/** O(log n) visible-range and coordinate queries backed by prefix-sum indexes. */
 export class VirtualScroller {
-  private rowHeights = new Map<number, number>();
-  private colWidths = new Map<number, number>();
+  private readonly rows: AxisIndex;
+  private readonly cols: AxisIndex;
   public scrollTop = 0;
   public scrollLeft = 0;
 
-  public constructor(private opts: VirtualScrollerOptions) {}
+  public constructor(private opts: VirtualScrollerOptions) {
+    this.rows = new AxisIndex(opts.totalRows, opts.defaultRowHeight);
+    this.cols = new AxisIndex(opts.totalCols, opts.defaultColWidth);
+  }
 
   public setRowHeight(r: number, h: number): void {
-    this.rowHeights.set(r, h);
+    this.rows.setSize(r, h);
   }
 
   public setColWidth(c: number, w: number): void {
-    this.colWidths.set(c, w);
+    this.cols.setSize(c, w);
+  }
+
+  public clearRowHeight(r: number): void {
+    this.rows.unsetSize(r);
+  }
+
+  public clearColWidth(c: number): void {
+    this.cols.unsetSize(c);
   }
 
   public setScroll(top: number, left: number): void {
@@ -45,59 +59,51 @@ export class VirtualScroller {
   }
 
   public getRowHeight(r: number): number {
-    return this.rowHeights.get(r) ?? this.opts.defaultRowHeight;
+    return this.rows.getSize(r);
   }
 
   public getColWidth(c: number): number {
-    return this.colWidths.get(c) ?? this.opts.defaultColWidth;
+    return this.cols.getSize(c);
   }
 
   public getVisibleRange(): VisibleRange {
-    const rows = this.getVisibleAxis(
-      this.opts.totalRows,
-      this.scrollTop,
-      this.opts.viewportH,
-      (index) => this.getRowHeight(index),
-    );
-    const cols = this.getVisibleAxis(
-      this.opts.totalCols,
-      this.scrollLeft,
-      this.opts.viewportW,
-      (index) => this.getColWidth(index),
-    );
+    const rows = this.visibleAxis(this.rows, this.opts.totalRows, this.scrollTop, this.opts.viewportH);
+    const cols = this.visibleAxis(this.cols, this.opts.totalCols, this.scrollLeft, this.opts.viewportW);
     return { startRow: rows.start, endRow: rows.end, startCol: cols.start, endCol: cols.end };
   }
 
   public cellToPixel(r: number, c: number): PixelPosition {
-    let y = 0;
-    for (let i = 0; i < r; i += 1) y += this.getRowHeight(i);
-
-    let x = 0;
-    for (let i = 0; i < c; i += 1) x += this.getColWidth(i);
-
-    return { x, y };
+    return { x: this.cols.position(c), y: this.rows.position(r) };
   }
 
-  private getVisibleAxis(
-    total: number,
-    scroll: number,
-    viewport: number,
-    getSize: (index: number) => number,
-  ): { start: number; end: number } {
-    let start = 0;
-    let offset = 0;
-    while (start < total && offset + getSize(start) <= scroll) {
-      offset += getSize(start);
-      start += 1;
-    }
+  /** Row whose span contains the grid-space pixel y (clamped). */
+  public rowAtPixel(y: number): number {
+    return this.rows.indexAt(y);
+  }
 
-    let end = start;
-    let extent = offset;
-    while (end < total && extent < scroll + viewport) {
-      extent += getSize(end);
-      end += 1;
-    }
+  /** Column whose span contains the grid-space pixel x (clamped). */
+  public colAtPixel(x: number): number {
+    return this.cols.indexAt(x);
+  }
 
+  public totalHeight(): number {
+    return this.rows.total();
+  }
+
+  public totalWidth(): number {
+    return this.cols.total();
+  }
+
+  private visibleAxis(axis: AxisIndex, total: number, scroll: number, viewport: number): { start: number; end: number } {
+    if (total <= 0) return { start: 0, end: 0 };
+    const start = axis.indexAt(scroll);
+    // indexAt clamps, so guard scroll past the content end.
+    const startPos = axis.position(start);
+    if (startPos + axis.getSize(start) <= scroll && scroll >= axis.total()) return { start: total, end: total };
+    const endPixel = scroll + viewport;
+    let end = axis.indexAt(Math.max(scroll, endPixel - 1e-9)) + 1;
+    if (endPixel >= axis.total()) end = total;
+    if (end > total) end = total;
     return { start, end };
   }
 }

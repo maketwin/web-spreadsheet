@@ -19,6 +19,7 @@ export default defineConfig({
             { text: '快速开始', link: '/guide/getting-started' },
             { text: '数据模型', link: '/guide/data-model' },
             { text: '架构总览', link: '/guide/architecture' },
+            { text: '渲染层', link: '/guide/rendering' },
           ],
         },
         {

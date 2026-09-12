@@ -1,4 +1,4 @@
-import { COL_HEADER_HEIGHT, ROW_HEADER_WIDTH } from '../renderer/CanvasRenderer';
+import { COL_HEADER_HEIGHT, ROW_HEADER_WIDTH, TOTAL_COLS, TOTAL_ROWS } from '../renderer/CanvasRenderer';
 import type { VirtualScroller } from '../renderer/VirtualScroller';
 import type { RangeAddress } from '../selection/Range';
 
@@ -8,6 +8,9 @@ export interface FillHandleOptions {
   selectedRange: () => RangeAddress | undefined;
   onFill?: ((source: RangeAddress, target: RangeAddress, ctrlKey: boolean) => void) | undefined;
   invalidate: () => void;
+  /** Freeze-aware geometry from the owning renderer (fallback: scroll-only math). */
+  cellVP?: (r: number, c: number) => { x: number; y: number };
+  cellAtPoint?: (clientX: number, clientY: number) => { r: number; c: number } | null;
 }
 
 const HANDLE_SIZE = 7;
@@ -66,23 +69,30 @@ export class FillHandle {
     const rect = this.opts.canvas.getBoundingClientRect();
     const mx = clientX - rect.left;
     const my = clientY - rect.top;
-    const pos = this.opts.scroller.cellToPixel(range.r2, range.c2);
-    const hx = ROW_HEADER_WIDTH + pos.x + this.opts.scroller.getColWidth(range.c2) - this.opts.scroller.scrollLeft;
-    const hy = COL_HEADER_HEIGHT + pos.y + this.opts.scroller.getRowHeight(range.r2) - this.opts.scroller.scrollTop;
+    // Handle sits at the range's bottom-right corner (freeze-aware when provided).
+    const pos = this.opts.cellVP !== undefined
+      ? this.opts.cellVP(range.r2, range.c2)
+      : this.scrollerCellVP(range.r2, range.c2);
+    const hx = pos.x + this.opts.scroller.getColWidth(range.c2);
+    const hy = pos.y + this.opts.scroller.getRowHeight(range.r2);
     return Math.abs(mx - hx) <= HANDLE_SIZE && Math.abs(my - hy) <= HANDLE_SIZE;
   }
 
   private clientToCell(clientX: number, clientY: number): { r: number; c: number } | null {
+    if (this.opts.cellAtPoint !== undefined) return this.opts.cellAtPoint(clientX, clientY);
     const rect = this.opts.canvas.getBoundingClientRect();
     const gx = clientX - rect.left - ROW_HEADER_WIDTH + this.opts.scroller.scrollLeft;
     const gy = clientY - rect.top - COL_HEADER_HEIGHT + this.opts.scroller.scrollTop;
     if (gx < 0 || gy < 0) return null;
-    let r = 0, y = 0;
-    while (r < 1000 && y + this.opts.scroller.getRowHeight(r) <= gy) { y += this.opts.scroller.getRowHeight(r); r += 1; }
-    let c = 0, x = 0;
-    while (c < 26 && x + this.opts.scroller.getColWidth(c) <= gx) { x += this.opts.scroller.getColWidth(c); c += 1; }
-    if (r >= 1000 || c >= 26) return null;
+    const r = gy >= this.opts.scroller.totalHeight() ? TOTAL_ROWS - 1 : this.opts.scroller.rowAtPixel(gy);
+    const c = gx >= this.opts.scroller.totalWidth() ? TOTAL_COLS - 1 : this.opts.scroller.colAtPixel(gx);
     return { r, c };
+  }
+
+  /** Scroll-only viewport position (legacy fallback when the renderer is absent). */
+  private scrollerCellVP(r: number, c: number): { x: number; y: number } {
+    const pos = this.opts.scroller.cellToPixel(r, c);
+    return { x: ROW_HEADER_WIDTH + pos.x - this.opts.scroller.scrollLeft, y: COL_HEADER_HEIGHT + pos.y - this.opts.scroller.scrollTop };
   }
 }
 
