@@ -129,18 +129,48 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     flushSync(() => selectSelection(cellSelection(cell.r, cell.c)));
     setCtxMenu({ kind: 'cell', x, y });
   }, [selectSelection]);
-  const runCtxClipboard = useCallback((type: 'cut' | 'copy' | 'paste' | 'clear') => {
-    const range = selectedRef.current?.range;
-    if (range === undefined) return;
-    if (type === 'clear') clearRange(store, cmdManager, range);
-    else void handleClipboardAction(type, store, cmdManager, range);
-  }, [store, cmdManager]);
   const execCmd = useCallback((cmd: Command) => {
     if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store);
   }, [cmdManager, store]);
   const { canvasRef, rendererRef } = useCanvasRenderer(store, selected, onCellClick, selectSelection, view, cmdManager, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick);
   useEffect(() => rendererRef.current?.setEditing(editing !== null), [editing, rendererRef]);
+  // Excel clipboard session: copy/cut mark a source (marching ants); cut clears the source
+  // only when the paste lands. Copy sessions allow repeated pastes; cut pastes once.
+  const clipboardSession = useRef<{ readonly type: 'cut' | 'copy'; readonly range: RangeAddress; readonly text: string } | null>(null);
+  const clearClipboardSession = useCallback((): boolean => {
+    const had = clipboardSession.current !== null;
+    clipboardSession.current = null;
+    rendererRef.current?.setClipboardRange(undefined);
+    return had;
+  }, [rendererRef]);
+  const runClipboard = useCallback(async (type: 'cut' | 'copy' | 'paste', range: RangeAddress) => {
+    if (type === 'paste') {
+      const session = clipboardSession.current;
+      if (session !== null) {
+        applyMatrix(store, cmdManager, range.r1, range.c1, ClipboardService.parseText(session.text));
+        if (session.type === 'cut') { clearRange(store, cmdManager, session.range); clearClipboardSession(); }
+        return;
+      }
+      await pasteFromClipboard(store, cmdManager, range);
+      return;
+    }
+    const payload = ClipboardService.createPayload(store, range);
+    if (payload === null) return;
+    await ClipboardService.copy(store, range);
+    clipboardSession.current = { type, range, text: payload.text };
+    rendererRef.current?.setClipboardRange(range);
+  }, [store, cmdManager, rendererRef, clearClipboardSession]);
+  const runCtxClipboard = useCallback((type: 'cut' | 'copy' | 'paste' | 'clear') => {
+    const range = selectedRef.current?.range;
+    if (range === undefined) return;
+    if (type === 'clear') clearRange(store, cmdManager, range);
+    else void runClipboard(type, range);
+  }, [store, cmdManager, runClipboard]);
   const startEditing = (cell: CellAddress, value = cellEditValue(store, cell)): void => {
+    // Excel: editing a cell inside the copied/cut range cancels the clipboard session,
+    // so the editor box owns the cell instead of fighting the marching ants.
+    const session = clipboardSession.current;
+    if (session !== null && new Range(session.range).contains(cell.r, cell.c)) clearClipboardSession();
     const next = cellSelection(cell.r, cell.c);
     selectedRef.current = next;
     setSelected(next);
@@ -179,7 +209,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     <InteractionToolbar selected={selected} store={store} cmdManager={cmdManager} view={view} setView={setView} selectAll={() => selectSelection(sheetSelection(allSheetRange()))} painting={painting} onTogglePainter={() => { if (painting) { setPainting(false); setSourceStyle(undefined); } else { const cell = selected?.active; const s = cell === undefined ? undefined : store.getCell(cell.r, cell.c)?.styleId === undefined ? undefined : store.getStyle(store.getCell(cell.r, cell.c)!.styleId!); setSourceStyle(s); setPainting(true); } }} onToggleProtection={() => setProtectOpen(true)} />
     <ProtectionModal open={protectOpen} onClose={() => setProtectOpen(false)} store={store} />
     <FormulaBar selected={selected} value={formulaValue} onChange={setFormulaValue} onCommit={() => commitFormulaValue(selected, formulaValue, store, cmdManager)} />
-    <div className="ss-canvas-wrap"><canvas ref={canvasRef} className="ss-canvas" tabIndex={0} aria-label="Spreadsheet canvas, use arrow keys to navigate" onKeyDown={(e) => handleCanvasKeyDown(e, selectedRef.current, store, cmdManager, startEditing, selectSelection, selectRange, setView, setFindDialogOpen)} onDoubleClick={(e) => { const cell = rendererRef.current?.cellAtPoint(e.clientX, e.clientY); if (cell != null) startEditing(cell); }} />
+    <div className="ss-canvas-wrap"><canvas ref={canvasRef} className="ss-canvas" tabIndex={0} aria-label="Spreadsheet canvas, use arrow keys to navigate" onKeyDown={(e) => handleCanvasKeyDown(e, selectedRef.current, store, cmdManager, startEditing, selectSelection, selectRange, setView, setFindDialogOpen, runClipboard, clearClipboardSession)} onDoubleClick={(e) => { const cell = rendererRef.current?.cellAtPoint(e.clientX, e.clientY); if (cell != null) startEditing(cell); }} />
       {editing !== null && <EditorOverlay refEl={inputRef} editing={editing} setEditing={setEditing} commit={commitEditing} zoom={view.zoom} store={store} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}</div>
       {filterPopup !== null && <FilterDropdown store={store} cmdManagerExecutor={execCmd} r={filterPopup.r} c={filterPopup.c} x={filterPopup.x} y={filterPopup.y} onClose={() => setFilterPopup(null)} />}
     <StatusBar store={store} selected={selected?.range ?? null} zoom={view.zoom} />
@@ -336,7 +366,7 @@ export function createFormulaSync(store: Store, engine: FormulaEngine): { readon
   return { unsubscribe: () => { unsubscribe(); offBatchEnd(); } };
 }
 
-function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selected: Selection | null, store: Store, cmdManager: CommandManager | undefined, startEditing: (cell: CellAddress, value?: string) => void, selectSelection: (selection: Selection) => void, selectRange: (range: RangeAddress) => void, setView: Dispatch<SetStateAction<ViewState>>, setFindDialog: (name: DialogName | null) => void): void {
+function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selected: Selection | null, store: Store, cmdManager: CommandManager | undefined, startEditing: (cell: CellAddress, value?: string) => void, selectSelection: (selection: Selection) => void, selectRange: (range: RangeAddress) => void, setView: Dispatch<SetStateAction<ViewState>>, setFindDialog: (name: DialogName | null) => void, runClipboard: (type: 'cut' | 'copy' | 'paste', range: RangeAddress) => void, clearClipboardSession: () => boolean): void {
   if (selected === null || event.altKey) return;
   const range = selected.range;
   const keyboardBase = event.shiftKey ? Range.single(selected.active.r, selected.active.c).toAddress() : range;
@@ -347,11 +377,11 @@ function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selec
   else if (action.type === 'move' && action.range !== undefined) selectRange(action.range);
   else if (action.type === 'edit' || event.key === 'Enter') startEditing({ r: range.r1, c: range.c1 });
   else if (action.type === 'clear') clearRange(store, cmdManager, range);
-  else if (action.type === 'cancel') selectRange(Range.single(range.r1, range.c1).toAddress());
+  else if (action.type === 'cancel') { if (!clearClipboardSession()) selectRange(Range.single(range.r1, range.c1).toAddress()); }
   else if (action.type === 'type' && action.text !== undefined) { setCellText(store, cmdManager, { r: range.r1, c: range.c1 }, action.text); startEditing({ r: range.r1, c: range.c1 }, action.text); }
   else if (action.type === 'menu' && action.command === 'selectAll') selectSelection(excelSelectAll(store, selected, TOTAL_ROWS, TOTAL_COLS));
   else if (action.type === 'menu' && action.command !== undefined) handleMenuShortcut(action.command, store, cmdManager, range, selectRange, setView, setFindDialog);
-  else handleClipboardAction(action.type, store, cmdManager, range);
+  else if (action.type === 'copy' || action.type === 'cut' || action.type === 'paste') runClipboard(action.type, range);
 }
 
 function handleEditorKey(
@@ -451,14 +481,9 @@ function cellEditValue(store: Store, cell: CellAddress): string { const current 
 function syncExistingFormulas(store: Store, engine: FormulaEngine): void { const sheetId = store.getActiveSheetId(); store.getCells().forEach(([id, cell]) => { const formula = formulaText(cell); if (formula !== undefined) engine.setFormula(id, formula, formulaDependencies(formula), sheetId); }); }
 function syncCellFormula(engine: FormulaEngine, r: number, c: number, cell: Cell | undefined, sheetId?: string): void { const formula = formulaText(cell); const id = cellId(r, c); if (formula === undefined) engine.removeFormula(id, sheetId); else engine.setFormula(id, formula, formulaDependencies(formula), sheetId); }
 
-async function handleClipboardAction(type: string, store: Store, cmdManager: CommandManager | undefined, range: RangeAddress): Promise<void> {
-  if (type === 'copy') await ClipboardService.copy(store, range);
-  if (type === 'cut') { await ClipboardService.cut(store, range); clearRange(store, cmdManager, range); }
-  if (type === 'paste') await pasteFromClipboard(cmdManager, range);
-}
-async function pasteFromClipboard(cmdManager: CommandManager | undefined, target: RangeAddress): Promise<void> { const cells = await ClipboardService.read(); applyMatrix(cmdManager, target.r1, target.c1, cells); }
+async function pasteFromClipboard(store: Store, cmdManager: CommandManager | undefined, target: RangeAddress): Promise<void> { const cells = await ClipboardService.read(); applyMatrix(store, cmdManager, target.r1, target.c1, cells); }
 function clearRange(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress): void { const values = matrix(range, () => ({ text: '' })); executeRange(store, cmdManager, range.r1, range.c1, values); }
-function applyMatrix(cmdManager: CommandManager | undefined, r: number, c: number, values: readonly (readonly Partial<Cell>[])[]): void { const lastRow = values[values.length - 1]; if (lastRow === undefined) return; executeRange(undefined, cmdManager, r, c, values); }
+function applyMatrix(store: Store, cmdManager: CommandManager | undefined, r: number, c: number, values: readonly (readonly Partial<Cell>[])[]): void { const lastRow = values[values.length - 1]; if (lastRow === undefined) return; executeRange(store, cmdManager, r, c, values); }
 function executeRange(store: Store | undefined, cmdManager: CommandManager | undefined, r: number, c: number, values: readonly (readonly Partial<Cell>[])[]): void { const r2 = r + values.length - 1; const c2 = c + (values[0]?.length ?? 1) - 1; const cmd = new SetRangeValues({ r1: r, c1: c, r2, c2, values }); if (cmdManager === undefined) { if (store !== undefined) cmd.execute(store); } else cmdManager.execute(cmd); }
 function matrix(range: RangeAddress, cell: () => Partial<Cell>): Partial<Cell>[][] { return Array.from({ length: range.r2 - range.r1 + 1 }, () => Array.from({ length: range.c2 - range.c1 + 1 }, cell)); }
 function addSheet(store: Store): void { const name = window.prompt('Sheet name', `Sheet${store.getSheets().length + 1}`); if (name !== null) store.addSheet(name); }

@@ -92,6 +92,10 @@ export class CanvasRenderer {
   private blitValid = false;
   private blitLeft = 0;
   private blitTop = 0;
+  /** Excel marching ants: copied/cut source range, animated dashed border on the overlay. */
+  private clipboardRange: RangeAddress | undefined;
+  private antsOffset = 0;
+  private antsTimer: number | null = null;
 
   public constructor(private readonly opts: CanvasRendererOptions) {
     const ctx = opts.canvas.getContext('2d');
@@ -103,7 +107,9 @@ export class CanvasRenderer {
     if ((opts.frozenRows ?? 0) > 0 || (opts.frozenCols ?? 0) > 0) this.freeze.freezeAt(opts.frozenRows ?? 0, opts.frozenCols ?? 0);
     this.syncSizesFromStore();
     this.resizeHandler = new ResizeHandler({ canvas: opts.canvas, scroller: this.scroller, store: opts.store, zoom: () => this.zoom(), onRowResize: opts.onRowResize, onColResize: opts.onColResize, onRowDblClick: opts.onRowDblClick, onColDblClick: opts.onColDblClick, invalidate: () => this.invalidateAll(), rowTopAt: (r) => this.cellVP(r, 0).y, colLeftAt: (c) => this.cellVP(0, c).x, frozenRows: () => this.freeze.getFrozenRows(), frozenCols: () => this.freeze.getFrozenCols() });
-    this.fillHandle = new FillHandle({ canvas: opts.canvas, scroller: this.scroller, selectedRange: () => this.selectedRange, onFill: opts.onFill, invalidate: () => this.invalidateAll(), cellVP: (r, c) => this.cellVP(r, c), cellAtPoint: (x, y) => this.pointerCell(x, y) });
+    // While ants replace the selection border the fill handle is hidden (Excel):
+    // report no selection so its hit-test and crosshair cursor stay inactive.
+    this.fillHandle = new FillHandle({ canvas: opts.canvas, scroller: this.scroller, selectedRange: () => this.antsReplaceSelection(this.selectedRange) ? undefined : this.selectedRange, onFill: opts.onFill, invalidate: () => this.invalidateAll(), cellVP: (r, c) => this.cellVP(r, c), cellAtPoint: (x, y) => this.pointerCell(x, y) });
     this.unsubscribe = opts.store.subscribe((e: StoreEvent) => this.onStoreEvent(e));
     this.setupCanvas(); this.setupOverlay(); this.bindEvents(); this.invalidateAll();
   }
@@ -157,6 +163,7 @@ export class CanvasRenderer {
     if (this.rafId !== null) window.cancelAnimationFrame(this.rafId);
     this.rafId = null; this.resizeHandler.destroy(); this.fillHandle.destroy(); this.unsubscribe(); this.unbindEvents();
     this.overlayCanvas?.remove(); this.overlayCanvas = null; this.octx = null;
+    if (this.antsTimer !== null) { window.clearInterval(this.antsTimer); this.antsTimer = null; }
   }
   public setSelectedRange(range: RangeAddress | undefined): void { this.selectedRange = range; this.invalidateAll(); }
   public setSelection(range: RangeAddress | undefined, kind: SelectionKind | undefined, activeCell?: CellAddress): void {
@@ -213,6 +220,29 @@ export class CanvasRenderer {
   }
 
   public invalidateAll(): void { this.blitValid = false; this.dirty.invalidateAll(); this.scheduleRender(); }
+
+  /** Show/clear the marching-ants border around a copied or cut source range (Excel). */
+  public setClipboardRange(range: RangeAddress | undefined): void {
+    this.clipboardRange = range;
+
+    if (range !== undefined && this.antsTimer === null && typeof window !== 'undefined' && typeof window.setInterval === 'function') {
+      this.antsTimer = window.setInterval(() => {
+        this.antsOffset = (this.antsOffset + 1) % 8;
+        this.paintOverlay(this.cachedTheme ?? (this.cachedTheme = readCanvasTheme()));
+      }, 120);
+    } else if (range === undefined && this.antsTimer !== null) {
+      window.clearInterval(this.antsTimer);
+      this.antsTimer = null;
+    }
+    this.scheduleRender();
+  }
+  /** True while marching ants cover the given selection: the ants replace its solid
+   * border and fill handle (Excel copy/cut on the selected range). */
+  private antsReplaceSelection(sr: RangeAddress | undefined): boolean {
+    const cb = this.clipboardRange;
+    return cb !== undefined && sr !== undefined
+      && cb.r1 === sr.r1 && cb.c1 === sr.c1 && cb.r2 === sr.r2 && cb.c2 === sr.c2;
+  }
   public setFreeze(rows: number, cols: number): void {
     this.freeze.freezeAt(rows, cols);
     // Excel: after Freeze Panes, the unfrozen pane starts at the freeze corner (scroll origin).
@@ -257,7 +287,7 @@ export class CanvasRenderer {
       return;
     }
     this.opts.canvas.focus();
-    if (this.selectedRange !== undefined && this.isSelectionBorderHit(ev.clientX, ev.clientY) && this.moveDrag === null) {
+    if (this.selectedRange !== undefined && !this.antsReplaceSelection(this.selectedRange) && this.isSelectionBorderHit(ev.clientX, ev.clientY) && this.moveDrag === null) {
       this.moveDrag = {
         source: this.selectedRange,
         offset: { r: cell.r - this.selectedRange.r1, c: cell.c - this.selectedRange.c1 },
@@ -288,7 +318,7 @@ export class CanvasRenderer {
       return;
     }
     if (this.dragAnchor === null) {
-      if (this.opts.canvas.style.cursor === '' || this.opts.canvas.style.cursor === 'move') this.opts.canvas.style.cursor = this.isSelectionBorderHit(ev.clientX, ev.clientY) ? 'move' : '';
+      if (this.opts.canvas.style.cursor === '' || this.opts.canvas.style.cursor === 'move') this.opts.canvas.style.cursor = !this.antsReplaceSelection(this.selectedRange) && this.isSelectionBorderHit(ev.clientX, ev.clientY) ? 'move' : '';
       return;
     }
     if (this.dragAnchor.type === 'column') { const c = this.columnAtPoint(ev.clientX); if (c !== null) this.opts.onColumnSelect?.(c, true); return; }
@@ -1098,6 +1128,10 @@ export class CanvasRenderer {
     }
 
     if (kind === 'sheet') return;
+    // Excel replaces the solid selection border (and fill handle) with the marching
+    // ants while the copied/cut range is the selection; drawing both stacks a solid
+    // line under the dashes and the animation becomes invisible.
+    if (this.antsReplaceSelection(full)) return;
     // Excel centers the 2px selection stroke on the range boundary, covering the cell border beneath it
     ctx.strokeStyle = theme.accent; ctx.lineWidth = 2;
     ctx.strokeRect(x, y, w, h);
@@ -1153,6 +1187,25 @@ export class CanvasRenderer {
         ctx.lineWidth = 1.5;
         ctx.strokeRect(x, y, w, h);
         ctx.setLineDash([]);
+        ctx.restore();
+      }
+    }
+    if (this.clipboardRange !== undefined) {
+      for (const seg of this.selectionSegments(this.clipboardRange)) {
+        const { x, y, w, h } = this.rangeRect(seg.range);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(seg.clip.x, seg.clip.y, seg.clip.w, seg.clip.h);
+        ctx.clip();
+        ctx.setLineDash([4, 4]);
+        ctx.lineDashOffset = -this.antsOffset;
+        // Double stroke (dark over light) keeps the ants visible on any fill, like Excel.
+        ctx.strokeStyle = theme.bg;
+        ctx.lineWidth = 2.5;
+        ctx.strokeRect(x, y, w, h);
+        ctx.strokeStyle = theme.text;
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(x, y, w, h);
         ctx.restore();
       }
     }
