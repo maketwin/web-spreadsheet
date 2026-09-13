@@ -33,6 +33,8 @@ export interface CanvasRendererOptions {
   onCellContextMenu?: (cell: CellAddress, x: number, y: number) => void;
   onMoveRange?: (source: RangeAddress, target: RangeAddress, copy?: boolean) => void;
   onAutoFilterClick?: (r: number, c: number, x: number, y: number) => void;
+  /** Trackpad pinch (wheel + Ctrl): owner applies the ±10 zoom step. */
+  onZoom?: (zoomDelta: number) => void;
 }
 
 type DragAnchor = { type: 'cell'; r: number; c: number } | { type: 'column'; c: number } | { type: 'row'; r: number };
@@ -76,6 +78,8 @@ export class CanvasRenderer {
   private activeCell: CellAddress | undefined;
   private dragAnchor: DragAnchor | null = null;
   private moveDrag: MoveDragState | null = null;
+  /** Trackpad pinch accumulator (fractional ctrl+wheel deltas → ±10 zoom steps). */
+  private pinchAccum = 0;
   private rafId: number | null = null;
   private highlightMatches: readonly CellAddress[] = [];
   private editing = false;
@@ -350,6 +354,17 @@ export class CanvasRenderer {
   /** Excel: wheel scrolls vertically, Shift+wheel horizontally; deltaMode lines (Firefox) scale to pixels. */
   private readonly handleWheel = (ev: WheelEvent): void => {
     ev.preventDefault();
+    // Excel: trackpad pinch (wheel + Ctrl) zooms instead of scrolling. Browsers send
+    // fractional pinch deltas, so accumulate until a whole ±10 step is reached.
+    if (ev.ctrlKey && this.opts.onZoom !== undefined) {
+      this.pinchAccum += -ev.deltaY;
+      if (Math.abs(this.pinchAccum) >= 100) {
+        const step = this.pinchAccum > 0 ? 10 : -10;
+        this.pinchAccum = 0;
+        this.opts.onZoom(step);
+      }
+      return;
+    }
     const unit = ev.deltaMode === 1 ? this.defaultRowHeight() : 1;
     let dx = ev.deltaX * unit;
     let dy = ev.deltaY * unit;
