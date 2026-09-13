@@ -432,7 +432,7 @@ describe('CanvasRenderer', () => {
     fireEvent.mouseMove(window, { clientX: 10 + ROW_HEADER_WIDTH + COL_WIDTH * 5 + 50, clientY: 20 + COL_HEADER_HEIGHT + 2 });
     fireEvent.mouseUp(window);
 
-    expect(onMoveRange).toHaveBeenCalledWith({ r1: 0, c1: 0, r2: 2, c2: 2 }, { r1: 0, c1: 4, r2: 0, c2: 4 });
+    expect(onMoveRange).toHaveBeenCalledWith({ r1: 0, c1: 0, r2: 2, c2: 2 }, { r1: 0, c1: 4, r2: 0, c2: 4 }, false);
     renderer.destroy();
   });
 
@@ -457,7 +457,7 @@ describe('CanvasRenderer', () => {
     fireEvent.mouseUp(window);
 
     // Target row clamps to the first scrollable row (row 1), never row 0.
-    expect(onMoveRange).toHaveBeenCalledWith({ r1: 2, c1: 2, r2: 3, c2: 3 }, { r1: 1, c1: 2, r2: 1, c2: 2 });
+    expect(onMoveRange).toHaveBeenCalledWith({ r1: 2, c1: 2, r2: 3, c2: 3 }, { r1: 1, c1: 2, r2: 1, c2: 2 }, false);
     renderer.destroy();
   });
 
@@ -539,7 +539,7 @@ describe('CanvasRenderer', () => {
     expect(dashedYs.every((y: number) => y >= COL_HEADER_HEIGHT + ROW_HEIGHT - 1)).toBe(true);
 
     fireEvent.mouseUp(window);
-    expect(onMoveRange).toHaveBeenCalledWith({ r1: 3, c1: 3, r2: 4, c2: 4 }, { r1: 1, c1: 3, r2: 1, c2: 3 });
+    expect(onMoveRange).toHaveBeenCalledWith({ r1: 3, c1: 3, r2: 4, c2: 4 }, { r1: 1, c1: 3, r2: 1, c2: 3 }, false);
     renderer.destroy();
   });
 

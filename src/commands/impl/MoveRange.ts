@@ -6,6 +6,8 @@ import type { RangeAddress } from '../../selection/Range';
 export interface MoveRangeArgs {
   readonly source: RangeAddress;
   readonly target: RangeAddress;
+  /** Excel Ctrl+drag: duplicate instead of move — the source cells stay. */
+  readonly copy?: boolean;
 }
 
 type CellMatrix = readonly (readonly (Cell | undefined)[])[];
@@ -36,10 +38,12 @@ export class MoveRange extends Command<MoveRangeArgs> {
       }
     }
 
-    // Clear source cells
-    for (let r = source.r1; r <= source.r2; r += 1) {
-      for (let c = source.c1; c <= source.c2; c += 1) {
-        store.setCell(r, c, undefined);
+    // Clear source cells (Excel Ctrl+drag copy keeps the source)
+    if (this.args.copy !== true) {
+      for (let r = source.r1; r <= source.r2; r += 1) {
+        for (let c = source.c1; c <= source.c2; c += 1) {
+          store.setCell(r, c, undefined);
+        }
       }
     }
   }
@@ -54,13 +58,14 @@ export class MoveRange extends Command<MoveRangeArgs> {
       },
       sourceSnapshot: this.sourceSnapshot,
       targetSnapshot: this.targetSnapshot,
+      copy: this.args.copy === true,
     });
   }
 
   public override describe(): string {
     const s = this.args.source;
     const t = this.args.target;
-    return `MoveRange ${s.r1},${s.c1}:${s.r2},${s.c2} → ${t.r1},${t.c1}`;
+    return `MoveRange${this.args.copy === true ? ' (copy)' : ''} ${s.r1},${s.c1}:${s.r2},${s.c2} → ${t.r1},${t.c1}`;
   }
 }
 
@@ -69,6 +74,7 @@ interface RestoreMoveRangeArgs {
   readonly target: RangeAddress;
   readonly sourceSnapshot: CellMatrix;
   readonly targetSnapshot: CellMatrix;
+  readonly copy: boolean;
 }
 
 class RestoreMoveRange extends Command<RestoreMoveRangeArgs> {
@@ -85,11 +91,13 @@ class RestoreMoveRange extends Command<RestoreMoveRangeArgs> {
       }
     }
 
-    // Restore source cells
-    for (let r = 0; r < srcRows; r += 1) {
-      for (let c = 0; c < srcCols; c += 1) {
-        const cell = sourceSnapshot[r]?.[c];
-        store.setCell(source.r1 + r, source.c1 + c, cell);
+    // Restore source cells (a copy drag never cleared them, but restoring is a no-op then)
+    if (!this.args.copy) {
+      for (let r = 0; r < srcRows; r += 1) {
+        for (let c = 0; c < srcCols; c += 1) {
+          const cell = sourceSnapshot[r]?.[c];
+          store.setCell(source.r1 + r, source.c1 + c, cell);
+        }
       }
     }
   }
@@ -98,6 +106,7 @@ class RestoreMoveRange extends Command<RestoreMoveRangeArgs> {
     return new MoveRange({
       source: this.args.source,
       target: this.args.target,
+      copy: this.args.copy,
     });
   }
 }

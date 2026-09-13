@@ -3,10 +3,18 @@ import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/CanvasRenderer';
 import { Range, type RangeAddress } from '../selection/Range';
 
 export interface KeyboardAction {
-  readonly type: 'move' | 'edit' | 'clear' | 'cancel' | 'copy' | 'paste' | 'cut' | 'type' | 'menu';
+  readonly type: 'move' | 'edit' | 'clear' | 'cancel' | 'copy' | 'paste' | 'cut' | 'type' | 'menu'
+    | 'moveEdge' | 'jump' | 'fill' | 'selectColumn' | 'selectRow';
   readonly range?: RangeAddress;
   readonly text?: string;
   readonly command?: MenuShortcutCommand;
+  /** `moveEdge`: step direction of the Ctrl+arrow edge jump. */
+  readonly dr?: number;
+  readonly dc?: number;
+  /** `jump`: Ctrl+Home (first unfrozen cell) / Ctrl+End (last used cell). */
+  readonly jump?: 'home' | 'usedEnd';
+  /** `fill`: Ctrl+D fills down, Ctrl+R fills right (Excel). */
+  readonly fillDir?: 'down' | 'right';
 }
 
 export type MenuShortcutCommand = 'save' | 'find' | 'replace' | 'selectAll' | 'bold' | 'italic' | 'underline' | 'zoom100' | 'zoomIn' | 'zoomOut' | 'undo' | 'redo';
@@ -14,13 +22,15 @@ export type MenuShortcutCommand = 'save' | 'find' | 'replace' | 'selectAll' | 'b
 export class KeyboardHandler {
   public static next(key: string, range: RangeAddress, shiftKey = false, metaKey = false, ctrlKey = false): KeyboardAction | null {
     if (metaKey || ctrlKey) return shortcutAction(key);
+    // Excel: Shift+Space selects the entire row of the active cell.
+    if (key === ' ' && shiftKey) return { type: 'selectRow' };
     if (key === 'F2') return { type: 'edit' };
     if (key === 'Escape') return { type: 'cancel' };
     if (key === 'Delete' || key === 'Backspace') return { type: 'clear' };
     if (key.length === 1) return { type: 'type', text: key };
     if (key === 'Enter' && !shiftKey) return { type: 'edit' };
     if (key === 'Enter' && shiftKey) return { type: 'move', range: move(range, -1, 0) };
-    if (key === 'Tab') return { type: 'move', range: move(range, 0, 1) };
+    if (key === 'Tab') return { type: 'move', range: move(range, 0, shiftKey ? -1 : 1) };
     if (key === 'ArrowUp') return { type: 'move', range: move(range, -1, 0) };
     if (key === 'ArrowDown') return { type: 'move', range: move(range, 1, 0) };
     if (key === 'ArrowLeft') return { type: 'move', range: move(range, 0, -1) };
@@ -38,7 +48,17 @@ export class KeyboardHandler {
 }
 
 function shortcutAction(key: string): KeyboardAction | null {
+  // Excel: Ctrl+arrows jump to the data-region edge (resolved against the store by the caller).
+  if (key === 'ArrowUp') return { type: 'moveEdge', dr: -1, dc: 0 };
+  if (key === 'ArrowDown') return { type: 'moveEdge', dr: 1, dc: 0 };
+  if (key === 'ArrowLeft') return { type: 'moveEdge', dr: 0, dc: -1 };
+  if (key === 'ArrowRight') return { type: 'moveEdge', dr: 0, dc: 1 };
+  if (key === 'Home') return { type: 'jump', jump: 'home' };
+  if (key === 'End') return { type: 'jump', jump: 'usedEnd' };
+  if (key === ' ') return { type: 'selectColumn' }; // Excel: Ctrl+Space selects the active cell's column
   const normalized = key.toLowerCase();
+  if (normalized === 'd') return { type: 'fill', fillDir: 'down' };
+  if (normalized === 'r') return { type: 'fill', fillDir: 'right' };
   if (normalized === 'c') return { type: 'copy' };
   if (normalized === 'v') return { type: 'paste' };
   if (normalized === 'x') return { type: 'cut' };

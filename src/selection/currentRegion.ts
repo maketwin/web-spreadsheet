@@ -52,6 +52,54 @@ function sameRange(a: RangeAddress, b: RangeAddress): boolean {
 }
 
 /**
+ * Excel Ctrl+arrow: jump along one axis to the edge of the data region.
+ * - on a content cell inside a run → the run's last cell in that direction;
+ * - on a content cell already at its run's edge → the first content cell of the next run;
+ * - on an empty cell → the first content cell in that direction;
+ * - nothing in that direction → the grid edge.
+ */
+export function edgeJump(
+  store: Store,
+  from: { readonly r: number; readonly c: number },
+  dr: number,
+  dc: number,
+  totalRows: number,
+  totalCols: number,
+): { readonly r: number; readonly c: number } {
+  let r = from.r;
+  let c = from.c;
+  if (dr !== 0) {
+    if (hasContent(store, r, c)) {
+      while (r + dr >= 0 && r + dr < totalRows && hasContent(store, r + dr, c)) r += dr;
+      if (r === from.r) r = scanToContent(store, r, dr, c, true, totalRows, totalCols);
+    } else {
+      r = scanToContent(store, r, dr, c, true, totalRows, totalCols);
+    }
+  }
+  if (dc !== 0) {
+    if (hasContent(store, r, c)) {
+      while (c + dc >= 0 && c + dc < totalCols && hasContent(store, r, c + dc)) c += dc;
+      if (c === from.c) c = scanToContent(store, c, dc, r, false, totalRows, totalCols);
+    } else {
+      c = scanToContent(store, c, dc, r, false, totalRows, totalCols);
+    }
+  }
+  return { r, c };
+}
+
+/** Advance from `start` by `step` until a content cell or the grid edge. */
+function scanToContent(store: Store, start: number, step: number, other: number, rowAxis: boolean, totalRows: number, totalCols: number): number {
+  const limit = rowAxis ? totalRows : totalCols;
+  let i = start + step;
+  while (i >= 0 && i < limit) {
+    const has = rowAxis ? hasContent(store, i, other) : hasContent(store, other, i);
+    if (has) return i;
+    i += step;
+  }
+  return step > 0 ? limit - 1 : 0;
+}
+
+/**
  * Excel Ctrl+A: first press selects the current region around the active cell,
  * second press (region already selected) selects the whole sheet. An isolated
  * active cell (no connected content) selects the whole sheet immediately.

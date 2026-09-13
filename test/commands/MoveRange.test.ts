@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MoveRange } from '../../src/commands/impl/MoveRange';
+import { makeMoveRange } from '../../src/commands/commandFactories';
 import { Store } from '../../src/store/Store';
 import type { RangeAddress } from '../../src/selection/Range';
 
@@ -49,5 +50,27 @@ describe('MoveRange', () => {
     // Source restored, target back to original
     expect(store.getCell(0, 0)).toMatchObject({ text: 'hello' });
     expect(store.getCell(2, 2)).toMatchObject({ text: 'existing' });
+  });
+
+  it('Excel Ctrl+drag copy: duplicates to the target and keeps the source', () => {
+    const store = new Store();
+    store.setCell(0, 0, { text: 'A1' });
+    store.setCell(0, 1, { text: 'B1' });
+    store.setCell(2, 2, { text: 'existing' });
+
+    const op = makeMoveRange({ source: { r1: 0, c1: 0, r2: 0, c2: 1 }, target: { r1: 2, c1: 2, r2: 2, c2: 2 }, copy: true });
+    op.execute(store);
+
+    // Source kept, target overwritten
+    expect(store.getCell(0, 0)).toMatchObject({ text: 'A1' });
+    expect(store.getCell(0, 1)).toMatchObject({ text: 'B1' });
+    expect(store.getCell(2, 2)).toMatchObject({ text: 'A1' });
+    expect(store.getCell(2, 3)).toMatchObject({ text: 'B1' });
+
+    // Undo restores only the target
+    op.getUndo().execute(store);
+    expect(store.getCell(0, 0)).toMatchObject({ text: 'A1' });
+    expect(store.getCell(2, 2)).toMatchObject({ text: 'existing' });
+    expect(store.getCell(2, 3)).toBeUndefined();
   });
 });

@@ -58,6 +58,16 @@ export function cellId(r: number, c: number): string {
   return `${r},${c}`;
 }
 
+/** Inverse of {@link cellId}: parse "r,c" back to coordinates; null when malformed. */
+export function cellIdCoords(id: string): { r: number; c: number } | null {
+  const sep = id.indexOf(',');
+  if (sep <= 0) return null;
+  const r = Number(id.slice(0, sep));
+  const c = Number(id.slice(sep + 1));
+  if (!Number.isFinite(r) || !Number.isFinite(c)) return null;
+  return { r, c };
+}
+
 /**
  * The value a cell shows on screen: number-formatted text when a
  * non-general numberFormat applies, otherwise the raw text. Excel's filter

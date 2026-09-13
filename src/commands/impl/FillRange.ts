@@ -12,6 +12,8 @@ export interface FillRangeArgs {
    * lone number increments.
    */
   readonly ctrlKey?: boolean;
+  /** Force pure copy (no series, no lone-number step) — Excel Ctrl+D / Ctrl+R. */
+  readonly copy?: boolean;
   readonly source: RangeAddress;
   readonly target: RangeAddress;
 }
@@ -62,9 +64,12 @@ export class FillRangeCommand extends Command<FillRangeArgs> {
       const smart = nextSeriesValues(texts, count, { direction });
       // Ctrl toggles Excel-style: what would series now copies; what would
       // copy only changes for a lone plain number, which now increments.
-      const series = ctrl
-        ? (smart !== undefined ? undefined : nextSeriesValues(texts, count, { direction, singleNumberStep: true }))
-        : smart;
+      // An explicit copy (Ctrl+D/R shortcut) never continues anything.
+      const series = this.args.copy === true
+        ? undefined
+        : ctrl
+          ? (smart !== undefined ? undefined : nextSeriesValues(texts, count, { direction, singleNumberStep: true }))
+          : smart;
       for (let i = 1; i <= count; i += 1) {
         const targetIdx = direction === 1 ? from + i : from - i;
         // Copy fallback cycles the source cells; Excel-style, the cell right

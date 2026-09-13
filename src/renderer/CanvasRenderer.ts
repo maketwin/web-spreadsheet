@@ -6,6 +6,7 @@ import { TOTAL_ROWS, TOTAL_COLS, ROW_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, COL_HE
 import { collectCellBorderEdges, edgesToPaintSegs, hasBorderOnEdge, strokeBorderSegs, type LogicalBorderEdge } from './BorderPainter';
 import { DirtyRegionTracker, type Rect } from './DirtyRegionTracker';
 import { FillHandle } from '../fill/FillHandle';
+import { doubleClickFillTarget } from '../fill/dblclickFill';
 import { FreezeManager } from '../freeze/FreezeManager';
 import { ResizeHandler } from './ResizeHandler';
 import { VirtualScroller, type VisibleRange } from './VirtualScroller';
@@ -30,7 +31,7 @@ export interface CanvasRendererOptions {
   onFill?: (source: RangeAddress, target: RangeAddress, ctrlKey: boolean) => void; devicePixelRatio?: number;
   onHeaderContextMenu?: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => void;
   onCellContextMenu?: (cell: CellAddress, x: number, y: number) => void;
-  onMoveRange?: (source: RangeAddress, target: RangeAddress) => void;
+  onMoveRange?: (source: RangeAddress, target: RangeAddress, copy?: boolean) => void;
   onAutoFilterClick?: (r: number, c: number, x: number, y: number) => void;
 }
 
@@ -50,6 +51,8 @@ interface MoveDragState {
   readonly offset: CellAddress;
   readonly target: CellAddress;
   readonly moved: boolean;
+  /** Excel: holding Ctrl during the drag duplicates instead of moving. */
+  readonly copy: boolean;
 }
 
 const SELECTION_BORDER_HIT_PX = 4;
@@ -293,8 +296,9 @@ export class CanvasRenderer {
         offset: { r: cell.r - this.selectedRange.r1, c: cell.c - this.selectedRange.c1 },
         target: { r: this.selectedRange.r1, c: this.selectedRange.c1 },
         moved: false,
+        copy: ev.ctrlKey || ev.metaKey,
       };
-      this.opts.canvas.style.cursor = 'move';
+      this.opts.canvas.style.cursor = this.moveDrag.copy ? 'copy' : 'move';
       return;
     }
     this.dragAnchor = { type: 'cell', ...cell }; this.setSelectedCell(cell);
@@ -305,15 +309,21 @@ export class CanvasRenderer {
     if (this.fillHandle.isDragging()) { this.fillHandle.onMouseMove(ev); return; }
     this.resizeHandler.onMouseMove(ev); this.fillHandle.onMouseMove(ev);
     if (this.moveDrag !== null) {
+      // Excel tracks the Ctrl modifier for the whole drag, not just the press.
+      const copy = ev.ctrlKey || ev.metaKey;
+      if (copy !== this.moveDrag.copy) this.opts.canvas.style.cursor = copy ? 'copy' : 'move';
       const cell = this.pointerCell(ev.clientX, ev.clientY);
       if (cell !== null) {
         const target = this.moveTargetFromPointer(this.moveDrag, cell);
         this.moveDrag = {
           ...this.moveDrag,
           target,
+          copy,
           moved: this.moveDrag.moved || target.r !== this.moveDrag.source.r1 || target.c !== this.moveDrag.source.c1,
         };
         this.invalidateAll();
+      } else {
+        this.moveDrag = { ...this.moveDrag, copy };
       }
       return;
     }
@@ -328,8 +338,15 @@ export class CanvasRenderer {
     this.setSelection(range, 'range', cell); this.opts.onSelectionChange?.(range, cell, { r: this.dragAnchor.r, c: this.dragAnchor.c });
   };
   private readonly handleMouseUp = (): void => { if (this.resizeHandler.isResizing()) { this.resizeHandler.onMouseUp(); return; } if (this.fillHandle.isDragging()) { this.fillHandle.onMouseUp(); return; } if (this.moveDrag !== null) { const d = this.moveDrag; // Dropping back onto the source is a no-op, not a move — MoveRange would clear the cells.
-    if (d.moved && (d.target.r !== d.source.r1 || d.target.c !== d.source.c1)) this.opts.onMoveRange?.(d.source, Range.single(d.target.r, d.target.c).toAddress()); this.moveDrag = null; this.opts.canvas.style.cursor = ''; this.invalidateAll(); return; } this.dragAnchor = null; };
-  private readonly handleDblClick = (ev: MouseEvent): void => { if (this.resizeHandler.onDblClick(ev)) ev.stopPropagation(); };
+    if (d.moved && (d.target.r !== d.source.r1 || d.target.c !== d.source.c1)) this.opts.onMoveRange?.(d.source, Range.single(d.target.r, d.target.c).toAddress(), d.copy); this.moveDrag = null; this.opts.canvas.style.cursor = ''; this.invalidateAll(); return; } this.dragAnchor = null; };
+  private readonly handleDblClick = (ev: MouseEvent): void => {
+    if (this.resizeHandler.onDblClick(ev)) { ev.stopPropagation(); return; }
+    // Excel: double-clicking the fill handle fills down to match adjacent columns.
+    if (this.fillHandle.isHandleAt(ev.clientX, ev.clientY) && this.selectedRange !== undefined) {
+      const target = doubleClickFillTarget(this.opts.store, this.selectedRange, TOTAL_ROWS);
+      if (target !== undefined) this.opts.onFill?.(this.selectedRange, target, false);
+    }
+  };
   /** Excel: wheel scrolls vertically, Shift+wheel horizontally; deltaMode lines (Firefox) scale to pixels. */
   private readonly handleWheel = (ev: WheelEvent): void => {
     ev.preventDefault();
