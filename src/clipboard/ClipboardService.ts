@@ -36,7 +36,7 @@ export class ClipboardService {
 
   public static parseText(text: string): Cell[][] {
     if (text.length === 0) return [];
-    return trimTrailingEmptyRow(text).split(/\r?\n/).map((row) => row.split('\t').map((value) => cellFromText(undefined, value)));
+    return parseDelimited(trimTrailingEmptyRow(text)).map((row) => row.map((value) => cellFromText(undefined, value)));
   }
 
   public static parseHtml(html: string): Cell[][] {
@@ -88,6 +88,43 @@ async function readRichClipboard(clipboard: Clipboard): Promise<Cell[][]> {
 
 function blob(value: string, type: string): Blob {
   return new Blob([value], { type });
+}
+
+/**
+ * Tab-delimited text with CSV-style quoting (Excel external paste): a field
+ * wrapped in double quotes may embed tabs and newlines; "" is a literal quote.
+ */
+function parseDelimited(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = '';
+  let i = 0;
+  const pushField = (): void => { row.push(field); field = ''; };
+  const pushRow = (): void => { pushField(); rows.push(row); row = []; };
+  while (i < text.length) {
+    if (text[i] === '"') {
+      // Quoted field: consume until the closing quote.
+      i += 1;
+      while (i < text.length) {
+        if (text[i] === '"') {
+          if (text[i + 1] === '"') { field += '"'; i += 2; continue; }
+          i += 1;
+          break;
+        }
+        field += text[i];
+        i += 1;
+      }
+      continue;
+    }
+    const ch = text[i];
+    if (ch === '\t') { pushField(); i += 1; continue; }
+    if (ch === '\n') { pushRow(); i += 1; continue; }
+    if (ch === '\r') { i += 1; continue; }
+    field += ch;
+    i += 1;
+  }
+  pushRow();
+  return rows;
 }
 
 function trimTrailingEmptyRow(text: string): string {

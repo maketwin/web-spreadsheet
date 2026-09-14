@@ -120,3 +120,29 @@ describe('nextSeriesValues', () => {
     expect(nextSeriesValues([], 3)).toBeUndefined();
   });
 });
+
+describe('Chinese built-in lists (Excel zh-CN)', () => {
+  it('continues 天干 with wraparound', () => {
+    expect(nextSeriesValues(['壬', '癸'], 3)).toEqual(['甲', '乙', '丙']);
+  });
+
+  it('continues 地支 backward', () => {
+    expect(nextSeriesValues(['寅', '卯'], 2, { direction: -1 })).toEqual(['丑', '子']);
+  });
+
+  it('continues 周一 short weekdays', () => {
+    expect(nextSeriesValues(['周六'], 3)).toEqual(['周日', '周一', '周二']);
+  });
+
+  it('continues 中文数字', () => {
+    expect(nextSeriesValues(['八'], 3)).toEqual(['九', '十', '一']);
+  });
+
+  it('continues 季度', () => {
+    expect(nextSeriesValues(['第三季度'], 3)).toEqual(['第四季度', '第一季度', '第二季度']);
+  });
+
+  it('infers a step inside a Chinese list', () => {
+    expect(nextSeriesValues(['甲', '丙'], 3)).toEqual(['戊', '庚', '壬']);
+  });
+});

@@ -26,11 +26,18 @@ const MONTHS_EN_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug',
 const MONTHS_EN_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const WEEKDAYS_ZH = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日'];
 const MONTHS_ZH = ['一月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
+// Excel 中文版内置自定义序列
+const WEEKDAYS_ZH_SHORT = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+const STEMS_ZH = ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸'];
+const BRANCHES_ZH = ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥'];
+const NUMERALS_ZH = ['一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+const QUARTERS_ZH = ['第一季度', '第二季度', '第三季度', '第四季度'];
 
 const TEXT_LISTS: readonly (readonly string[])[] = [
   WEEKDAYS_EN_SHORT, WEEKDAYS_EN_LONG,
   MONTHS_EN_SHORT, MONTHS_EN_LONG,
   WEEKDAYS_ZH, MONTHS_ZH,
+  WEEKDAYS_ZH_SHORT, STEMS_ZH, BRANCHES_ZH, NUMERALS_ZH, QUARTERS_ZH,
 ];
 
 const ISO_DATE = /^(\d{4})([-/.])(\d{1,2})\2(\d{1,2})$/;
@@ -150,7 +157,9 @@ function listSeries(source: readonly string[], count: number, direction: 1 | -1)
   const anchor = entries[direction === 1 ? entries.length - 1 : 0]!;
   const prev = entries.length >= 2 ? entries[direction === 1 ? entries.length - 2 : 1] : undefined;
   // Step in the source's own (forward) order; the loop applies the direction.
-  const rawStep = prev !== undefined ? anchor.index - prev.index : 1;
+  // For direction -1 the anchor is the first entry, so the forward step is
+  // prev → anchor (not anchor → prev, which would double-apply the reversal).
+  const rawStep = prev !== undefined ? (direction === 1 ? anchor.index - prev.index : prev.index - anchor.index) : 1;
   // Normalize wrapped steps (Sun→Mon reads as +1, not -6): pick the signed
   // step with the smallest magnitude, then apply the fill direction.
   let step = ((rawStep % len) + len) % len;

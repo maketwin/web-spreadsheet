@@ -37,3 +37,26 @@ describe('ClipboardService', () => {
     expect(ClipboardService.createPayload(store, { r1: 1, c1: 1, r2: 0, c2: 0 })).toBeNull();
   });
 });
+
+describe('parseText quoting (Excel external paste)', () => {
+  it('keeps tabs inside quoted fields', () => {
+    const cells = ClipboardService.parseText('"a\tb"\tc');
+    expect(cells[0]?.map((c) => c.text)).toEqual(['a\tb', 'c']);
+  });
+
+  it('keeps newlines inside quoted fields', () => {
+    const cells = ClipboardService.parseText('"line1\nline2"\tx');
+    expect(cells).toHaveLength(1);
+    expect(cells[0]?.[0]?.text).toBe('line1\nline2');
+  });
+
+  it('unescapes doubled quotes', () => {
+    const cells = ClipboardService.parseText('"say ""hi"""');
+    expect(cells[0]?.[0]?.text).toBe('say "hi"');
+  });
+
+  it('handles quoted and plain fields across rows', () => {
+    const cells = ClipboardService.parseText('"1\t2"\t3\n4\t"5"');
+    expect(cells.map((r) => r.map((c) => c.text))).toEqual([['1\t2', '3'], ['4', '5']]);
+  });
+});
