@@ -15,6 +15,60 @@ function isWrappedInParens(expr: string): boolean {
 const TWO_CHAR_OPS = new Set(['>=', '<=', '<>']);
 const SINGLE_CHAR_OPS = new Set(['&', '=', '+', '-', '*', '/', '>', '<']);
 
+/** Excel operator precedence: higher binds tighter. */
+const OP_PRECEDENCE: Record<string, number> = {
+  '*': 4, '/': 4,
+  '+': 3, '-': 3,
+  '&': 2,
+  '=': 1, '<>': 1, '<': 1, '>': 1, '<=': 1, '>=': 1,
+};
+
+interface TopLevelSplit {
+  /** Operand texts; ops[i] sits between atoms[i] and atoms[i+1]. */
+  readonly atoms: readonly string[];
+  readonly ops: readonly string[];
+}
+
+/**
+ * Split an expression on top-level binary operators. Parenthesized and
+ * double-quoted regions are opaque; the sign of a scientific-notation
+ * literal (1E-5) is part of the number. Returns null when the expression
+ * contains no top-level operator.
+ */
+function splitTopLevelOps(expr: string): TopLevelSplit | null {
+  const atoms: string[] = [];
+  const ops: string[] = [];
+  let depth = 0;
+  let inString = false;
+  let start = 0;
+  for (let i = 0; i < expr.length; i += 1) {
+    const ch = expr[i];
+    if (inString) {
+      if (ch === '"') {
+        if (expr[i + 1] === '"') i += 1; // "" escape inside a literal
+        else inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
+    if (ch === '(') { depth += 1; continue; }
+    if (ch === ')') { depth -= 1; continue; }
+    if (depth !== 0 || i === 0) continue;
+    const prev = expr[i - 1];
+    if ((ch === '-' || ch === '+') && (prev === 'e' || prev === 'E') && /\d/.test(expr[i - 2] ?? '')) continue;
+    const two = expr.slice(i, i + 2);
+    const op = TWO_CHAR_OPS.has(two) ? two : (SINGLE_CHAR_OPS.has(ch ?? '') ? ch : undefined);
+    if (op === undefined) continue;
+    atoms.push(expr.slice(start, i));
+    ops.push(op);
+    i += op.length - 1;
+    start = i + 1;
+  }
+  if (ops.length === 0) return null;
+  atoms.push(expr.slice(start));
+  return { atoms, ops };
+}
+
 export class FormulaParser {
   parse(input: string): AstNode | null {
     if (!input.startsWith('=')) return null;
@@ -35,29 +89,25 @@ export class FormulaParser {
   }
 
   private parseBinary(expr: string): AstNode | null {
-    // Leftmost operator at paren depth 0 wins; two-character operators are
-    // recognized before their single-char prefixes. Operators nested inside
-    // function arguments belong to the function, not to this expression.
-    let depth = 0;
-    for (let i = 0; i < expr.length; i += 1) {
-      const ch = expr[i];
-      if (ch === '(') { depth += 1; continue; }
-      if (ch === ')') { depth -= 1; continue; }
-      if (depth !== 0 || i === 0) continue;
-      // Scientific notation: the sign in 1E-5 / 2e+4 is part of the literal.
-      const prev = expr[i - 1];
-      if ((ch === '-' || ch === '+') && (prev === 'e' || prev === 'E') && /\d/.test(expr[i - 2] ?? '')) continue;
-      const two = expr.slice(i, i + 2);
-      const op = TWO_CHAR_OPS.has(two) ? two : (SINGLE_CHAR_OPS.has(ch ?? '') ? ch : undefined);
-      if (op === undefined) continue;
-      return {
-        type: 'binary',
-        op,
-        left: this.parseExpression(expr.slice(0, i).trim()),
-        right: this.parseExpression(expr.slice(i + op.length).trim()),
-      };
-    }
-    return null;
+    const split = splitTopLevelOps(expr);
+    if (split === null) return null;
+    const { atoms, ops } = split;
+    // Classic precedence climbing: ops[i] sits between atoms[i] and atoms[i+1].
+    let ai = 0;
+    let oi = 0;
+    const climb = (minPrec: number): AstNode => {
+      let left = this.parseExpression((atoms[ai] ?? '').trim());
+      ai += 1;
+      for (;;) {
+        const op = ops[oi];
+        if (op === undefined) return left;
+        const prec = OP_PRECEDENCE[op];
+        if (prec === undefined || prec < minPrec) return left;
+        oi += 1;
+        left = { type: 'binary', op, left, right: climb(prec + 1) };
+      }
+    };
+    return climb(1);
   }
 
   private parseFunction(expr: string): AstNode | null {
@@ -71,6 +121,11 @@ export class FormulaParser {
   }
 
   private parseAtom(expr: string): AstNode {
+    // Excel string literal: "..." with "" as an escaped quote.
+    if (expr.startsWith('"') && expr.endsWith('"') && expr.length >= 2) {
+      return { type: 'string', value: expr.slice(1, -1).replace(/""/g, '"') };
+    }
+
     const range = this.parseRange(expr);
     if (range) return range;
 
@@ -124,9 +179,18 @@ export class FormulaParser {
 function splitArgs(text: string): string[] {
   const args: string[] = [];
   let depth = 0;
+  let inString = false;
   let start = 0;
   for (let i = 0; i < text.length; i += 1) {
     const ch = text[i];
+    if (inString) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') i += 1;
+        else inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') { inString = true; continue; }
     if (ch === '(') depth += 1;
     else if (ch === ')') depth -= 1;
     else if (ch === ',' && depth === 0) { args.push(text.slice(start, i)); start = i + 1; }

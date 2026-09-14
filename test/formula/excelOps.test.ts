@@ -73,6 +73,35 @@ describe('grouping and literals (parser hardening)', () => {
   });
 });
 
+describe('operator precedence and string literals (Excel parity)', () => {
+  it('* and / bind tighter than + and -', () => {
+    expect(run('=1+2*3')).toBe(7);
+    expect(run('=10-6/2')).toBe(7);
+    expect(run('=2*3+4*5')).toBe(26);
+  });
+
+  it('& binds looser than arithmetic but tighter than comparisons', () => {
+    expect(run('=A1&1+1', { '0,0': 'v' })).toBe('v2');
+    expect(run('=A1&B1="ab"', { '0,0': 'a', '1,0': 'b' })).toBe(true);
+  });
+
+  it('honors parens over precedence', () => {
+    expect(run('=(1+2)*3')).toBe(9);
+  });
+
+  it('evaluates quoted string literals', () => {
+    expect(run('="yes"')).toBe('yes');
+    expect(run('=IF(A1>=60,"pass","fail")', { '0,0': 40 })).toBe('fail');
+    expect(run('="a"&"b"')).toBe('ab');
+  });
+
+  it('handles escaped quotes and operators inside literals', () => {
+    expect(run('="a""b"')).toBe('a"b');
+    expect(run('=IF(A1=1,"x,y","z")', { '0,0': 1 })).toBe('x,y');
+    expect(run('="1+1"')).toBe('1+1');
+  });
+});
+
 describe('VLOOKUP', () => {
   const table = { '0,0': 'apple', '1,0': 10, '0,1': 'banana', '1,1': 20, '0,2': 'cherry', '1,2': 30 };
 
