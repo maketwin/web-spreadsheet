@@ -1,5 +1,48 @@
 # Changelog
 
+## Unreleased
+
+### New Features (Excel parity batch)
+
+- **Formula point mode** — While typing a formula that awaits an operand
+  (`=`, after `+`/`-`/`*`/`(`/`,`…), arrow keys and canvas clicks insert or
+  move a cell reference instead of committing the edit. `F4` cycles `$`
+  anchors on the reference at the caret (`A1` → `$A$1` → `A$1` → `$A1`).
+  New module: `src/formula/pointMode.ts`.
+- **Multi-selection (Ctrl+click/drag)** — Extra ranges are painted like the
+  main selection (no active cell / fill handle) and tint matching row/column
+  headers. Copy/cut from a multi-selection follows Excel rules (ranges must
+  align by rows or columns, otherwise「不能对多重选定区域使用此命令」);
+  `Delete` clears all areas as one undoable composite command.
+- **Excel edit/keyboard semantics** — `Enter` commits and moves down (was:
+  start edit); `F2`/double-click enter edit mode; `Backspace` clears and
+  opens an empty editor; Enter/Tab cycle the active cell through a
+  multi-cell selection; `PageUp`/`PageDown` move one zoom-aware viewport;
+  End mode (End then arrow edge-jumps); `Ctrl+;` inserts the current date;
+  `Ctrl+1` opens Format Cells; `Ctrl+PgUp/PgDn` switch sheets; `Alt+=`
+  generates an AutoSum formula.
+- **Session paste upgrade** — The in-app clipboard session now snapshots
+  full cells: copy-paste shifts relative formula references to the target
+  and keeps styles; cut-paste moves formulas verbatim; paste fully replaces
+  target cells (no stale formula/value/style); exact-multiple targets tile
+  with per-tile reference shifts. `SetRangeValues` gains a `CellPatch` type
+  where explicit `undefined` clears a field.
+- **Trackpad pinch zoom** (v1.5.0 post-release commit) — `Ctrl` + wheel
+  (trackpad pinch) zooms the grid 50%–200% in 10% steps, like Excel.
+- **Keyboard parity round 1** (v1.5.0 post-release commit) — Ctrl+arrow
+  edge jumps, Ctrl+Home/End, two-stage Ctrl+A, fill/drag-copy shortcuts.
+- **Clipboard session + marching ants** (v1.5.0 post-release commit) —
+  Excel-style copy/cut session with animated ants replacing the selection
+  border; Enter pastes once; Esc cancels.
+- **Rendering engine overhaul** (v1.5.0 post-release commit) — AxisIndex
+  lookups, dirty-rect invalidation, freeze-quadrant selection segments.
+
+### Technical Details
+
+- New tests: `pointMode.test.ts` (4), `sessionPaste.test.ts` (7)
+- Docs updated: keyboard, formulas, io, rendering guides
+- 519 tests passing; `tsc --noEmit` clean
+
 ## v1.5.0 (2026-07-02)
 
 ### New Features

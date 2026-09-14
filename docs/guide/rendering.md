@@ -75,7 +75,8 @@ VirtualScroller 的全部坐标换算（`cellToPixel`、`rowAtPixel`、`colAtPix
 ## 帧调度与公共 API
 
 - 所有失效走 `invalidateAll()` / 脏矩形 → `requestAnimationFrame` 合并到下一帧；
-- 常用公共方法：`setSelection` / `setSelectedRange` / `setEditing` / `setFreeze` /
+- 常用公共方法：`setSelection` / `setSelectedRange` / `setExtraRanges`（多选区域的
+  附加选区，照主选区着色但不画活动单元格与填充柄）/ `setEditing` / `setFreeze` /
   `setClipboardRange`（蚂蚁线）/ `setHighlightMatches` / `scrollBy` / `cellAtPoint` /
   `rowAtPoint` / `columnAtPoint` / `getCellViewportRect` / `scrollState` / `destroy`。
 
