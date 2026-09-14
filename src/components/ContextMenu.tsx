@@ -89,6 +89,7 @@ export interface CellContextMenuProps {
   readonly onCut: () => void;
   readonly onCopy: () => void;
   readonly onPaste: () => void;
+  readonly onPasteSpecial?: () => void;
   readonly onClear: () => void;
   readonly onInsertRow: () => void;
   readonly onInsertCol: () => void;
@@ -99,12 +100,13 @@ export interface CellContextMenuProps {
 }
 
 export const CellContextMenu: FC<CellContextMenuProps> = ({
-  x, y, onCut, onCopy, onPaste, onClear, onInsertRow, onInsertCol, onDeleteRow, onDeleteCol, onNumberFormat, onClose,
+  x, y, onCut, onCopy, onPaste, onPasteSpecial, onClear, onInsertRow, onInsertCol, onDeleteRow, onDeleteCol, onNumberFormat, onClose,
 }) => {
   const items: MenuEntry[] = [
     { kind: 'item', key: 'cut', label: '剪切', shortcut: 'Ctrl+X' },
     { kind: 'item', key: 'copy', label: '复制', shortcut: 'Ctrl+C' },
     { kind: 'item', key: 'paste', label: '粘贴', shortcut: 'Ctrl+V' },
+    { kind: 'item', key: 'pasteSpecial', label: '选择性粘贴...', shortcut: 'Ctrl+Alt+V' },
     { kind: 'divider', key: 'd1' },
     { kind: 'item', key: 'insert', label: '插入...' },
     { kind: 'item', key: 'delete', label: '删除...' },
@@ -123,6 +125,7 @@ export const CellContextMenu: FC<CellContextMenuProps> = ({
         if (key === 'cut') onCut();
         else if (key === 'copy') onCopy();
         else if (key === 'paste') onPaste();
+        else if (key === 'pasteSpecial') onPasteSpecial?.();
         else if (key === 'clear') onClear();
         else if (key === 'insert') showInsertDialog(onInsertRow, onInsertCol);
         else if (key === 'delete') showDeleteDialog(onDeleteRow, onDeleteCol);

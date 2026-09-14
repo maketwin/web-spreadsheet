@@ -4,6 +4,7 @@ import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type Dispatch, type FC, type KeyboardEvent as ReactKeyboardEvent, type RefObject, type SetStateAction } from 'react';
 import { ClipboardService } from '../clipboard/ClipboardService';
+import { buildPasteSpecialMatrix, type PasteSpecialOptions } from '../clipboard/pasteSpecial';
 import { Command } from '../commands/Command';
 import type { DialogName } from './menu/types';
 import { CommandManager } from '../commands/CommandManager';
@@ -33,6 +34,7 @@ import { cellFromText, cellId, cellIdCoords, formulaDependencies, formulaText, n
 import { num2alpha } from '../util/alphabet';
 import { cellSelection, columnSelection, extendSelection, rangeSelection, rowSelection, sheetSelection, type Selection } from '../selection/Selection';
 import { CellContextMenu, HeaderContextMenu } from './ContextMenu';
+import { PasteSpecialDialog } from './PasteSpecialDialog';
 import { BottomBar } from './BottomBar';
 import { ErrorBoundary } from './ErrorBoundary';
 import { StatusBar } from './StatusBar';
@@ -188,6 +190,23 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     rendererRef.current?.setClipboardRange(undefined);
     return had;
   }, [rendererRef]);
+  const [pasteSpecialOpen, setPasteSpecialOpen] = useState(false);
+  const applyPasteSpecial = useCallback(async (opts: PasteSpecialOptions) => {
+    setPasteSpecialOpen(false);
+    const target = selectedRef.current?.range;
+    if (target === undefined) return;
+    const session = clipboardSession.current;
+    const source = session !== null
+      ? session
+      : { type: 'copy' as const, range: { r1: 0, c1: 0, r2: 0, c2: 0 }, cells: await ClipboardService.read() };
+    if (source.cells.length === 0) return;
+    applyMatrix(store, cmdManager, target.r1, target.c1, buildPasteSpecialMatrix(store, source, target.r1, target.c1, target, opts));
+    // Excel: a cut session ends on the first paste; the source clears when content moved.
+    if (session !== null && session.type === 'cut') {
+      if (opts.mode !== 'formats' && opts.operation === 'none' && !opts.transpose) clearRange(store, cmdManager, session.range);
+      clearClipboardSession();
+    }
+  }, [store, cmdManager, clearClipboardSession]);
   const runClipboard = useCallback(async (type: 'cut' | 'copy' | 'paste', range: RangeAddress) => {
     if (type === 'paste') {
       const session = clipboardSession.current;
@@ -277,6 +296,12 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     <ProtectionModal open={protectOpen} onClose={() => setProtectOpen(false)} store={store} />
     <FormulaBar selected={selected} value={formulaValue} onChange={setFormulaValue} onCommit={() => commitFormulaValue(selected, formulaValue, store, cmdManager)} />
     <div className="ss-canvas-wrap"><canvas ref={canvasRef} className="ss-canvas" tabIndex={0} aria-label="Spreadsheet canvas, use arrow keys to navigate" onKeyDown={(e) => {
+        if ((e.ctrlKey || e.metaKey) && e.altKey && e.key.toLowerCase() === 'v') {
+          // Excel: Ctrl+Alt+V opens Paste Special.
+          e.preventDefault();
+          setPasteSpecialOpen(true);
+          return;
+        }
         if (e.key === 'Enter' && !e.shiftKey && clipboardSession.current !== null && selectedRef.current !== null) {
           // Excel: Enter with marching ants pastes once and clears the clipboard session.
           e.preventDefault();
@@ -287,12 +312,13 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
         handleCanvasKeyDown(e, selectedRef.current, store, cmdManager, startEditing, selectSelection, selectRange, setView, setFindDialogOpen, runClipboard, clearClipboardSession, execCmd, view.frozenRows, view.frozenCols, view.zoom, () => setMulti([]), () => multiRef.current);
       }} onDoubleClick={(e) => { const cell = rendererRef.current?.cellAtPoint(e.clientX, e.clientY); if (cell != null) startEditing(cell, undefined, true); }} />
       {editing !== null && <EditorOverlay refEl={inputRef} editingRefSetter={(cell) => { editingRef.current = cell; setEditing(cell); }} editing={editing} setEditing={setEditing} commit={commitEditing} zoom={view.zoom} store={store} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}</div>
+      <PasteSpecialDialog open={pasteSpecialOpen} onOk={(opts) => void applyPasteSpecial(opts)} onCancel={() => setPasteSpecialOpen(false)} />
       {filterPopup !== null && <FilterDropdown store={store} cmdManagerExecutor={execCmd} r={filterPopup.r} c={filterPopup.c} x={filterPopup.x} y={filterPopup.y} onClose={() => setFilterPopup(null)} />}
     <StatusBar store={store} selected={selected?.range ?? null} zoom={view.zoom} />
     <BottomBar sheets={sheets} activeSheetId={activeSheetId} onSheetChange={(id) => { setMulti([]); store.activateSheet(id); }} onAddSheet={() => addSheet(store)} onRenameSheet={(id) => renameSheet(store, id)} onDeleteSheet={(id) => deleteSheet(store, id)} />
     {ctxMenu?.kind === 'cell' && <CellContextMenu
       x={ctxMenu.x} y={ctxMenu.y} onClose={closeCtxMenu}
-      onCut={() => runCtxClipboard('cut')} onCopy={() => runCtxClipboard('copy')} onPaste={() => runCtxClipboard('paste')} onClear={() => runCtxClipboard('clear')}
+      onCut={() => runCtxClipboard('cut')} onCopy={() => runCtxClipboard('copy')} onPaste={() => runCtxClipboard('paste')} onClear={() => runCtxClipboard('clear')} onPasteSpecial={() => setPasteSpecialOpen(true)}
       onInsertRow={() => { const range = selectedRef.current?.range; const r = range?.r1 ?? 0; const count = range !== undefined ? range.r2 - range.r1 + 1 : 1; execCmd(new InsertRowCommand({ r, count, position: 'above' })); }}
       onInsertCol={() => { const range = selectedRef.current?.range; const c = range?.c1 ?? 0; const count = range !== undefined ? range.c2 - range.c1 + 1 : 1; execCmd(new InsertColCommand({ c, count, position: 'left' })); }}
       onDeleteRow={() => { const range = selectedRef.current?.range; if (range === undefined) return; execCmd(new DeleteRowCommand({ r: range.r1, count: range.r2 - range.r1 + 1 })); }}
@@ -808,8 +834,8 @@ class CompositeCommand extends Command<readonly Command[]> {
   public getUndo(): Command { return new CompositeCommand([...this.args].reverse().map((cmd) => cmd.getUndo())); }
   public override describe(): string { return 'Composite'; }
 }
-function applyMatrix(store: Store, cmdManager: CommandManager | undefined, r: number, c: number, values: readonly (readonly CellPatch[])[]): void { const lastRow = values[values.length - 1]; if (lastRow === undefined) return; executeRange(store, cmdManager, r, c, values); }
-function executeRange(store: Store | undefined, cmdManager: CommandManager | undefined, r: number, c: number, values: readonly (readonly CellPatch[])[]): void { const r2 = r + values.length - 1; const c2 = c + (values[0]?.length ?? 1) - 1; const cmd = new SetRangeValues({ r1: r, c1: c, r2, c2, values }); if (cmdManager === undefined) { if (store !== undefined) cmd.execute(store); } else cmdManager.execute(cmd); }
+function applyMatrix(store: Store, cmdManager: CommandManager | undefined, r: number, c: number, values: readonly (readonly (CellPatch | undefined)[])[]): void { const lastRow = values[values.length - 1]; if (lastRow === undefined) return; executeRange(store, cmdManager, r, c, values); }
+function executeRange(store: Store | undefined, cmdManager: CommandManager | undefined, r: number, c: number, values: readonly (readonly (CellPatch | undefined)[])[]): void { const r2 = r + values.length - 1; const c2 = c + (values[0]?.length ?? 1) - 1; const cmd = new SetRangeValues({ r1: r, c1: c, r2, c2, values }); if (cmdManager === undefined) { if (store !== undefined) cmd.execute(store); } else cmdManager.execute(cmd); }
 function matrix(range: RangeAddress, cell: () => CellPatch): CellPatch[][] { return Array.from({ length: range.r2 - range.r1 + 1 }, () => Array.from({ length: range.c2 - range.c1 + 1 }, cell)); }
 function addSheet(store: Store): void { const name = window.prompt('Sheet name', `Sheet${store.getSheets().length + 1}`); if (name !== null) store.addSheet(name); }
 function renameSheet(store: Store, id: string): void { const current = store.getSheets().find((s) => s.id === id)?.name ?? ''; const name = window.prompt('Rename sheet', current); if (name !== null) store.renameSheet(id, name); }
