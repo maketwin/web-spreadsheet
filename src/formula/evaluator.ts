@@ -38,9 +38,43 @@ function evaluateRange(node: Extract<AstNode, { type: 'range' }>, resolve: CellR
 }
 
 function evaluateFunction(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver, resolveName?: NamedRangeResolver): FormulaArgument {
+  // VLOOKUP needs the 2-D shape of its table range, which the flat
+  // FormulaArgument list cannot express — resolved per-cell here instead.
+  if (node.name === 'VLOOKUP') return vlookup(node, resolve, resolveName);
   const spec = registry.get(node.name);
   if (!spec) return null;
   return spec.evaluate(node.args.map((arg) => evaluate(arg, resolve, resolveName)));
+}
+
+/**
+ * Excel VLOOKUP(lookup, table, colIndex, [rangeLookup]): exact match when
+ * rangeLookup is FALSE/0 (case-insensitive for text); otherwise approximate
+ * match on an ascending-sorted first column (largest key <= lookup).
+ * Returns '#N/A' when no match exists, like Excel.
+ */
+function vlookup(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver, resolveName?: NamedRangeResolver): FormulaValue {
+  const [lookupArg, tableArg, colArg, rangeArg] = node.args;
+  if (lookupArg === undefined || tableArg === undefined || colArg === undefined) return null;
+  if (tableArg.type !== 'range') return null;
+  const lookup = scalar(evaluate(lookupArg, resolve, resolveName));
+  const colIndex = Number(scalar(evaluate(colArg, resolve, resolveName)));
+  const approximate = rangeArg === undefined ? true : Boolean(scalar(evaluate(rangeArg, resolve, resolveName)));
+  const x1 = Math.min(tableArg.x1, tableArg.x2);
+  const x2 = Math.max(tableArg.x1, tableArg.x2);
+  const y1 = Math.min(tableArg.y1, tableArg.y2);
+  const y2 = Math.max(tableArg.y1, tableArg.y2);
+  if (!Number.isInteger(colIndex) || colIndex < 1 || colIndex > x2 - x1 + 1) return null;
+  let approximateHit: FormulaValue = null;
+  for (let y = y1; y <= y2; y += 1) {
+    const key = resolve(x1, y, tableArg.sheetName);
+    if (excelEquals(key, lookup)) return resolve(x1 + colIndex - 1, y, tableArg.sheetName);
+    if (approximate && lookup !== null && key !== null) {
+      const order = compare(key, lookup);
+      if (order <= 0) approximateHit = resolve(x1 + colIndex - 1, y, tableArg.sheetName);
+      else break; // first column is assumed ascending: past the last candidate
+    }
+  }
+  return approximate ? (approximateHit ?? '#N/A') : '#N/A';
 }
 
 function evaluateBinary(node: Extract<AstNode, { type: 'binary' }>, resolve: CellResolver, resolveName?: NamedRangeResolver): FormulaValue {
@@ -56,13 +90,52 @@ function evaluateBinary(node: Extract<AstNode, { type: 'binary' }>, resolve: Cel
       return Number(left) * Number(right);
     case '/':
       return Number(left) / Number(right);
+    case '&':
+      return `${textOf(left)}${textOf(right)}`;
     case '>':
-      return Number(left) > Number(right);
+      return compare(left, right) > 0;
     case '<':
-      return Number(left) < Number(right);
+      return compare(left, right) < 0;
+    case '>=':
+      return compare(left, right) >= 0;
+    case '<=':
+      return compare(left, right) <= 0;
+    case '=':
+      return excelEquals(left, right);
+    case '<>':
+      return !excelEquals(left, right);
     default:
       return null;
   }
+}
+
+/** Excel comparison: numeric when both sides are numeric, else case-insensitive text. */
+function compare(a: FormulaValue, b: FormulaValue): number {
+  const an = numericOr(a);
+  const bn = numericOr(b);
+  if (an !== undefined && bn !== undefined) return an - bn;
+  return textOf(a).toLowerCase().localeCompare(textOf(b).toLowerCase());
+}
+
+/** Excel `=`: numbers compare numerically; text compares case-insensitively. */
+export function excelEquals(a: FormulaValue, b: FormulaValue): boolean {
+  if (typeof a === 'boolean' || typeof b === 'boolean') return a === b;
+  return compare(a, b) === 0;
+}
+
+function numericOr(v: FormulaValue): number | undefined {
+  if (typeof v === 'number') return v;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v);
+    if (!Number.isNaN(n)) return n;
+  }
+  return undefined;
+}
+
+function textOf(v: FormulaValue): string {
+  if (v === null || v === undefined) return '';
+  if (v instanceof Date) return v.toISOString();
+  return String(v);
 }
 
 function evaluateUnary(node: Extract<AstNode, { type: 'unary' }>, resolve: CellResolver, resolveName?: NamedRangeResolver): FormulaValue {

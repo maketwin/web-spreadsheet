@@ -3,7 +3,7 @@ import { registry } from '../../src/formula/registry';
 
 describe('formula registry', () => {
   it('registers at least 30 functions', () => {
-    expect(registry.list()).toHaveLength(32);
+    expect(registry.list()).toHaveLength(31);
   });
 
   it('evaluates SUM', () => {

@@ -53,7 +53,6 @@ registry.register('UPPER', { minArgs: 1, maxArgs: 1, evaluate: ([s]) => String(f
 registry.register('LOWER', { minArgs: 1, maxArgs: 1, evaluate: ([s]) => String(first(s)).toLowerCase() });
 registry.register('TRIM', { minArgs: 1, maxArgs: 1, evaluate: ([s]) => String(first(s)).trim() });
 
-registry.register('VLOOKUP', { minArgs: 3, maxArgs: 4, evaluate: () => null });
 registry.register('INDEX', { minArgs: 2, maxArgs: 3, evaluate: ([arr, row]) => valueAt(arr, Number(first(row)) - 1) });
 registry.register('MATCH', { minArgs: 2, maxArgs: 3, evaluate: ([search, arr]) => matchIndex(first(search), arr) });
 registry.register('COUNTIF', { minArgs: 2, maxArgs: 2, evaluate: ([arr, criteria]) => countIf(arr, first(criteria)) });

@@ -1,5 +1,20 @@
 import type { AstNode } from './types';
 
+/** True when the whole expression is wrapped in one balanced pair of parens. */
+function isWrappedInParens(expr: string): boolean {
+  if (!expr.startsWith('(') || !expr.endsWith(')')) return false;
+  let depth = 0;
+  for (let i = 0; i < expr.length; i += 1) {
+    if (expr[i] === '(') depth += 1;
+    else if (expr[i] === ')') depth -= 1;
+    if (depth === 0 && i < expr.length - 1) return false; // closes before the end
+  }
+  return depth === 0;
+}
+
+const TWO_CHAR_OPS = new Set(['>=', '<=', '<>']);
+const SINGLE_CHAR_OPS = new Set(['&', '=', '+', '-', '*', '/', '>', '<']);
+
 export class FormulaParser {
   parse(input: string): AstNode | null {
     if (!input.startsWith('=')) return null;
@@ -7,6 +22,9 @@ export class FormulaParser {
   }
 
   private parseExpression(expr: string): AstNode {
+    // Parenthesized group: unwrap and parse the inner expression.
+    if (isWrappedInParens(expr)) return this.parseExpression(expr.slice(1, -1).trim());
+
     const binary = this.parseBinary(expr);
     if (binary) return binary;
 
@@ -17,14 +35,26 @@ export class FormulaParser {
   }
 
   private parseBinary(expr: string): AstNode | null {
-    for (const op of ['+', '-', '*', '/', '>', '<']) {
-      const index = expr.indexOf(op, 1);
-      if (index <= 0) continue;
+    // Leftmost operator at paren depth 0 wins; two-character operators are
+    // recognized before their single-char prefixes. Operators nested inside
+    // function arguments belong to the function, not to this expression.
+    let depth = 0;
+    for (let i = 0; i < expr.length; i += 1) {
+      const ch = expr[i];
+      if (ch === '(') { depth += 1; continue; }
+      if (ch === ')') { depth -= 1; continue; }
+      if (depth !== 0 || i === 0) continue;
+      // Scientific notation: the sign in 1E-5 / 2e+4 is part of the literal.
+      const prev = expr[i - 1];
+      if ((ch === '-' || ch === '+') && (prev === 'e' || prev === 'E') && /\d/.test(expr[i - 2] ?? '')) continue;
+      const two = expr.slice(i, i + 2);
+      const op = TWO_CHAR_OPS.has(two) ? two : (SINGLE_CHAR_OPS.has(ch ?? '') ? ch : undefined);
+      if (op === undefined) continue;
       return {
         type: 'binary',
         op,
-        left: this.parseAtom(expr.slice(0, index).trim()),
-        right: this.parseAtom(expr.slice(index + 1).trim()),
+        left: this.parseExpression(expr.slice(0, i).trim()),
+        right: this.parseExpression(expr.slice(i + op.length).trim()),
       };
     }
     return null;
@@ -36,7 +66,7 @@ export class FormulaParser {
     const argsText = match?.[2];
     if (name === undefined || argsText === undefined) return null;
 
-    const args = argsText.trim() === '' ? [] : argsText.split(',').map((arg) => this.parseAtom(arg.trim()));
+    const args = argsText.trim() === '' ? [] : splitArgs(argsText).map((arg) => this.parseExpression(arg.trim()));
     return { type: 'func', name: name.toUpperCase(), args };
   }
 
@@ -76,9 +106,11 @@ export class FormulaParser {
 
   private parseCell(expr: string, sheetName?: string): Extract<AstNode, { type: 'cell' }> | null {
     const scoped = sheetName === undefined ? splitSheetScope(expr) : { sheetName, ref: expr };
-    const match = scoped.ref.match(/^([A-Za-z]+)(\d+)$/);
-    const col = match?.[1];
-    const row = match?.[2];
+    // Excel absolute references: $ anchors are accepted (and preserved by
+    // shift/remap operations); they do not change evaluation semantics.
+    const match = scoped.ref.match(/^(\$?)([A-Za-z]+)(\$?)(\d+)$/);
+    const col = match?.[2];
+    const row = match?.[4];
     if (col === undefined || row === undefined) return null;
 
     const cell: Extract<AstNode, { type: 'cell' }> = { type: 'cell', x: columnToIndex(col), y: Number(row) - 1 };
@@ -87,6 +119,21 @@ export class FormulaParser {
   }
 }
 
+
+/** Split function arguments on top-level commas (nested calls keep theirs). */
+function splitArgs(text: string): string[] {
+  const args: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth -= 1;
+    else if (ch === ',' && depth === 0) { args.push(text.slice(start, i)); start = i + 1; }
+  }
+  args.push(text.slice(start));
+  return args;
+}
 
 function splitSheetScope(expr: string): { sheetName?: string; ref: string } {
   const bang = expr.indexOf('!');
