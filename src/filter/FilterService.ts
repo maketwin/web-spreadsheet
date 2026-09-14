@@ -181,14 +181,17 @@ export class FilterService {
 
   /** Sort rows in range by column `sortCol` ascending or descending. */
   public sortRange(r1: number, c1: number, r2: number, c2: number, sortCol: number, direction: 'asc' | 'desc'): void {
-    let range = { r1, c1, r2, c2, sortCol };
     const filter = this.store.getAutoFilter();
     const isSingleCell = r1 === r2 && c1 === c2;
+    const isSingleColumn = c1 === c2;
+    let range = { r1, c1, r2, c2, sortCol };
     if (filter !== undefined && isSingleCell && r1 >= filter.range.r1 && r1 <= filter.range.r2 && c1 >= filter.range.c1 && c1 <= filter.range.c2) {
       range = { ...filter.range, sortCol: c1 };
-    } else if (isSingleCell) {
+    } else if (isSingleCell || isSingleColumn) {
+      // Excel default: expand so a one-column highlight cannot tear formulas
+      // away from their row labels. Explicit multi-column ranges stay intact.
       const inferred = this.inferDataRegion({ r1, c1, r2, c2 });
-      range = { ...inferred, sortCol: c1 };
+      range = { r1: isSingleCell ? inferred.r1 : r1, c1: inferred.c1, r2: isSingleCell ? inferred.r2 : r2, c2: inferred.c2, sortCol };
     }
     if (filter !== undefined && range.r1 === filter.range.r1 && range.r2 === filter.range.r2) {
       range.r1 += 1; // Excel keeps the AutoFilter header row in place.

@@ -87,34 +87,77 @@ const REF_OR_RANGE_TOKEN = /\$?[A-Za-z]{1,3}\$?[1-9]\d*(?::\$?[A-Za-z]{1,3}\$?[1
 
 /**
  * Rewrite same-sheet A1 references pointing inside the sorted range through
- * the row permutation, mirroring Excel sort semantics: moved formulas keep
- * referencing the same logical data. Range endpoints are re-normalized so a
- * permutation cannot flip a range like B2:B4 into B5:B3. References outside
- * the range (and cross-sheet references) are left untouched.
+ * the row permutation so moved formulas keep referencing the same logical
+ * cells. For a range, every row between the endpoints is mapped (not just
+ * the two corners) — endpoint-only remapping shrinks ranges when an interior
+ * row sorts outside the new corner span (common when AutoFilter is on and
+ * the user sorts by a formula/total column). Rows absent from the permutation
+ * (hidden/pinned under a filter) keep their index. Corners are re-normalized
+ * so B5:B3 becomes B3:B5. Cross-sheet refs and columns outside the sort
+ * domain are left untouched.
  */
-export function remapFormulaRows(formula: string, rows: ReadonlyMap<number, number>, c1: number, c2: number): string {
+export interface RemapScope {
+  /** When set, `SheetName!A1`-scoped tokens naming this sheet also remap. */
+  readonly sheetName?: string;
+  /** Other-sheet formulas: only tokens explicitly scoped to sheetName remap. */
+  readonly scopedOnly?: boolean;
+}
+
+export function remapFormulaRows(formula: string, rows: ReadonlyMap<number, number>, c1: number, c2: number, scope?: RemapScope): string {
   return formula.replace(REF_OR_RANGE_TOKEN, (token, offset: number) => {
-    // A token glued to a preceding identifier, number, '!', or '.' is part
-    // of a function name, scientific literal, or cross-sheet reference.
+    // A token glued to a preceding identifier, number, or '.' is part of a
+    // function name or scientific literal. A '!' prefix marks a sheet scope:
+    // remap only when it names the sorted sheet.
     const prev = formula[offset - 1];
-    if (prev !== undefined && /[\w$!.]/.test(prev)) return token;
+    if (prev !== undefined && /[\w$.]/.test(prev)) return token;
+    if (prev === '!') {
+      const name = scopeNameBefore(formula, offset);
+      if (scope?.sheetName === undefined || name !== scope.sheetName) return token;
+    } else if (scope?.scopedOnly === true) return token;
     const parts = token.split(':');
     const start = parseRefToken(parts[0] ?? '');
     if (start === null) return token;
     const end = parts[1] !== undefined ? parseRefToken(parts[1]) : undefined;
-    const startTarget = inSortDomain(start.c, c1, c2) ? rows.get(start.r) : undefined;
-    const endTarget = end !== null && end !== undefined && inSortDomain(end.c, c1, c2) ? rows.get(end.r) : undefined;
-    if (startTarget === undefined && endTarget === undefined) return token;
-    let from = { ...start, r: startTarget ?? start.r };
-    let to = end === null || end === undefined ? null : { ...end, r: endTarget ?? end.r };
-    if (to !== null && (to.r < from.r || (to.r === from.r && to.c < from.c))) {
+    if (end === null || end === undefined) {
+      if (!inSortDomain(start.c, c1, c2)) return token;
+      const target = rows.get(start.r);
+      if (target === undefined) return token;
+      return rebuildRefToken(parts[0] ?? '', target);
+    }
+    const startIn = inSortDomain(start.c, c1, c2);
+    const endIn = inSortDomain(end.c, c1, c2);
+    if (!startIn && !endIn) return token;
+    const rLo = Math.min(start.r, end.r);
+    const rHi = Math.max(start.r, end.r);
+    let touched = false;
+    for (let r = rLo; r <= rHi; r += 1) {
+      if (rows.has(r)) { touched = true; break; }
+    }
+    if (!touched) return token;
+    // Span must cover every image of the original rows (mapped or pinned).
+    let mappedMin = Number.POSITIVE_INFINITY;
+    let mappedMax = Number.NEGATIVE_INFINITY;
+    for (let r = rLo; r <= rHi; r += 1) {
+      const target = rows.get(r) ?? r;
+      if (target < mappedMin) mappedMin = target;
+      if (target > mappedMax) mappedMax = target;
+    }
+    let from = { ...start, r: mappedMin };
+    let to = { ...end, r: mappedMax };
+    if (to.r < from.r || (to.r === from.r && to.c < from.c)) {
       const swap = from;
       from = to;
       to = swap;
     }
-    const rebuilt = rebuildRefToken(parts[0] ?? '', from.r);
-    return to === null ? rebuilt : `${rebuilt}:${rebuildRefToken(parts[1] ?? '', to.r)}`;
+    return `${rebuildRefToken(parts[0] ?? '', from.r)}:${rebuildRefToken(parts[1] ?? '', to.r)}`;
   });
+}
+
+/** Sheet name in the `Name!` / `'Name'!` scope immediately before `offset`. */
+function scopeNameBefore(formula: string, offset: number): string | undefined {
+  const before = formula.slice(0, offset);
+  const match = before.match(/(?:'([^']+)'|([A-Za-z0-9_.\u4e00-\u9fa5]+))!$/);
+  return match?.[1] ?? match?.[2];
 }
 
 function inSortDomain(col: number, c1: number, c2: number): boolean {

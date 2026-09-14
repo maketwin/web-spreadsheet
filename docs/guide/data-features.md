@@ -67,7 +67,7 @@ filter.setColumnFilter(1, {
 // cmdManager.execute(new SortRangeCommand(range, { sortCol: 1, direction: 'asc' }))
 ```
 
-排序规则与 Excel 一致：数字排在文本前，空值始终排最后；排序在单个 batch 内完成，区间内公式引用的行号会重映射。
+排序规则与 Excel 一致：数字排在文本前，空值始终排最后；筛选状态下隐藏行钉在原位、只对可见行排序。排序在单个 batch 内完成，且按 Excel 的「移动语义」重映射引用：区间内公式的行号经置换表改写，区间外引用被移动单元格的公式（含跨表 `Sheet!A1` 引用）也会全簿跟随改写，并纳入同一次撤销。全簿重写由独立服务 `src/formula/rowMoveRefs.ts` 的 `remapRefsForMovedRows` 统一完成——任何「行移动」类操作（排序、将来的剪切移动/结构调整）只需产出置换表并调用它，不必各自实现引用维护。
 
 ## 命名区域
 
