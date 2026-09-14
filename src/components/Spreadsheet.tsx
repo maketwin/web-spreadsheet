@@ -3,15 +3,16 @@ import { AlignCenterOutlined, AlignLeftOutlined, AlignRightOutlined, BgColorsOut
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type Dispatch, type FC, type KeyboardEvent as ReactKeyboardEvent, type RefObject, type SetStateAction } from 'react';
-import { ClipboardService } from '../clipboard/ClipboardService';
-import { buildPasteSpecialMatrix, type PasteSpecialOptions } from '../clipboard/pasteSpecial';
-import { Command } from '../commands/Command';
+import { clearRange, clearRangeCmd, CompositeCommand } from '../util/rangeValues';
+import { useMultiSelection } from './hooks/useMultiSelection';
+import { useClipboardSession } from './hooks/useClipboardSession';
+import type { Command } from '../commands/Command';
 import type { DialogName } from './menu/types';
 import { CommandManager } from '../commands/CommandManager';
 import { SetCellText } from '../commands/impl/SetCellText';
 import { SetRangeStyleCommand } from '../commands/impl/SetRangeStyle';
 import { SetRangeBorderCommand, type BorderPreset, type BorderLine } from '../commands/impl/SetRangeBorder';
-import { SetRangeValues, type CellPatch } from '../commands/impl/SetRangeValues';
+import { SetRangeValues } from '../commands/impl/SetRangeValues';
 import { EventBus } from '../events/EventBus';
 import { FormulaEngine } from '../formula/FormulaEngine';
 import { KeyboardHandler, type MenuShortcutCommand } from '../keys/KeyboardHandler';
@@ -48,9 +49,10 @@ import type { Cell, Style } from '../types';
 import { WRAP_LINE_HEIGHT, wrappedContentHeight } from '../util/wrapText';
 import { autoFitRowHeight, autofitRowsForSelection } from '../util/rowAutofit';
 import { fillShortcut } from '../fill/fillShortcut';
-import { shiftFormula } from '../commands/impl/FillRange';
 import { cycleDollars, endsWithRef, isPointTrigger, refAtCaret, upsertRef } from '../formula/pointMode';
 
+export { snapshotCells, buildSessionPasteValues, tilePlainCells, combineMultiRanges } from '../clipboard/session';
+export type { ClipboardSessionState } from '../clipboard/session';
 export type CellInput = CellDataInput;
 export interface SheetInput { readonly id?: string; readonly name: string; readonly data?: readonly (readonly CellInput[])[] }
 export interface SpreadsheetOptions { readonly data?: readonly (readonly CellInput[])[]; readonly sheets?: readonly SheetInput[]; readonly theme?: Theme | false }
@@ -82,15 +84,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   selectedRef.current = selected;
   const editingRef = useRef<EditingCell | null>(editing);
   editingRef.current = editing;
-  // Excel multi-selection (Ctrl+click/drag): ranges beyond the main one.
-  const multiRef = useRef<readonly RangeAddress[]>([]);
-
-  const rendererApiRef = useRef<{ setExtraRanges: (ranges: readonly RangeAddress[]) => void } | null>(null);
-  /** Replace the extra (Ctrl-added) selection ranges and repaint. */
-  const setMulti = useCallback((ranges: readonly RangeAddress[]) => {
-    multiRef.current = ranges;
-    rendererApiRef.current?.setExtraRanges(ranges);
-  }, []);
+  const { multiRef, rendererApiRef, setMulti } = useMultiSelection();
 
   const selectSelection = useCallback((next: Selection) => {
     selectedRef.current = next;
@@ -183,65 +177,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   // only when the paste lands. Copy sessions allow repeated pastes; cut pastes once.
   // Excel "End mode": End arms the next arrow key to edge-jump (like Ctrl+arrow).
   const endModeRef = useRef(false);
-  const clipboardSession = useRef<{ readonly type: 'cut' | 'copy'; readonly range: RangeAddress; readonly text: string; readonly cells: ReadonlyArray<ReadonlyArray<Cell | undefined>> } | null>(null);
-  const clearClipboardSession = useCallback((): boolean => {
-    const had = clipboardSession.current !== null;
-    clipboardSession.current = null;
-    rendererRef.current?.setClipboardRange(undefined);
-    return had;
-  }, [rendererRef]);
-  const [pasteSpecialOpen, setPasteSpecialOpen] = useState(false);
-  const applyPasteSpecial = useCallback(async (opts: PasteSpecialOptions) => {
-    setPasteSpecialOpen(false);
-    const target = selectedRef.current?.range;
-    if (target === undefined) return;
-    const session = clipboardSession.current;
-    const source = session !== null
-      ? session
-      : { type: 'copy' as const, range: { r1: 0, c1: 0, r2: 0, c2: 0 }, cells: await ClipboardService.read() };
-    if (source.cells.length === 0) return;
-    applyMatrix(store, cmdManager, target.r1, target.c1, buildPasteSpecialMatrix(store, source, target.r1, target.c1, target, opts));
-    // Excel: a cut session ends on the first paste; the source clears when content moved.
-    if (session !== null && session.type === 'cut') {
-      if (opts.mode !== 'formats' && opts.operation === 'none' && !opts.transpose) clearRange(store, cmdManager, session.range);
-      clearClipboardSession();
-    }
-  }, [store, cmdManager, clearClipboardSession]);
-  const runClipboard = useCallback(async (type: 'cut' | 'copy' | 'paste', range: RangeAddress) => {
-    if (type === 'paste') {
-      const session = clipboardSession.current;
-      if (session !== null) {
-        // Excel in-app paste: formulas ride along (copy shifts relative refs to
-        // the target, cut moves them verbatim) and cell styles are preserved.
-        applyMatrix(store, cmdManager, range.r1, range.c1, buildSessionPasteValues(session, range.r1, range.c1, range));
-        if (session.type === 'cut') { clearRange(store, cmdManager, session.range); clearClipboardSession(); }
-        return;
-      }
-      await pasteFromClipboard(store, cmdManager, range);
-      return;
-    }
-    const extras = multiRef.current;
-    if (extras.length > 0) {
-      // Excel multi-area copy: only when the ranges line up by rows or columns.
-      const combined = combineMultiRanges(store, [range, ...extras]);
-      if (combined === null) { message.warning('不能对多重选定区域使用此命令'); return; }
-      await ClipboardService.copy(store, combined.range);
-      clipboardSession.current = { type, range: combined.range, text: combined.text, cells: combined.cells };
-      rendererRef.current?.setClipboardRange(combined.range);
-      return;
-    }
-    const payload = ClipboardService.createPayload(store, range);
-    if (payload === null) return;
-    await ClipboardService.copy(store, range);
-    clipboardSession.current = { type, range, text: payload.text, cells: snapshotCells(store, range) };
-    rendererRef.current?.setClipboardRange(range);
-  }, [store, cmdManager, rendererRef, clearClipboardSession]);
-  const runCtxClipboard = useCallback((type: 'cut' | 'copy' | 'paste' | 'clear') => {
-    const range = selectedRef.current?.range;
-    if (range === undefined) return;
-    if (type === 'clear') clearRange(store, cmdManager, range);
-    else void runClipboard(type, range);
-  }, [store, cmdManager, runClipboard]);
+  const { clipboardSession, clearClipboardSession, runClipboard, runCtxClipboard, pasteSpecialOpen, setPasteSpecialOpen, applyPasteSpecial } = useClipboardSession(store, cmdManager, rendererRef, selectedRef, multiRef);
   const startEditing = (cell: CellAddress, value = cellEditValue(store, cell), editMode = false): void => {
     // Excel: entering edit mode cancels the marching-ants clipboard session.
     if (clipboardSession.current !== null) clearClipboardSession();
@@ -720,123 +656,6 @@ function cellEditValue(store: Store, cell: CellAddress): string { const current 
 function syncExistingFormulas(store: Store, engine: FormulaEngine): void { const sheetId = store.getActiveSheetId(); store.getCells().forEach(([id, cell]) => { const formula = formulaText(cell); if (formula !== undefined) engine.setFormula(id, formula, formulaDependencies(formula), sheetId); }); }
 function syncCellFormula(engine: FormulaEngine, r: number, c: number, cell: Cell | undefined, sheetId?: string): void { const formula = formulaText(cell); const id = cellId(r, c); if (formula === undefined) engine.removeFormula(id, sheetId); else engine.setFormula(id, formula, formulaDependencies(formula), sheetId); }
 
-export interface ClipboardSessionState { readonly type: 'cut' | 'copy'; readonly range: RangeAddress; readonly text: string; readonly cells: ReadonlyArray<ReadonlyArray<Cell | undefined>> }
-
-/** Deep-enough snapshot of the source block so the paste is value/style/formula-faithful. */
-export function snapshotCells(store: Store, range: RangeAddress): ReadonlyArray<ReadonlyArray<Cell | undefined>> {
-  const rows: Array<ReadonlyArray<Cell | undefined>> = [];
-  for (let r = range.r1; r <= range.r2; r += 1) {
-    const row: Array<Cell | undefined> = [];
-    for (let c = range.c1; c <= range.c2; c += 1) {
-      const cell = store.getCell(r, c);
-      row.push(cell === undefined ? undefined : { ...cell });
-    }
-    rows.push(row);
-  }
-  return rows;
-}
-
-/**
- * Turn a session snapshot into paste values anchored at (r, c). Copy shifts
- * relative formula references by the paste offset (Excel); cut keeps formulas
- * verbatim (Excel move semantics). Empty source cells clear the target cell.
- */
-export function buildSessionPasteValues(session: ClipboardSessionState, r: number, c: number, target?: RangeAddress): CellPatch[][] {
-  const srcRows = session.cells.length;
-  const srcCols = session.cells[0]?.length ?? 1;
-  const [rows, cols] = tiledDims(srcRows, srcCols, target);
-  const out: CellPatch[][] = [];
-  for (let i = 0; i < rows; i += 1) {
-    const line: CellPatch[] = [];
-    for (let j = 0; j < cols; j += 1) {
-      const cell = session.cells[i % srcRows]?.[j % srcCols];
-      if (cell === undefined) { line.push({ text: '', formula: undefined, value: undefined, styleId: undefined, type: undefined }); continue; }
-      // Formula shift is measured from this tile's source cell, so tiled copies
-      // each get their own relative references (Excel).
-      const dr = r + i - (session.range.r1 + (i % srcRows));
-      const dc = c + j - (session.range.c1 + (j % srcCols));
-      // Explicit keys (even undefined) so the paste fully replaces the target
-      // cell instead of merging with stale formula/value/style remnants.
-      line.push({
-        text: cell.text,
-        formula: cell.formula !== undefined && session.type === 'copy' ? shiftFormula(cell.formula, dr, dc) : cell.formula,
-        value: cell.value,
-        styleId: cell.styleId,
-        type: cell.type,
-      });
-    }
-    out.push(line);
-  }
-  return out;
-}
-
-/**
- * Excel paste tiling: a target exactly N×M times the copied block gets filled
- * with repeats; anything else pastes a single copy at the anchor.
- */
-function tiledDims(srcRows: number, srcCols: number, target?: RangeAddress): [number, number] {
-  if (target === undefined || srcRows === 0 || srcCols === 0) return [srcRows, srcCols];
-  const tr = target.r2 - target.r1 + 1;
-  const tc = target.c2 - target.c1 + 1;
-  if ((tr > srcRows || tc > srcCols) && tr % srcRows === 0 && tc % srcCols === 0) return [tr, tc];
-  return [srcRows, srcCols];
-}
-
-/** External clipboard paste with Excel tiling for exact-multiple selections. */
-export function tilePlainCells(cells: Cell[][], target: RangeAddress): Cell[][] {
-  const srcRows = cells.length;
-  const srcCols = cells[0]?.length ?? 1;
-  const [rows, cols] = tiledDims(srcRows, srcCols, target);
-  if (rows === srcRows && cols === srcCols) return cells;
-  return Array.from({ length: rows }, (_, i) => Array.from({ length: cols }, (_, j) => cells[i % srcRows]![j % srcCols]!));
-}
-
-/**
- * Combine a multi-selection into one rectangular block for copying.
- * Excel allows it only when every range shares the same rows (columns
- * concatenated) or the same columns (rows concatenated); otherwise null.
- */
-export function combineMultiRanges(store: Store, ranges: readonly RangeAddress[]): { range: RangeAddress; cells: ReadonlyArray<ReadonlyArray<Cell | undefined>>; text: string } | null {
-  const sorted = [...ranges].sort((a, b) => a.r1 - b.r1 || a.c1 - b.c1);
-  const sameRows = sorted.every((rg) => rg.r1 === sorted[0]!.r1 && rg.r2 === sorted[0]!.r2);
-  const sameCols = sorted.every((rg) => rg.c1 === sorted[0]!.c1 && rg.c2 === sorted[0]!.c2);
-  if (!sameRows && !sameCols) return null;
-  const cellRows: Array<ReadonlyArray<Cell | undefined>> = [];
-  if (sameRows) {
-    const byCols = [...sorted].sort((a, b) => a.c1 - b.c1);
-    for (let r = sorted[0]!.r1; r <= sorted[0]!.r2; r += 1) {
-      const line: Array<Cell | undefined> = [];
-      for (const rg of byCols) for (let c = rg.c1; c <= rg.c2; c += 1) { const cell = store.getCell(r, c); line.push(cell === undefined ? undefined : { ...cell }); }
-      cellRows.push(line);
-    }
-  } else {
-    const byRows = [...sorted].sort((a, b) => a.r1 - b.r1);
-    for (const rg of byRows) {
-      for (let r = rg.r1; r <= rg.r2; r += 1) {
-        const line: Array<Cell | undefined> = [];
-        for (let c = sorted[0]!.c1; c <= sorted[0]!.c2; c += 1) { const cell = store.getCell(r, c); line.push(cell === undefined ? undefined : { ...cell }); }
-        cellRows.push(line);
-      }
-    }
-  }
-  const union = sorted.reduce((acc, rg) => ({ r1: Math.min(acc.r1, rg.r1), c1: Math.min(acc.c1, rg.c1), r2: Math.max(acc.r2, rg.r2), c2: Math.max(acc.c2, rg.c2) }));
-  const text = cellRows.map((line) => line.map((cell) => cell?.text ?? '').join('\t')).join('\n');
-  return { range: union, cells: cellRows, text };
-}
-
-async function pasteFromClipboard(store: Store, cmdManager: CommandManager | undefined, target: RangeAddress): Promise<void> { const cells = await ClipboardService.read(); applyMatrix(store, cmdManager, target.r1, target.c1, tilePlainCells(cells, target)); }
-function clearRange(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress): void { const values = matrix(range, () => ({ text: '' })); executeRange(store, cmdManager, range.r1, range.c1, values); }
-function clearRangeCmd(range: RangeAddress): Command { const values = matrix(range, () => ({ text: '' })); return new SetRangeValues({ r1: range.r1, c1: range.c1, r2: range.r2, c2: range.c2, values }); }
-
-/** Several commands as one undoable unit (Excel: e.g. Delete across a multi-selection is a single undo). */
-class CompositeCommand extends Command<readonly Command[]> {
-  public execute(store: Store): void { for (const cmd of this.args) cmd.execute(store); }
-  public getUndo(): Command { return new CompositeCommand([...this.args].reverse().map((cmd) => cmd.getUndo())); }
-  public override describe(): string { return 'Composite'; }
-}
-function applyMatrix(store: Store, cmdManager: CommandManager | undefined, r: number, c: number, values: readonly (readonly (CellPatch | undefined)[])[]): void { const lastRow = values[values.length - 1]; if (lastRow === undefined) return; executeRange(store, cmdManager, r, c, values); }
-function executeRange(store: Store | undefined, cmdManager: CommandManager | undefined, r: number, c: number, values: readonly (readonly (CellPatch | undefined)[])[]): void { const r2 = r + values.length - 1; const c2 = c + (values[0]?.length ?? 1) - 1; const cmd = new SetRangeValues({ r1: r, c1: c, r2, c2, values }); if (cmdManager === undefined) { if (store !== undefined) cmd.execute(store); } else cmdManager.execute(cmd); }
-function matrix(range: RangeAddress, cell: () => CellPatch): CellPatch[][] { return Array.from({ length: range.r2 - range.r1 + 1 }, () => Array.from({ length: range.c2 - range.c1 + 1 }, cell)); }
 function addSheet(store: Store): void { const name = window.prompt('Sheet name', `Sheet${store.getSheets().length + 1}`); if (name !== null) store.addSheet(name); }
 function renameSheet(store: Store, id: string): void { const current = store.getSheets().find((s) => s.id === id)?.name ?? ''; const name = window.prompt('Rename sheet', current); if (name !== null) store.renameSheet(id, name); }
 function deleteSheet(store: Store, id: string): void { if (window.confirm('Delete this sheet?')) store.deleteSheet(id); }
