@@ -3,7 +3,8 @@ import { AlignCenterOutlined, AlignLeftOutlined, AlignRightOutlined, BgColorsOut
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type Dispatch, type FC, type KeyboardEvent as ReactKeyboardEvent, type RefObject, type SetStateAction } from 'react';
-import { clearRange, clearRangeCmd, CompositeCommand } from '../util/rangeValues';
+import { applyMatrix, clearRange, clearRangeCmd, CompositeCommand } from '../util/rangeValues';
+import { fillSelectionPatches } from '../fill/fillSelection';
 import { useMultiSelection } from './hooks/useMultiSelection';
 import { useClipboardSession } from './hooks/useClipboardSession';
 import type { Command } from '../commands/Command';
@@ -181,12 +182,15 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const startEditing = (cell: CellAddress, value = cellEditValue(store, cell), editMode = false): void => {
     // Excel: entering edit mode cancels the marching-ants clipboard session.
     if (clipboardSession.current !== null) clearClipboardSession();
-    const next = cellSelection(cell.r, cell.c);
+    // Excel: typing with a multi-cell selection keeps the range (Ctrl+Enter fills it all).
+    const cur = selectedRef.current;
+    const keep = cur !== null && (cur.range.r1 !== cur.range.r2 || cur.range.c1 !== cur.range.c2) && new Range(cur.range).contains(cell.r, cell.c);
+    const next = keep && cur !== null ? rangeSelection(cur.range, cur.anchor, { r: cell.r, c: cell.c }) : cellSelection(cell.r, cell.c);
     selectedRef.current = next;
     setSelected(next);
     setEditing({ ...cell, value, editMode });
   };
-  const commitEditing = (value: string, moveAfter?: { readonly dr: number; readonly dc: number }): void => {
+  const commitEditing = (value: string, moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection = false): void => {
     const ed = editingRef.current;
     // Guarded by the ref so a blur right after a click-commit never double-writes.
     editingRef.current = null;
@@ -198,10 +202,16 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
         const result = svc.validate(value, rule);
         if (!result.valid) { message.warning(result.message ?? '输入值不符合验证规则'); }
       }
-      setCellText(store, cmdManager, ed, value);
+      const selRange = fillSelection ? selectedRef.current?.range : undefined;
+      const fillAll = selRange !== undefined && (selRange.r1 !== selRange.r2 || selRange.c1 !== selRange.c2);
+      if (fillAll && selRange !== undefined) {
+        applyMatrix(store, cmdManager, selRange.r1, selRange.c1, fillSelectionPatches(selRange, ed, value));
+      } else {
+        setCellText(store, cmdManager, ed, value);
+      }
       // Excel: Alt+Enter auto-enables Wrap Text and grows the row
       if (value.includes('\n')) {
-        const range = { r1: ed.r, c1: ed.c, r2: ed.r, c2: ed.c };
+        const range = fillAll && selRange !== undefined ? selRange : { r1: ed.r, c1: ed.c, r2: ed.r, c2: ed.c };
         applyShortcutStyle(store, cmdManager, range, { wrap: true });
         autofitRowsForSelection(store, cmdManager, range);
       }
@@ -304,7 +314,7 @@ export class Spreadsheet {
   }
 }
 
-interface EditorOverlayProps { readonly refEl: RefObject<HTMLTextAreaElement>; readonly editingRefSetter: (cell: EditingCell) => void; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly commit: (value: string, moveAfter?: { readonly dr: number; readonly dc: number }) => void; readonly zoom: number; readonly store: Store; readonly cellRect?: { x: number; y: number; w: number; h: number } }
+interface EditorOverlayProps { readonly refEl: RefObject<HTMLTextAreaElement>; readonly editingRefSetter: (cell: EditingCell) => void; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly commit: (value: string, moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection?: boolean) => void; readonly zoom: number; readonly store: Store; readonly cellRect?: { x: number; y: number; w: number; h: number } }
 const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editing, setEditing, commit, zoom, store, cellRect }) => {
   const composing = useRef(false);
   const cellStyle = store.getCell(editing.r, editing.c)?.styleId !== undefined
@@ -359,7 +369,7 @@ const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editin
           return;
         }
       }
-      handleEditorKey(e, refEl, (moveAfter) => commit(refEl.current?.value ?? editing.value, moveAfter), () => setEditing(null), (next) => setEditing({ ...editing, value: next }), editing.editMode === true);
+      handleEditorKey(e, refEl, (moveAfter, fillSelection) => commit(refEl.current?.value ?? editing.value, moveAfter, fillSelection), () => setEditing(null), (next) => setEditing({ ...editing, value: next }), editing.editMode === true);
     }}
     aria-label="Cell editor"
   />;
@@ -520,6 +530,12 @@ function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selec
     else selectRange(Range.single(target.r, target.c).toAddress());
   }
   else if (action.type === 'fill' && action.fillDir !== undefined) { const op = fillShortcut(range, action.fillDir); if (op !== undefined) execCmd(op); }
+  else if (action.type === 'fillSelection') {
+    // Excel Ctrl+Enter (no pending edit): re-enter the anchor cell's content across
+    // the selection (Excel's active cell stays at the anchor after Shift+arrows/drag).
+    const text = cellEditValue(store, selected.anchor);
+    applyMatrix(store, cmdManager, range.r1, range.c1, fillSelectionPatches(range, selected.anchor, text));
+  }
   else if (action.type === 'selectColumn') { clearMulti?.(); selectSelection(columnSelection(selected.range.c2, TOTAL_ROWS, selected.range.c1)); }
   else if (action.type === 'selectRow') { clearMulti?.(); selectSelection(rowSelection(selected.range.r2, TOTAL_COLS, selected.range.r1)); }
   else if (action.type === 'edit') startEditing({ r: range.r1, c: range.c1 }, undefined, true);
@@ -550,7 +566,7 @@ function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selec
 function handleEditorKey(
   event: ReactKeyboardEvent<HTMLTextAreaElement>,
   refEl: RefObject<HTMLTextAreaElement>,
-  commit: (moveAfter?: { readonly dr: number; readonly dc: number }) => void,
+  commit: (moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection?: boolean) => void,
   cancel: () => void,
   setValue: (value: string) => void,
   editMode = false,
@@ -567,6 +583,8 @@ function handleEditorKey(
   }
   // Excel: Tab commits and moves right (Shift+Tab left)
   if (event.key === 'Tab') { event.preventDefault(); commit({ dr: 0, dc: event.shiftKey ? -1 : 1 }); return; }
+  // Excel: Ctrl+Enter commits the typed text into every cell of the selection.
+  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.altKey) { event.preventDefault(); commit(undefined, true); return; }
   // Excel: Enter commits and moves down (Shift+Enter up); Alt+Enter inserts a line break
   if (event.key === 'Enter' && !event.altKey) { event.preventDefault(); commit({ dr: event.shiftKey ? -1 : 1, dc: 0 }); return; }
   if (event.key === 'Enter' && event.altKey) {

@@ -4,7 +4,7 @@ import { Range, type RangeAddress } from '../selection/Range';
 
 export interface KeyboardAction {
   readonly type: 'move' | 'edit' | 'clear' | 'cancel' | 'copy' | 'paste' | 'cut' | 'type' | 'menu'
-    | 'moveEdge' | 'jump' | 'fill' | 'selectColumn' | 'selectRow' | 'page' | 'backspace' | 'insertDate';
+    | 'moveEdge' | 'jump' | 'fill' | 'selectColumn' | 'selectRow' | 'page' | 'backspace' | 'insertDate' | 'fillSelection';
   /** `page`: PageUp (-1) / PageDown (+1) — the caller resolves the viewport row count. */
   readonly pageDir?: -1 | 1;
   readonly range?: RangeAddress;
@@ -63,6 +63,8 @@ function shortcutAction(key: string): KeyboardAction | null {
   if (key === ';') return { type: 'insertDate' }; // Excel: Ctrl+; enters the current date
   if (key === 'PageUp') return { type: 'menu', command: 'prevSheet' };
   if (key === 'PageDown') return { type: 'menu', command: 'nextSheet' };
+  // Excel: Ctrl+Enter fills the whole selection with the active cell's content.
+  if (key === 'Enter') return { type: 'fillSelection' };
   const normalized = key.toLowerCase();
   if (normalized === 'd') return { type: 'fill', fillDir: 'down' };
   if (normalized === 'r') return { type: 'fill', fillDir: 'right' };
