@@ -382,7 +382,7 @@ describe('CanvasRenderer', () => {
 
     fireEvent.mouseDown(document.querySelector('canvas') as HTMLCanvasElement, { clientX: 10 + ROW_HEADER_WIDTH + COL_WIDTH + 30, clientY: 20 + COL_HEADER_HEIGHT + ROW_HEIGHT + 5 });
 
-    expect(onCellClick).toHaveBeenCalledWith({ r: 1, c: 1 });
+    expect(onCellClick).toHaveBeenCalledWith({ r: 1, c: 1 }, false, false);
     expect(callbacks.length).toBe(1);
     renderer.destroy();
   });
@@ -408,7 +408,7 @@ describe('CanvasRenderer', () => {
     fireEvent.mouseDown(canvas, { clientX: 10 + ROW_HEADER_WIDTH + COL_WIDTH + 50, clientY: 20 + COL_HEADER_HEIGHT + 12 });
     fireEvent.mouseMove(window, { clientX: 10 + ROW_HEADER_WIDTH + COL_WIDTH * 3 + 50, clientY: 20 + COL_HEADER_HEIGHT + ROW_HEIGHT * 2 + 12 });
 
-    expect(onCellClick).toHaveBeenCalledWith({ r: 0, c: 1 });
+    expect(onCellClick).toHaveBeenCalledWith({ r: 0, c: 1 }, false, false);
     expect(onSelectionChange).toHaveBeenCalledWith({ r1: 0, c1: 1, r2: 2, c2: 3 }, { r: 2, c: 3 }, { r: 0, c: 1 });
     expect(onMoveRange).not.toHaveBeenCalled();
     renderer.destroy();

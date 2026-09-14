@@ -4,12 +4,15 @@ import { cellFromText } from '../../util/cell';
 import type { Store } from '../../store/Store';
 import type { Cell } from '../../types';
 
+/** Like Partial<Cell> but allows explicit `undefined` (full cell replacement, e.g. paste). */
+export type CellPatch = { readonly [K in keyof Cell]?: Cell[K] | undefined };
+
 export interface SetRangeValuesArgs {
   readonly r1: number;
   readonly c1: number;
   readonly r2: number;
   readonly c2: number;
-  readonly values: readonly (readonly (Partial<Cell> | undefined)[])[];
+  readonly values: readonly (readonly (CellPatch | undefined)[])[];
 }
 
 export class SetRangeValues extends Command<SetRangeValuesArgs> {
@@ -43,12 +46,31 @@ export class SetRangeValues extends Command<SetRangeValuesArgs> {
   }
 }
 
-function nextCell(oldCell: Cell | undefined, newValue: Partial<Cell>): Cell {
+function nextCell(oldCell: Cell | undefined, newValue: CellPatch): Cell {
   const text = newValue.text ?? oldCell?.text ?? '';
+  // Strip explicit-undefined keys so the merged result stays a valid Cell
+  // under exactOptionalPropertyTypes (undefined keys mean "clear the field").
+  const patch: Partial<Cell> = {};
+  (Object.keys(newValue) as (keyof Cell)[]).forEach((key) => {
+    const v = newValue[key];
+    if (v === undefined) return;
+    (patch as Record<string, unknown>)[key] = v;
+  });
+  const clears = (key: keyof Cell): boolean => key in newValue && newValue[key] === undefined;
   if (newValue.text !== undefined && newValue.formula === undefined && newValue.value === undefined) {
-    return cellFromText({ ...oldCell, ...newValue, text }, text);
+    const base: Cell = { ...oldCell, ...patch, text };
+    if (clears('formula')) delete base.formula;
+    if (clears('value')) delete base.value;
+    if (clears('styleId')) delete base.styleId;
+    if (clears('type')) delete base.type;
+    return cellFromText(base, text);
   }
-  return { ...oldCell, ...newValue, text };
+  const merged: Cell = { ...oldCell, ...patch, text };
+  if (clears('formula')) delete merged.formula;
+  if (clears('value')) delete merged.value;
+  if (clears('styleId')) delete merged.styleId;
+  if (clears('type')) delete merged.type;
+  return merged;
 }
 
 type CellMatrix = Array<Array<Cell | undefined>>;

@@ -23,7 +23,7 @@ export interface CanvasRendererOptions {
   canvas: HTMLCanvasElement; store: Store; selectedRange?: RangeAddress; selectionKind?: SelectionKind;
   activeCell?: CellAddress; zoom?: number; showGrid?: boolean; showFormula?: boolean;
   frozenRows?: number; frozenCols?: number;
-  onCellClick?: (cell: CellAddress, shiftKey?: boolean) => void;
+  onCellClick?: (cell: CellAddress, shiftKey?: boolean, ctrlKey?: boolean) => void;
   onSelectionChange?: (range: RangeAddress, activeCell?: CellAddress, anchorCell?: CellAddress) => void;
   onColumnSelect?: (c: number, shiftKey: boolean) => void; onRowSelect?: (r: number, shiftKey: boolean) => void;
   onSheetSelect?: () => void; onRowResize?: (r: number, height: number) => void; onColResize?: (c: number, width: number) => void;
@@ -74,6 +74,7 @@ export class CanvasRenderer {
   private readonly unsubscribe: () => void;
   private readonly conditionalService = new ConditionalService();
   private selectedRange: RangeAddress | undefined;
+  private extraRanges: RangeAddress[] = [];
   private selectionKind: SelectionKind | undefined;
   private activeCell: CellAddress | undefined;
   private dragAnchor: DragAnchor | null = null;
@@ -173,6 +174,12 @@ export class CanvasRenderer {
     if (this.antsTimer !== null) { window.clearInterval(this.antsTimer); this.antsTimer = null; }
   }
   public setSelectedRange(range: RangeAddress | undefined): void { this.selectedRange = range; this.invalidateAll(); }
+
+  /** Excel multi-selection (Ctrl+click/drag): extra ranges painted like the main one, minus active cell/handle. */
+  public setExtraRanges(ranges: readonly RangeAddress[]): void { this.extraRanges = [...ranges]; this.invalidateAll(); }
+
+  /** Focus the canvas unless the cell editor is open — stealing focus would blur (commit) the editor. */
+  private focusCanvas(): void { if (!this.editing) this.opts.canvas.focus(); }
   public setSelection(range: RangeAddress | undefined, kind: SelectionKind | undefined, activeCell?: CellAddress): void {
     const prev = this.selectedRange;
     const prevActive = this.activeCell;
@@ -282,18 +289,18 @@ export class CanvasRenderer {
     if (this.resizeHandler.onMouseDown(ev)) return;
     if (this.fillHandle.onMouseDown(ev)) { this.dragAnchor = null; return; }
     const h = this.headerAtPoint(ev.clientX, ev.clientY);
-    if (h?.type === 'sheet') { this.opts.canvas.focus(); this.dragAnchor = null; this.opts.onSheetSelect?.(); return; }
-    if (h?.type === 'column') { this.opts.canvas.focus(); this.dragAnchor = { type: 'column', c: h.c }; this.opts.onColumnSelect?.(h.c, ev.shiftKey); return; }
-    if (h?.type === 'row') { this.opts.canvas.focus(); this.dragAnchor = { type: 'row', r: h.r }; this.opts.onRowSelect?.(h.r, ev.shiftKey); return; }
+    if (h?.type === 'sheet') { this.focusCanvas(); this.dragAnchor = null; this.opts.onSheetSelect?.(); return; }
+    if (h?.type === 'column') { this.focusCanvas(); this.dragAnchor = { type: 'column', c: h.c }; this.opts.onColumnSelect?.(h.c, ev.shiftKey); return; }
+    if (h?.type === 'row') { this.focusCanvas(); this.dragAnchor = { type: 'row', r: h.r }; this.opts.onRowSelect?.(h.r, ev.shiftKey); return; }
     const cell = this.pointerCell(ev.clientX, ev.clientY); if (cell === null) return;
     const filter = this.autoFilterAtPoint(ev.clientX, ev.clientY);
     if (filter !== null) {
-      this.opts.canvas.focus();
+      this.focusCanvas();
       this.dragAnchor = null;
       this.opts.onAutoFilterClick?.(filter.r, filter.c, ev.clientX, ev.clientY);
       return;
     }
-    this.opts.canvas.focus();
+    this.focusCanvas();
     if (this.selectedRange !== undefined && !this.antsReplaceSelection(this.selectedRange) && this.isSelectionBorderHit(ev.clientX, ev.clientY) && this.moveDrag === null) {
       this.moveDrag = {
         source: this.selectedRange,
@@ -306,7 +313,7 @@ export class CanvasRenderer {
       return;
     }
     this.dragAnchor = { type: 'cell', ...cell }; this.setSelectedCell(cell);
-    if (ev.shiftKey) this.opts.onCellClick?.(cell, true); else this.opts.onCellClick?.(cell);
+    if (ev.shiftKey) this.opts.onCellClick?.(cell, true); else this.opts.onCellClick?.(cell, false, ev.ctrlKey || ev.metaKey);
   };
   private readonly handleMouseMove = (ev: MouseEvent): void => {
     if (this.resizeHandler.isResizing()) { this.resizeHandler.onMouseMove(ev); return; }
@@ -1081,6 +1088,16 @@ export class CanvasRenderer {
       this.paintSelectionInClip(ctx, theme, seg.range, kind, sr);
       ctx.restore();
     }
+    for (const extra of this.extraRanges) {
+      for (const seg of this.selectionSegments(extra)) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(seg.clip.x, seg.clip.y, seg.clip.w, seg.clip.h);
+        ctx.clip();
+        this.paintSelectionInClip(ctx, theme, seg.range, 'range', extra, false);
+        ctx.restore();
+      }
+    }
   }
 
   /** Split a selection into freeze-quadrant pieces. Each piece is clipped to its pane so
@@ -1129,6 +1146,7 @@ export class CanvasRenderer {
     range: RangeAddress,
     kind: SelectionKind,
     full: RangeAddress,
+    showHandle = true,
   ): void {
     const { x, y, w, h } = this.rangeRect(range);
     // While editing: CSS overlay is borderless input only. Canvas keeps the 2px accent
@@ -1169,7 +1187,7 @@ export class CanvasRenderer {
     ctx.strokeRect(x, y, w, h);
     ctx.lineWidth = 1;
     // Fill handle only on the true bottom-right of the full selection, when that corner is in this piece
-    if (range.r2 === full.r2 && range.c2 === full.c2) {
+    if (showHandle && range.r2 === full.r2 && range.c2 === full.c2) {
       const br = this.rangeRect(full);
       ctx.fillStyle = theme.accent;
       ctx.fillRect(br.x + br.w - 3, br.y + br.h - 3, 6, 6);
@@ -1191,7 +1209,8 @@ export class CanvasRenderer {
     if (this.selectionKind === 'sheet') return 'tint';
     if (this.selectionKind === 'column') return c >= sr.c1 && c <= sr.c2 ? 'solid' : 'none';
     if (this.selectionKind === 'row') return 'none';
-    return c >= sr.c1 && c <= sr.c2 ? 'tint' : 'none';
+    if (c >= sr.c1 && c <= sr.c2) return 'tint';
+    return this.extraRanges.some((rg) => c >= rg.c1 && c <= rg.c2) ? 'tint' : 'none';
   }
 
   private rowHeaderLevel(r: number): 'none' | 'tint' | 'solid' {
@@ -1200,7 +1219,8 @@ export class CanvasRenderer {
     if (this.selectionKind === 'sheet') return 'tint';
     if (this.selectionKind === 'row') return r >= sr.r1 && r <= sr.r2 ? 'solid' : 'none';
     if (this.selectionKind === 'column') return 'none';
-    return r >= sr.r1 && r <= sr.r2 ? 'tint' : 'none';
+    if (r >= sr.r1 && r <= sr.r2) return 'tint';
+    return this.extraRanges.some((rg) => r >= rg.r1 && r <= rg.r2) ? 'tint' : 'none';
   }
 
   private paintOverlays(ctx: CanvasRenderingContext2D, theme: CanvasTheme): void {

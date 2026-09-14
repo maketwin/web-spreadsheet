@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Spreadsheet, SpreadsheetComponent } from '../../src/index';
 import { Store } from '../../src/store/Store';
@@ -74,17 +74,27 @@ describe('Spreadsheet', () => {
     expect(screen.getByLabelText('Cell editor')).toHaveValue('x');
   });
 
-  it('opens the editor on Enter for the selected cell', () => {
+  it('opens the editor on F2 for the selected cell', () => {
+    installCanvasContext();
+    render(<SpreadsheetComponent store={new Store()} theme={false} />);
+    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+
+    fireEvent.keyDown(canvas, { key: 'F2' });
+
+    expect(screen.getByLabelText('Cell editor')).toBeInTheDocument();
+  });
+
+  it('Enter does not open the editor (Excel: it moves the selection down)', () => {
     installCanvasContext();
     render(<SpreadsheetComponent store={new Store()} theme={false} />);
     const canvas = document.querySelector('canvas') as HTMLCanvasElement;
 
     fireEvent.keyDown(canvas, { key: 'Enter' });
 
-    expect(screen.getByLabelText('Cell editor')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Cell editor')).not.toBeInTheDocument();
   });
 
-  it('typing a character writes through to the store and starts editing', () => {
+  it('typing a character starts editing without writing the store until commit', () => {
     installCanvasContext();
     const store = new Store();
     render(<SpreadsheetComponent store={store} theme={false} />);
@@ -92,7 +102,8 @@ describe('Spreadsheet', () => {
 
     fireEvent.keyDown(canvas, { key: '7' });
 
-    expect(store.getCell(0, 0)).toMatchObject({ text: '7', value: 7 });
+    // Excel: the cell is not written until Enter/blur commits the edit.
+    expect(store.getCell(0, 0)).toBeUndefined();
     expect(screen.getByLabelText('Cell editor')).toHaveValue('7');
   });
 
@@ -100,7 +111,7 @@ describe('Spreadsheet', () => {
     installCanvasContext();
     const store = new Store();
     render(<SpreadsheetComponent store={store} theme={false} />);
-    fireEvent.keyDown(document.querySelector('canvas') as HTMLCanvasElement, { key: 'Enter' });
+    fireEvent.keyDown(document.querySelector('canvas') as HTMLCanvasElement, { key: 'F2' });
     const input = screen.getByLabelText('Cell editor');
 
     fireEvent.change(input, { target: { value: '42' } });
@@ -125,7 +136,7 @@ describe('Spreadsheet', () => {
     installCanvasContext();
     const store = new Store();
     render(<SpreadsheetComponent store={store} theme={false} />);
-    fireEvent.keyDown(document.querySelector('canvas') as HTMLCanvasElement, { key: 'Enter' });
+    fireEvent.keyDown(document.querySelector('canvas') as HTMLCanvasElement, { key: 'F2' });
     const input = screen.getByLabelText('Cell editor');
 
     fireEvent.change(input, { target: { value: '99' } });
@@ -238,4 +249,119 @@ describe('Spreadsheet', () => {
     expect(screen.getByLabelText('Selected cell')).toHaveTextContent('B1:C3');
   });
 
+
+  it('Alt+= opens the editor with an AutoSum formula for the numbers above', () => {
+    installCanvasContext();
+    const store = new Store();
+    store.setCell(0, 0, { text: '1', value: 1 });
+    store.setCell(1, 0, { text: '2', value: 2 });
+    render(<SpreadsheetComponent store={store} theme={false} />);
+    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+
+    fireEvent.keyDown(canvas, { key: 'ArrowDown' });
+    fireEvent.keyDown(canvas, { key: 'ArrowDown' });
+    fireEvent.keyDown(canvas, { key: '=', altKey: true });
+
+    expect(screen.getByLabelText('Cell editor')).toHaveValue('=SUM(A1:A2)');
+  });
+
+  it('arrow keys commit and move while typing (Excel enter mode)', () => {
+    installCanvasContext();
+    const store = new Store();
+    render(<SpreadsheetComponent store={store} theme={false} />);
+    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+
+    fireEvent.keyDown(canvas, { key: '7' });
+    const input = screen.getByLabelText('Cell editor');
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+
+    expect(store.getCell(0, 0)).toMatchObject({ text: '7', value: 7 });
+    expect(screen.queryByLabelText('Cell editor')).not.toBeInTheDocument();
+  });
+
+  it('arrow keys move the caret in F2 edit mode (no commit)', () => {
+    installCanvasContext();
+    const store = new Store();
+    store.setCell(0, 0, { text: 'ab' });
+    render(<SpreadsheetComponent store={store} theme={false} />);
+    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+
+    fireEvent.keyDown(canvas, { key: 'F2' });
+    const input = screen.getByLabelText('Cell editor');
+    fireEvent.keyDown(input, { key: 'ArrowLeft' });
+
+    expect(store.getCell(0, 0)).toMatchObject({ text: 'ab' });
+    expect(screen.getByLabelText('Cell editor')).toBeInTheDocument();
+  });
+
+  it('Escape does not collapse a multi-cell selection', () => {
+    installCanvasContext();
+    const store = new Store();
+    render(<SpreadsheetComponent store={store} theme={false} />);
+    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+
+    fireEvent.keyDown(canvas, { key: 'ArrowDown', shiftKey: true });
+    fireEvent.keyDown(canvas, { key: 'Escape' });
+
+    // Selection is still two cells: typing edits the top cell of the range (A1).
+    fireEvent.keyDown(canvas, { key: 'x' });
+    expect(screen.getByLabelText('Cell editor')).toHaveValue('x');
+  });
+
+  it('point mode: typing = then arrows inserts and moves a reference', () => {
+    installCanvasContext();
+    render(<SpreadsheetComponent store={new Store()} theme={false} />);
+    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+
+    fireEvent.keyDown(canvas, { key: '=' });
+    const input = screen.getByLabelText('Cell editor') as HTMLTextAreaElement;
+    // jsdom carets default to 0; put it at the end like a real typing session.
+    input.selectionStart = input.selectionEnd = 1;
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    expect(input).toHaveValue('=A2');
+    input.selectionStart = input.selectionEnd = 3;
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    expect(input).toHaveValue('=A3');
+    fireEvent.change(input, { target: { value: '=A3+' } });
+    input.selectionStart = input.selectionEnd = 4;
+    fireEvent.keyDown(input, { key: 'ArrowRight' });
+    expect(input).toHaveValue('=A3+B3');
+  });
+
+  it('F4 cycles dollar anchors on the reference at the caret', () => {
+    installCanvasContext();
+    render(<SpreadsheetComponent store={new Store()} theme={false} />);
+    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+
+    fireEvent.keyDown(canvas, { key: '=' });
+    const input = screen.getByLabelText('Cell editor') as HTMLTextAreaElement;
+    input.selectionStart = input.selectionEnd = 1;
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    expect(input).toHaveValue('=A2');
+    input.selectionStart = input.selectionEnd = 3;
+    fireEvent.keyDown(input, { key: 'F4' });
+    expect(input).toHaveValue('=$A$2');
+    input.selectionStart = input.selectionEnd = 5;
+    fireEvent.keyDown(input, { key: 'F4' });
+    expect(input).toHaveValue('=A$2');
+  });
+
+  it('Enter pastes once while the marching ants are active, then ends the session', async () => {
+    installCanvasContext();
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText, write: vi.fn().mockResolvedValue(undefined) } });
+    const store = new Store();
+    store.setCell(0, 0, { text: 'hi' });
+    render(<SpreadsheetComponent store={store} theme={false} />);
+    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+
+    fireEvent.keyDown(canvas, { key: 'c', ctrlKey: true });
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    // Let the copy promise chain finish so the marching-ants session is armed.
+    await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 0); }); });
+    fireEvent.keyDown(canvas, { key: 'ArrowDown' });
+    fireEvent.keyDown(canvas, { key: 'Enter' });
+
+    await waitFor(() => expect(store.getCell(1, 0)).toMatchObject({ text: 'hi' }));
+  });
 });

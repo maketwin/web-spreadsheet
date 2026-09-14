@@ -4,7 +4,9 @@ import { Range, type RangeAddress } from '../selection/Range';
 
 export interface KeyboardAction {
   readonly type: 'move' | 'edit' | 'clear' | 'cancel' | 'copy' | 'paste' | 'cut' | 'type' | 'menu'
-    | 'moveEdge' | 'jump' | 'fill' | 'selectColumn' | 'selectRow';
+    | 'moveEdge' | 'jump' | 'fill' | 'selectColumn' | 'selectRow' | 'page' | 'backspace' | 'insertDate';
+  /** `page`: PageUp (-1) / PageDown (+1) — the caller resolves the viewport row count. */
+  readonly pageDir?: -1 | 1;
   readonly range?: RangeAddress;
   readonly text?: string;
   readonly command?: MenuShortcutCommand;
@@ -17,7 +19,7 @@ export interface KeyboardAction {
   readonly fillDir?: 'down' | 'right';
 }
 
-export type MenuShortcutCommand = 'save' | 'find' | 'replace' | 'selectAll' | 'bold' | 'italic' | 'underline' | 'zoom100' | 'zoomIn' | 'zoomOut' | 'undo' | 'redo';
+export type MenuShortcutCommand = 'save' | 'find' | 'replace' | 'selectAll' | 'bold' | 'italic' | 'underline' | 'zoom100' | 'zoomIn' | 'zoomOut' | 'undo' | 'redo' | 'formatCells' | 'nextSheet' | 'prevSheet';
 
 export class KeyboardHandler {
   public static next(key: string, range: RangeAddress, shiftKey = false, metaKey = false, ctrlKey = false): KeyboardAction | null {
@@ -26,19 +28,21 @@ export class KeyboardHandler {
     if (key === ' ' && shiftKey) return { type: 'selectRow' };
     if (key === 'F2') return { type: 'edit' };
     if (key === 'Escape') return { type: 'cancel' };
-    if (key === 'Delete' || key === 'Backspace') return { type: 'clear' };
+    if (key === 'Delete') return { type: 'clear' };
+    // Excel: Backspace clears the cell and drops into edit mode with an empty editor.
+    if (key === 'Backspace') return { type: 'backspace' };
     if (key.length === 1) return { type: 'type', text: key };
-    if (key === 'Enter' && !shiftKey) return { type: 'edit' };
-    if (key === 'Enter' && shiftKey) return { type: 'move', range: move(range, -1, 0) };
+    // Excel: Enter commits and moves down; Shift+Enter moves up. F2/double-click edits.
+    if (key === 'Enter') return { type: 'move', range: move(range, shiftKey ? -1 : 1, 0) };
     if (key === 'Tab') return { type: 'move', range: move(range, 0, shiftKey ? -1 : 1) };
     if (key === 'ArrowUp') return { type: 'move', range: move(range, -1, 0) };
     if (key === 'ArrowDown') return { type: 'move', range: move(range, 1, 0) };
     if (key === 'ArrowLeft') return { type: 'move', range: move(range, 0, -1) };
     if (key === 'ArrowRight') return { type: 'move', range: move(range, 0, 1) };
     if (key === 'Home') return { type: 'move', range: Range.single(range.r1, 0).toAddress() };
-    if (key === 'End') return { type: 'move', range: Range.single(range.r1, TOTAL_COLS - 1).toAddress() };
-    if (key === 'PageUp') return { type: 'move', range: move(range, -10, 0) };
-    if (key === 'PageDown') return { type: 'move', range: move(range, 10, 0) };
+    // Excel: End alone enters "End mode" (handled by the component); End+arrow edge-jumps.
+    if (key === 'PageUp') return { type: 'page', pageDir: -1 };
+    if (key === 'PageDown') return { type: 'page', pageDir: 1 };
     return null;
   }
 
@@ -56,6 +60,9 @@ function shortcutAction(key: string): KeyboardAction | null {
   if (key === 'Home') return { type: 'jump', jump: 'home' };
   if (key === 'End') return { type: 'jump', jump: 'usedEnd' };
   if (key === ' ') return { type: 'selectColumn' }; // Excel: Ctrl+Space selects the active cell's column
+  if (key === ';') return { type: 'insertDate' }; // Excel: Ctrl+; enters the current date
+  if (key === 'PageUp') return { type: 'menu', command: 'prevSheet' };
+  if (key === 'PageDown') return { type: 'menu', command: 'nextSheet' };
   const normalized = key.toLowerCase();
   if (normalized === 'd') return { type: 'fill', fillDir: 'down' };
   if (normalized === 'r') return { type: 'fill', fillDir: 'right' };
@@ -69,6 +76,7 @@ function shortcutAction(key: string): KeyboardAction | null {
   if (normalized === 'b') return { type: 'menu', command: 'bold' };
   if (normalized === 'i') return { type: 'menu', command: 'italic' };
   if (normalized === 'u') return { type: 'menu', command: 'underline' };
+  if (normalized === '1') return { type: 'menu', command: 'formatCells' }; // Excel: Ctrl+1 Format Cells
   if (normalized === '0') return { type: 'menu', command: 'zoom100' };
   if (normalized === '+' || normalized === '=') return { type: 'menu', command: 'zoomIn' };
   if (normalized === '-') return { type: 'menu', command: 'zoomOut' };

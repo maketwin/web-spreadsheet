@@ -4,13 +4,13 @@ import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type Dispatch, type FC, type KeyboardEvent as ReactKeyboardEvent, type RefObject, type SetStateAction } from 'react';
 import { ClipboardService } from '../clipboard/ClipboardService';
-import type { Command } from '../commands/Command';
+import { Command } from '../commands/Command';
 import type { DialogName } from './menu/types';
 import { CommandManager } from '../commands/CommandManager';
 import { SetCellText } from '../commands/impl/SetCellText';
 import { SetRangeStyleCommand } from '../commands/impl/SetRangeStyle';
 import { SetRangeBorderCommand, type BorderPreset, type BorderLine } from '../commands/impl/SetRangeBorder';
-import { SetRangeValues } from '../commands/impl/SetRangeValues';
+import { SetRangeValues, type CellPatch } from '../commands/impl/SetRangeValues';
 import { EventBus } from '../events/EventBus';
 import { FormulaEngine } from '../formula/FormulaEngine';
 import { KeyboardHandler, type MenuShortcutCommand } from '../keys/KeyboardHandler';
@@ -30,6 +30,7 @@ import { applyStoredTheme, setTheme, type Theme } from '../theme';
 import { DataValidationService } from '../validation/DataValidationService';
 import { protectSheet, unprotectSheet, verifyPassword } from '../protection/SheetProtection';
 import { cellFromText, cellId, cellIdCoords, formulaDependencies, formulaText, normalizeCellInput, type CellInput as CellDataInput } from '../util/cell';
+import { num2alpha } from '../util/alphabet';
 import { cellSelection, columnSelection, extendSelection, rangeSelection, rowSelection, sheetSelection, type Selection } from '../selection/Selection';
 import { CellContextMenu, HeaderContextMenu } from './ContextMenu';
 import { BottomBar } from './BottomBar';
@@ -45,12 +46,14 @@ import type { Cell, Style } from '../types';
 import { WRAP_LINE_HEIGHT, wrappedContentHeight } from '../util/wrapText';
 import { autoFitRowHeight, autofitRowsForSelection } from '../util/rowAutofit';
 import { fillShortcut } from '../fill/fillShortcut';
+import { shiftFormula } from '../commands/impl/FillRange';
+import { cycleDollars, endsWithRef, isPointTrigger, refAtCaret, upsertRef } from '../formula/pointMode';
 
 export type CellInput = CellDataInput;
 export interface SheetInput { readonly id?: string; readonly name: string; readonly data?: readonly (readonly CellInput[])[] }
 export interface SpreadsheetOptions { readonly data?: readonly (readonly CellInput[])[]; readonly sheets?: readonly SheetInput[]; readonly theme?: Theme | false }
 export interface SpreadsheetProps { readonly store: Store; readonly cmdManager?: CommandManager; readonly formulaEngine?: FormulaEngine; readonly theme?: Theme | false | undefined; readonly onClose?: () => void }
-interface EditingCell extends CellAddress { readonly value: string }
+interface EditingCell extends CellAddress { readonly value: string; /** Excel: F2/double-click = edit mode (arrows move the caret); typing = enter mode (arrows commit). */ readonly editMode?: boolean; /** Excel point mode: the cell the formula's trailing reference currently points at. */ readonly point?: CellAddress }
 interface ViewState { readonly zoom: number; readonly showFormula: boolean; readonly showGrid: boolean; readonly frozenRows: number; readonly frozenCols: number }
 interface FilterPopupState { readonly r: number; readonly c: number; readonly x: number; readonly y: number }
 type SpreadsheetContextMenu =
@@ -75,6 +78,17 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
+  const editingRef = useRef<EditingCell | null>(editing);
+  editingRef.current = editing;
+  // Excel multi-selection (Ctrl+click/drag): ranges beyond the main one.
+  const multiRef = useRef<readonly RangeAddress[]>([]);
+
+  const rendererApiRef = useRef<{ setExtraRanges: (ranges: readonly RangeAddress[]) => void } | null>(null);
+  /** Replace the extra (Ctrl-added) selection ranges and repaint. */
+  const setMulti = useCallback((ranges: readonly RangeAddress[]) => {
+    multiRef.current = ranges;
+    rendererApiRef.current?.setExtraRanges(ranges);
+  }, []);
 
   const selectSelection = useCallback((next: Selection) => {
     selectedRef.current = next;
@@ -82,7 +96,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     setEditing(null);
   }, []);
   const selectRange = useCallback((range: RangeAddress) => selectSelection(rangeSelection(range)), [selectSelection]);
-  const onCellClick = useCallback((cell: CellAddress, shift: boolean) => {
+  const onCellClick = useCallback((cell: CellAddress, shift: boolean, ctrl = false) => {
     if (painting && sourceStyle !== undefined) {
       const range = Range.single(cell.r, cell.c).toAddress();
       const cmd = new SetRangeStyleCommand({ ...range, style: sourceStyle });
@@ -91,8 +105,35 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       setSourceStyle(undefined);
       return;
     }
+    const ed = editingRef.current;
+    if (ed !== null) {
+      const el = inputRef.current;
+      const value = el?.value ?? ed.value;
+      const caret = el?.selectionStart ?? value.length;
+      const head = value.slice(0, caret);
+      if (ed.point !== undefined || isPointTrigger(head)) {
+        // Excel point mode: clicking a cell drops its reference into the formula.
+        const ref = `${num2alpha(cell.c)}${cell.r + 1}`;
+        const nextValue = upsertRef(head, ref, ed.point !== undefined && endsWithRef(head)) + value.slice(caret);
+        editingRef.current = { ...ed, value: nextValue, point: { r: cell.r, c: cell.c } };
+        setEditing(editingRef.current);
+        el?.focus();
+        return;
+      }
+      // Excel: clicking another cell commits the edit and selects the clicked cell.
+      commitEditingRef.current?.(value);
+    }
+    if (ctrl && !shift) {
+      // Excel Ctrl+click: keep the existing selection as an extra range, activate the new cell.
+      const current = selectedRef.current;
+      setMulti([...multiRef.current, ...(current !== null ? [current.range] : [])]);
+      selectSelection(cellSelection(cell.r, cell.c));
+      return;
+    }
+    if (!ctrl) setMulti([]);
     selectSelection(shift && selectedRef.current ? extendSelection(selectedRef.current, cell) : cellSelection(cell.r, cell.c));
-  }, [painting, sourceStyle, selectSelection, cmdManager, store]);
+  }, [painting, sourceStyle, selectSelection, cmdManager, store, setMulti]);
+  const commitEditingRef = useRef<((value: string) => void) | null>(null);
   const closeCtxMenu = useCallback(() => setCtxMenu(null), []);
   const onAutoFilterClick = useCallback((r: number, c: number, x: number, y: number) => {
     setFilterPopup((current) => current !== null && current.r === r && current.c === c ? null : { r, c, x, y });
@@ -134,10 +175,13 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store);
   }, [cmdManager, store]);
   const { canvasRef, rendererRef } = useCanvasRenderer(store, selected, onCellClick, selectSelection, view, setView, cmdManager, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick);
+  rendererApiRef.current = { setExtraRanges: (ranges) => rendererRef.current?.setExtraRanges(ranges) };
   useEffect(() => rendererRef.current?.setEditing(editing !== null), [editing, rendererRef]);
   // Excel clipboard session: copy/cut mark a source (marching ants); cut clears the source
   // only when the paste lands. Copy sessions allow repeated pastes; cut pastes once.
-  const clipboardSession = useRef<{ readonly type: 'cut' | 'copy'; readonly range: RangeAddress; readonly text: string } | null>(null);
+  // Excel "End mode": End arms the next arrow key to edge-jump (like Ctrl+arrow).
+  const endModeRef = useRef(false);
+  const clipboardSession = useRef<{ readonly type: 'cut' | 'copy'; readonly range: RangeAddress; readonly text: string; readonly cells: ReadonlyArray<ReadonlyArray<Cell | undefined>> } | null>(null);
   const clearClipboardSession = useCallback((): boolean => {
     const had = clipboardSession.current !== null;
     clipboardSession.current = null;
@@ -148,17 +192,29 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     if (type === 'paste') {
       const session = clipboardSession.current;
       if (session !== null) {
-        applyMatrix(store, cmdManager, range.r1, range.c1, ClipboardService.parseText(session.text));
+        // Excel in-app paste: formulas ride along (copy shifts relative refs to
+        // the target, cut moves them verbatim) and cell styles are preserved.
+        applyMatrix(store, cmdManager, range.r1, range.c1, buildSessionPasteValues(session, range.r1, range.c1, range));
         if (session.type === 'cut') { clearRange(store, cmdManager, session.range); clearClipboardSession(); }
         return;
       }
       await pasteFromClipboard(store, cmdManager, range);
       return;
     }
+    const extras = multiRef.current;
+    if (extras.length > 0) {
+      // Excel multi-area copy: only when the ranges line up by rows or columns.
+      const combined = combineMultiRanges(store, [range, ...extras]);
+      if (combined === null) { message.warning('不能对多重选定区域使用此命令'); return; }
+      await ClipboardService.copy(store, combined.range);
+      clipboardSession.current = { type, range: combined.range, text: combined.text, cells: combined.cells };
+      rendererRef.current?.setClipboardRange(combined.range);
+      return;
+    }
     const payload = ClipboardService.createPayload(store, range);
     if (payload === null) return;
     await ClipboardService.copy(store, range);
-    clipboardSession.current = { type, range, text: payload.text };
+    clipboardSession.current = { type, range, text: payload.text, cells: snapshotCells(store, range) };
     rendererRef.current?.setClipboardRange(range);
   }, [store, cmdManager, rendererRef, clearClipboardSession]);
   const runCtxClipboard = useCallback((type: 'cut' | 'copy' | 'paste' | 'clear') => {
@@ -167,35 +223,45 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     if (type === 'clear') clearRange(store, cmdManager, range);
     else void runClipboard(type, range);
   }, [store, cmdManager, runClipboard]);
-  const startEditing = (cell: CellAddress, value = cellEditValue(store, cell)): void => {
-    // Excel: editing a cell inside the copied/cut range cancels the clipboard session,
-    // so the editor box owns the cell instead of fighting the marching ants.
-    const session = clipboardSession.current;
-    if (session !== null && new Range(session.range).contains(cell.r, cell.c)) clearClipboardSession();
+  const startEditing = (cell: CellAddress, value = cellEditValue(store, cell), editMode = false): void => {
+    // Excel: entering edit mode cancels the marching-ants clipboard session.
+    if (clipboardSession.current !== null) clearClipboardSession();
     const next = cellSelection(cell.r, cell.c);
     selectedRef.current = next;
     setSelected(next);
-    setEditing({ ...cell, value });
+    setEditing({ ...cell, value, editMode });
   };
-  const commitEditing = (value: string): void => {
-    if (editing !== null) {
+  const commitEditing = (value: string, moveAfter?: { readonly dr: number; readonly dc: number }): void => {
+    const ed = editingRef.current;
+    // Guarded by the ref so a blur right after a click-commit never double-writes.
+    editingRef.current = null;
+    if (ed !== null) {
       if (store.isSheetProtected()) { message.warning('工作表已保护，无法编辑'); setEditing(null); return; }
-      const rule = store.getValidationRule(editing.r, editing.c);
+      const rule = store.getValidationRule(ed.r, ed.c);
       if (rule !== undefined) {
         const svc = new DataValidationService();
         const result = svc.validate(value, rule);
         if (!result.valid) { message.warning(result.message ?? '输入值不符合验证规则'); }
       }
-      setCellText(store, cmdManager, editing, value);
+      setCellText(store, cmdManager, ed, value);
       // Excel: Alt+Enter auto-enables Wrap Text and grows the row
       if (value.includes('\n')) {
-        const range = { r1: editing.r, c1: editing.c, r2: editing.r, c2: editing.c };
+        const range = { r1: ed.r, c1: ed.c, r2: ed.r, c2: ed.c };
         applyShortcutStyle(store, cmdManager, range, { wrap: true });
         autofitRowsForSelection(store, cmdManager, range);
+      }
+      if (moveAfter !== undefined) {
+        const next = Range.single(
+          clampVal(ed.r + moveAfter.dr, 0, TOTAL_ROWS - 1),
+          clampVal(ed.c + moveAfter.dc, 0, TOTAL_COLS - 1),
+        ).toAddress();
+        selectedRef.current = cellSelection(next.r1, next.c1);
+        selectRange(next);
       }
     }
     setEditing(null);
   };
+  commitEditingRef.current = (value: string) => commitEditing(value);
 
   useTheme(theme);
   useFormulaSync(store, formulaEngine);
@@ -210,11 +276,20 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     <InteractionToolbar selected={selected} store={store} cmdManager={cmdManager} view={view} setView={setView} selectAll={() => selectSelection(sheetSelection(allSheetRange()))} painting={painting} onTogglePainter={() => { if (painting) { setPainting(false); setSourceStyle(undefined); } else { const cell = selected?.active; const s = cell === undefined ? undefined : store.getCell(cell.r, cell.c)?.styleId === undefined ? undefined : store.getStyle(store.getCell(cell.r, cell.c)!.styleId!); setSourceStyle(s); setPainting(true); } }} onToggleProtection={() => setProtectOpen(true)} />
     <ProtectionModal open={protectOpen} onClose={() => setProtectOpen(false)} store={store} />
     <FormulaBar selected={selected} value={formulaValue} onChange={setFormulaValue} onCommit={() => commitFormulaValue(selected, formulaValue, store, cmdManager)} />
-    <div className="ss-canvas-wrap"><canvas ref={canvasRef} className="ss-canvas" tabIndex={0} aria-label="Spreadsheet canvas, use arrow keys to navigate" onKeyDown={(e) => handleCanvasKeyDown(e, selectedRef.current, store, cmdManager, startEditing, selectSelection, selectRange, setView, setFindDialogOpen, runClipboard, clearClipboardSession, execCmd, view.frozenRows, view.frozenCols)} onDoubleClick={(e) => { const cell = rendererRef.current?.cellAtPoint(e.clientX, e.clientY); if (cell != null) startEditing(cell); }} />
-      {editing !== null && <EditorOverlay refEl={inputRef} editing={editing} setEditing={setEditing} commit={commitEditing} zoom={view.zoom} store={store} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}</div>
+    <div className="ss-canvas-wrap"><canvas ref={canvasRef} className="ss-canvas" tabIndex={0} aria-label="Spreadsheet canvas, use arrow keys to navigate" onKeyDown={(e) => {
+        if (e.key === 'Enter' && !e.shiftKey && clipboardSession.current !== null && selectedRef.current !== null) {
+          // Excel: Enter with marching ants pastes once and clears the clipboard session.
+          e.preventDefault();
+          void runClipboard('paste', selectedRef.current.range).then(() => clearClipboardSession());
+          return;
+        }
+        if (handleEndMode(e, selectedRef.current, store, endModeRef, selectSelection, selectRange)) return;
+        handleCanvasKeyDown(e, selectedRef.current, store, cmdManager, startEditing, selectSelection, selectRange, setView, setFindDialogOpen, runClipboard, clearClipboardSession, execCmd, view.frozenRows, view.frozenCols, view.zoom, () => setMulti([]), () => multiRef.current);
+      }} onDoubleClick={(e) => { const cell = rendererRef.current?.cellAtPoint(e.clientX, e.clientY); if (cell != null) startEditing(cell, undefined, true); }} />
+      {editing !== null && <EditorOverlay refEl={inputRef} editingRefSetter={(cell) => { editingRef.current = cell; setEditing(cell); }} editing={editing} setEditing={setEditing} commit={commitEditing} zoom={view.zoom} store={store} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}</div>
       {filterPopup !== null && <FilterDropdown store={store} cmdManagerExecutor={execCmd} r={filterPopup.r} c={filterPopup.c} x={filterPopup.x} y={filterPopup.y} onClose={() => setFilterPopup(null)} />}
     <StatusBar store={store} selected={selected?.range ?? null} zoom={view.zoom} />
-    <BottomBar sheets={sheets} activeSheetId={activeSheetId} onSheetChange={(id) => store.activateSheet(id)} onAddSheet={() => addSheet(store)} onRenameSheet={(id) => renameSheet(store, id)} onDeleteSheet={(id) => deleteSheet(store, id)} />
+    <BottomBar sheets={sheets} activeSheetId={activeSheetId} onSheetChange={(id) => { setMulti([]); store.activateSheet(id); }} onAddSheet={() => addSheet(store)} onRenameSheet={(id) => renameSheet(store, id)} onDeleteSheet={(id) => deleteSheet(store, id)} />
     {ctxMenu?.kind === 'cell' && <CellContextMenu
       x={ctxMenu.x} y={ctxMenu.y} onClose={closeCtxMenu}
       onCut={() => runCtxClipboard('cut')} onCopy={() => runCtxClipboard('copy')} onPaste={() => runCtxClipboard('paste')} onClear={() => runCtxClipboard('clear')}
@@ -267,8 +342,8 @@ export class Spreadsheet {
   }
 }
 
-interface EditorOverlayProps { readonly refEl: RefObject<HTMLTextAreaElement>; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly commit: (value: string) => void; readonly zoom: number; readonly store: Store; readonly cellRect?: { x: number; y: number; w: number; h: number } }
-const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editing, setEditing, commit, zoom, store, cellRect }) => {
+interface EditorOverlayProps { readonly refEl: RefObject<HTMLTextAreaElement>; readonly editingRefSetter: (cell: EditingCell) => void; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly commit: (value: string, moveAfter?: { readonly dr: number; readonly dc: number }) => void; readonly zoom: number; readonly store: Store; readonly cellRect?: { x: number; y: number; w: number; h: number } }
+const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editing, setEditing, commit, zoom, store, cellRect }) => {
   const composing = useRef(false);
   const cellStyle = store.getCell(editing.r, editing.c)?.styleId !== undefined
     ? store.getStyle(store.getCell(editing.r, editing.c)!.styleId!)
@@ -287,7 +362,42 @@ const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editing, setEditing, com
     onBlur={() => commit(refEl.current?.value ?? editing.value)}
     onKeyDown={(e) => {
       if (composing.current) return;
-      handleEditorKey(e, refEl, () => commit(refEl.current?.value ?? editing.value), () => setEditing(null), (next) => setEditing({ ...editing, value: next }));
+      // Excel F4: cycle $ anchors on the reference at the caret (A1 → $A$1 → A$1 → $A1).
+      if (e.key === 'F4') {
+        const el = refEl.current;
+        if (el === null) return;
+        e.preventDefault();
+        const caret = el.selectionStart ?? el.value.length;
+        const span = refAtCaret(el.value, caret);
+        if (span === undefined) return;
+        const cycled = cycleDollars(span.text);
+        const next = el.value.slice(0, span.start) + cycled + el.value.slice(span.end);
+        setEditing({ ...editing, value: next });
+        requestAnimationFrame(() => { el.selectionStart = span.start + cycled.length; el.selectionEnd = span.start + cycled.length; });
+        return;
+      }
+      // Excel point mode: while a formula awaits an operand, arrows move the
+      // inserted reference instead of committing.
+      const arrowDeltas: Record<string, { dr: number; dc: number }> = { ArrowUp: { dr: -1, dc: 0 }, ArrowDown: { dr: 1, dc: 0 }, ArrowLeft: { dr: 0, dc: -1 }, ArrowRight: { dr: 0, dc: 1 } };
+      const arrow = arrowDeltas[e.key];
+      if (arrow !== undefined && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+        const el = refEl.current;
+        const value = el?.value ?? editing.value;
+        const caret = el?.selectionStart ?? value.length;
+        const head = value.slice(0, caret);
+        if (editing.point !== undefined || isPointTrigger(head)) {
+          e.preventDefault();
+          const base = editing.point ?? { r: editing.r, c: editing.c };
+          const target = { r: clampVal(base.r + arrow.dr, 0, TOTAL_ROWS - 1), c: clampVal(base.c + arrow.dc, 0, TOTAL_COLS - 1) };
+          const ref = `${num2alpha(target.c)}${target.r + 1}`;
+          const nextHead = upsertRef(head, ref, editing.point !== undefined && endsWithRef(head));
+          const nextValue = nextHead + value.slice(el?.selectionEnd ?? caret);
+          editingRefSetter({ ...editing, value: nextValue, point: target });
+          requestAnimationFrame(() => { const t = refEl.current; if (t !== null) { t.selectionStart = nextHead.length; t.selectionEnd = nextHead.length; } });
+          return;
+        }
+      }
+      handleEditorKey(e, refEl, (moveAfter) => commit(refEl.current?.value ?? editing.value, moveAfter), () => setEditing(null), (next) => setEditing({ ...editing, value: next }), editing.editMode === true);
     }}
     aria-label="Cell editor"
   />;
@@ -381,34 +491,95 @@ function lastUsedCell(store: Store): { readonly r: number; readonly c: number } 
   return { r: maxR, c: maxC };
 }
 
-function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selected: Selection | null, store: Store, cmdManager: CommandManager | undefined, startEditing: (cell: CellAddress, value?: string) => void, selectSelection: (selection: Selection) => void, selectRange: (range: RangeAddress) => void, setView: Dispatch<SetStateAction<ViewState>>, setFindDialog: (name: DialogName | null) => void, runClipboard: (type: 'cut' | 'copy' | 'paste', range: RangeAddress) => void, clearClipboardSession: () => boolean, execCmd: (cmd: Command) => void, frozenRows = 0, frozenCols = 0): void {
+/**
+ * Excel End mode: pressing End arms it; the next plain arrow edge-jumps (like
+ * Ctrl+arrow, Shift extends) and disarms. Any other key just disarms.
+ * Returns true when the event was consumed.
+ */
+function handleEndMode(
+  event: ReactKeyboardEvent<HTMLCanvasElement>,
+  selected: Selection | null,
+  store: Store,
+  endModeRef: { current: boolean },
+  selectSelection: (selection: Selection) => void,
+  selectRange: (range: RangeAddress) => void,
+): boolean {
+  if (event.key === 'End' && !event.ctrlKey && !event.metaKey) {
+    endModeRef.current = true;
+    event.preventDefault();
+    return true;
+  }
+  if (!endModeRef.current) return false;
+  endModeRef.current = false;
+  if (selected === null || event.ctrlKey || event.metaKey) return false;
+  const dirs: Record<string, { dr: number; dc: number }> = { ArrowUp: { dr: -1, dc: 0 }, ArrowDown: { dr: 1, dc: 0 }, ArrowLeft: { dr: 0, dc: -1 }, ArrowRight: { dr: 0, dc: 1 } };
+  const dir = dirs[event.key];
+  if (dir === undefined) return false;
+  event.preventDefault();
+  const target = edgeJump(store, selected.active, dir.dr, dir.dc, TOTAL_ROWS, TOTAL_COLS);
+  if (event.shiftKey) selectSelection(extendSelection(selected, target));
+  else selectRange(Range.single(target.r, target.c).toAddress());
+  return true;
+}
+
+function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selected: Selection | null, store: Store, cmdManager: CommandManager | undefined, startEditing: (cell: CellAddress, value?: string, editMode?: boolean) => void, selectSelection: (selection: Selection) => void, selectRange: (range: RangeAddress) => void, setView: Dispatch<SetStateAction<ViewState>>, setFindDialog: (name: DialogName | null) => void, runClipboard: (type: 'cut' | 'copy' | 'paste', range: RangeAddress) => void, clearClipboardSession: () => boolean, execCmd: (cmd: Command) => void, frozenRows = 0, frozenCols = 0, zoom = 100, clearMulti?: () => void, multiRanges?: () => readonly RangeAddress[]): void {
+  // Excel: Alt+= inserts an AutoSum formula for the column/row around the active cell.
+  if (event.altKey && (event.key === '=' || event.key === '＝')) {
+    if (selected === null) return;
+    event.preventDefault();
+    const active = selected.active;
+    startEditing({ r: active.r, c: active.c }, autoSumFormula(store, active.r, active.c), true);
+    return;
+  }
   if (selected === null || event.altKey) return;
   const range = selected.range;
   const keyboardBase = event.shiftKey ? Range.single(selected.active.r, selected.active.c).toAddress() : range;
   const action = KeyboardHandler.fromReactEvent(event, keyboardBase);
   if (action === null) return;
   event.preventDefault();
-  if (action.type === 'move' && action.range !== undefined && event.shiftKey) selectSelection(extendSelection(selected, { r: action.range.r1, c: action.range.c1 }));
-  else if (action.type === 'move' && action.range !== undefined) selectRange(action.range);
+  if (action.type === 'move' && action.range !== undefined && (event.key === 'Enter' || event.key === 'Tab') && (range.r1 !== range.r2 || range.c1 !== range.c2)) {
+    // Excel: Enter/Tab walk the active cell through a multi-cell selection.
+    selectSelection(rangeSelection(range, selected.anchor, cycleActive(range, selected.active, event.key, event.shiftKey)));
+  }
+  else if (action.type === 'move' && action.range !== undefined && event.shiftKey) { clearMulti?.(); selectSelection(extendSelection(selected, { r: action.range.r1, c: action.range.c1 })); }
+  else if (action.type === 'move' && action.range !== undefined) { clearMulti?.(); selectRange(action.range); }
   else if (action.type === 'moveEdge') {
     // Excel Ctrl+arrow: jump to the data-region edge; Shift extends the selection to it.
     const target = edgeJump(store, selected.active, action.dr ?? 0, action.dc ?? 0, TOTAL_ROWS, TOTAL_COLS);
+    clearMulti?.();
     if (event.shiftKey) selectSelection(extendSelection(selected, target));
     else selectRange(Range.single(target.r, target.c).toAddress());
   }
   else if (action.type === 'jump') {
     // Ctrl+Home: first unfrozen cell (Excel freeze-aware); Ctrl+End: last used cell.
+    clearMulti?.();
     const target = action.jump === 'home' ? { r: frozenRows, c: frozenCols } : lastUsedCell(store);
     if (event.shiftKey) selectSelection(extendSelection(selected, target));
     else selectRange(Range.single(target.r, target.c).toAddress());
   }
   else if (action.type === 'fill' && action.fillDir !== undefined) { const op = fillShortcut(range, action.fillDir); if (op !== undefined) execCmd(op); }
-  else if (action.type === 'selectColumn') selectSelection(columnSelection(selected.range.c2, TOTAL_ROWS, selected.range.c1));
-  else if (action.type === 'selectRow') selectSelection(rowSelection(selected.range.r2, TOTAL_COLS, selected.range.r1));
-  else if (action.type === 'edit' || event.key === 'Enter') startEditing({ r: range.r1, c: range.c1 });
-  else if (action.type === 'clear') clearRange(store, cmdManager, range);
-  else if (action.type === 'cancel') { if (!clearClipboardSession()) selectRange(Range.single(range.r1, range.c1).toAddress()); }
-  else if (action.type === 'type' && action.text !== undefined) { setCellText(store, cmdManager, { r: range.r1, c: range.c1 }, action.text); startEditing({ r: range.r1, c: range.c1 }, action.text); }
+  else if (action.type === 'selectColumn') { clearMulti?.(); selectSelection(columnSelection(selected.range.c2, TOTAL_ROWS, selected.range.c1)); }
+  else if (action.type === 'selectRow') { clearMulti?.(); selectSelection(rowSelection(selected.range.r2, TOTAL_COLS, selected.range.r1)); }
+  else if (action.type === 'edit') startEditing({ r: range.r1, c: range.c1 }, undefined, true);
+  else if (action.type === 'page' && action.pageDir !== undefined) {
+    // Excel: PageUp/PageDown move one screen (viewport rows at the current zoom).
+    const canvas = event.currentTarget;
+    const rows = Math.max(1, Math.floor((canvas.clientHeight - COL_HEADER_HEIGHT) / (ROW_HEIGHT * (zoom / 100))));
+    clearMulti?.();
+    const target = { r: clampVal(selected.active.r + action.pageDir * rows, 0, TOTAL_ROWS - 1), c: selected.active.c };
+    if (event.shiftKey) selectSelection(extendSelection(selected, target));
+    else selectRange(Range.single(target.r, target.c).toAddress());
+  }
+  else if (action.type === 'backspace') { clearRange(store, cmdManager, range); startEditing({ r: range.r1, c: range.c1 }, '', true); }
+  else if (action.type === 'insertDate') { const now = new Date(); setCellText(store, cmdManager, { r: range.r1, c: range.c1 }, `${now.getFullYear()}/${now.getMonth() + 1}/${now.getDate()}`); }
+  else if (action.type === 'clear') {
+    const extras = multiRanges?.() ?? [];
+    if (extras.length === 0) clearRange(store, cmdManager, range);
+    else execCmd(new CompositeCommand([clearRangeCmd(range), ...extras.map(clearRangeCmd)]));
+  }
+  // Excel: Esc cancels the clipboard session but never changes the selection.
+  else if (action.type === 'cancel') clearClipboardSession();
+  else if (action.type === 'type' && action.text !== undefined) { startEditing({ r: range.r1, c: range.c1 }, action.text); }
   else if (action.type === 'menu' && action.command === 'selectAll') selectSelection(excelSelectAll(store, selected, TOTAL_ROWS, TOTAL_COLS));
   else if (action.type === 'menu' && action.command !== undefined) handleMenuShortcut(action.command, store, cmdManager, range, selectRange, setView, setFindDialog);
   else if (action.type === 'copy' || action.type === 'cut' || action.type === 'paste') runClipboard(action.type, range);
@@ -417,13 +588,25 @@ function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selec
 function handleEditorKey(
   event: ReactKeyboardEvent<HTMLTextAreaElement>,
   refEl: RefObject<HTMLTextAreaElement>,
-  commit: () => void,
+  commit: (moveAfter?: { readonly dr: number; readonly dc: number }) => void,
   cancel: () => void,
   setValue: (value: string) => void,
+  editMode = false,
 ): void {
   if (event.key === 'Escape') { cancel(); return; }
-  // Excel: Enter commits; Alt+Enter inserts a line break
-  if (event.key === 'Enter' && !event.altKey) { event.preventDefault(); commit(); return; }
+  // Excel "enter mode" (typing): arrows commit and move; F2 edit mode moves the caret.
+  // While the text is a formula, arrows stay in the editor (formula entry).
+  const arrowDeltas: Record<string, { dr: number; dc: number }> = { ArrowUp: { dr: -1, dc: 0 }, ArrowDown: { dr: 1, dc: 0 }, ArrowLeft: { dr: 0, dc: -1 }, ArrowRight: { dr: 0, dc: 1 } };
+  const arrow = arrowDeltas[event.key];
+  if (!editMode && arrow !== undefined && !event.shiftKey && !event.ctrlKey && !event.metaKey && refEl.current?.value.startsWith('=') !== true) {
+    event.preventDefault();
+    commit(arrow);
+    return;
+  }
+  // Excel: Tab commits and moves right (Shift+Tab left)
+  if (event.key === 'Tab') { event.preventDefault(); commit({ dr: 0, dc: event.shiftKey ? -1 : 1 }); return; }
+  // Excel: Enter commits and moves down (Shift+Enter up); Alt+Enter inserts a line break
+  if (event.key === 'Enter' && !event.altKey) { event.preventDefault(); commit({ dr: event.shiftKey ? -1 : 1, dc: 0 }); return; }
   if (event.key === 'Enter' && event.altKey) {
     event.preventDefault();
     const el = refEl.current;
@@ -511,11 +694,123 @@ function cellEditValue(store: Store, cell: CellAddress): string { const current 
 function syncExistingFormulas(store: Store, engine: FormulaEngine): void { const sheetId = store.getActiveSheetId(); store.getCells().forEach(([id, cell]) => { const formula = formulaText(cell); if (formula !== undefined) engine.setFormula(id, formula, formulaDependencies(formula), sheetId); }); }
 function syncCellFormula(engine: FormulaEngine, r: number, c: number, cell: Cell | undefined, sheetId?: string): void { const formula = formulaText(cell); const id = cellId(r, c); if (formula === undefined) engine.removeFormula(id, sheetId); else engine.setFormula(id, formula, formulaDependencies(formula), sheetId); }
 
-async function pasteFromClipboard(store: Store, cmdManager: CommandManager | undefined, target: RangeAddress): Promise<void> { const cells = await ClipboardService.read(); applyMatrix(store, cmdManager, target.r1, target.c1, cells); }
+export interface ClipboardSessionState { readonly type: 'cut' | 'copy'; readonly range: RangeAddress; readonly text: string; readonly cells: ReadonlyArray<ReadonlyArray<Cell | undefined>> }
+
+/** Deep-enough snapshot of the source block so the paste is value/style/formula-faithful. */
+export function snapshotCells(store: Store, range: RangeAddress): ReadonlyArray<ReadonlyArray<Cell | undefined>> {
+  const rows: Array<ReadonlyArray<Cell | undefined>> = [];
+  for (let r = range.r1; r <= range.r2; r += 1) {
+    const row: Array<Cell | undefined> = [];
+    for (let c = range.c1; c <= range.c2; c += 1) {
+      const cell = store.getCell(r, c);
+      row.push(cell === undefined ? undefined : { ...cell });
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+/**
+ * Turn a session snapshot into paste values anchored at (r, c). Copy shifts
+ * relative formula references by the paste offset (Excel); cut keeps formulas
+ * verbatim (Excel move semantics). Empty source cells clear the target cell.
+ */
+export function buildSessionPasteValues(session: ClipboardSessionState, r: number, c: number, target?: RangeAddress): CellPatch[][] {
+  const srcRows = session.cells.length;
+  const srcCols = session.cells[0]?.length ?? 1;
+  const [rows, cols] = tiledDims(srcRows, srcCols, target);
+  const out: CellPatch[][] = [];
+  for (let i = 0; i < rows; i += 1) {
+    const line: CellPatch[] = [];
+    for (let j = 0; j < cols; j += 1) {
+      const cell = session.cells[i % srcRows]?.[j % srcCols];
+      if (cell === undefined) { line.push({ text: '', formula: undefined, value: undefined, styleId: undefined, type: undefined }); continue; }
+      // Formula shift is measured from this tile's source cell, so tiled copies
+      // each get their own relative references (Excel).
+      const dr = r + i - (session.range.r1 + (i % srcRows));
+      const dc = c + j - (session.range.c1 + (j % srcCols));
+      // Explicit keys (even undefined) so the paste fully replaces the target
+      // cell instead of merging with stale formula/value/style remnants.
+      line.push({
+        text: cell.text,
+        formula: cell.formula !== undefined && session.type === 'copy' ? shiftFormula(cell.formula, dr, dc) : cell.formula,
+        value: cell.value,
+        styleId: cell.styleId,
+        type: cell.type,
+      });
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+/**
+ * Excel paste tiling: a target exactly N×M times the copied block gets filled
+ * with repeats; anything else pastes a single copy at the anchor.
+ */
+function tiledDims(srcRows: number, srcCols: number, target?: RangeAddress): [number, number] {
+  if (target === undefined || srcRows === 0 || srcCols === 0) return [srcRows, srcCols];
+  const tr = target.r2 - target.r1 + 1;
+  const tc = target.c2 - target.c1 + 1;
+  if ((tr > srcRows || tc > srcCols) && tr % srcRows === 0 && tc % srcCols === 0) return [tr, tc];
+  return [srcRows, srcCols];
+}
+
+/** External clipboard paste with Excel tiling for exact-multiple selections. */
+export function tilePlainCells(cells: Cell[][], target: RangeAddress): Cell[][] {
+  const srcRows = cells.length;
+  const srcCols = cells[0]?.length ?? 1;
+  const [rows, cols] = tiledDims(srcRows, srcCols, target);
+  if (rows === srcRows && cols === srcCols) return cells;
+  return Array.from({ length: rows }, (_, i) => Array.from({ length: cols }, (_, j) => cells[i % srcRows]![j % srcCols]!));
+}
+
+/**
+ * Combine a multi-selection into one rectangular block for copying.
+ * Excel allows it only when every range shares the same rows (columns
+ * concatenated) or the same columns (rows concatenated); otherwise null.
+ */
+export function combineMultiRanges(store: Store, ranges: readonly RangeAddress[]): { range: RangeAddress; cells: ReadonlyArray<ReadonlyArray<Cell | undefined>>; text: string } | null {
+  const sorted = [...ranges].sort((a, b) => a.r1 - b.r1 || a.c1 - b.c1);
+  const sameRows = sorted.every((rg) => rg.r1 === sorted[0]!.r1 && rg.r2 === sorted[0]!.r2);
+  const sameCols = sorted.every((rg) => rg.c1 === sorted[0]!.c1 && rg.c2 === sorted[0]!.c2);
+  if (!sameRows && !sameCols) return null;
+  const cellRows: Array<ReadonlyArray<Cell | undefined>> = [];
+  if (sameRows) {
+    const byCols = [...sorted].sort((a, b) => a.c1 - b.c1);
+    for (let r = sorted[0]!.r1; r <= sorted[0]!.r2; r += 1) {
+      const line: Array<Cell | undefined> = [];
+      for (const rg of byCols) for (let c = rg.c1; c <= rg.c2; c += 1) { const cell = store.getCell(r, c); line.push(cell === undefined ? undefined : { ...cell }); }
+      cellRows.push(line);
+    }
+  } else {
+    const byRows = [...sorted].sort((a, b) => a.r1 - b.r1);
+    for (const rg of byRows) {
+      for (let r = rg.r1; r <= rg.r2; r += 1) {
+        const line: Array<Cell | undefined> = [];
+        for (let c = sorted[0]!.c1; c <= sorted[0]!.c2; c += 1) { const cell = store.getCell(r, c); line.push(cell === undefined ? undefined : { ...cell }); }
+        cellRows.push(line);
+      }
+    }
+  }
+  const union = sorted.reduce((acc, rg) => ({ r1: Math.min(acc.r1, rg.r1), c1: Math.min(acc.c1, rg.c1), r2: Math.max(acc.r2, rg.r2), c2: Math.max(acc.c2, rg.c2) }));
+  const text = cellRows.map((line) => line.map((cell) => cell?.text ?? '').join('\t')).join('\n');
+  return { range: union, cells: cellRows, text };
+}
+
+async function pasteFromClipboard(store: Store, cmdManager: CommandManager | undefined, target: RangeAddress): Promise<void> { const cells = await ClipboardService.read(); applyMatrix(store, cmdManager, target.r1, target.c1, tilePlainCells(cells, target)); }
 function clearRange(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress): void { const values = matrix(range, () => ({ text: '' })); executeRange(store, cmdManager, range.r1, range.c1, values); }
-function applyMatrix(store: Store, cmdManager: CommandManager | undefined, r: number, c: number, values: readonly (readonly Partial<Cell>[])[]): void { const lastRow = values[values.length - 1]; if (lastRow === undefined) return; executeRange(store, cmdManager, r, c, values); }
-function executeRange(store: Store | undefined, cmdManager: CommandManager | undefined, r: number, c: number, values: readonly (readonly Partial<Cell>[])[]): void { const r2 = r + values.length - 1; const c2 = c + (values[0]?.length ?? 1) - 1; const cmd = new SetRangeValues({ r1: r, c1: c, r2, c2, values }); if (cmdManager === undefined) { if (store !== undefined) cmd.execute(store); } else cmdManager.execute(cmd); }
-function matrix(range: RangeAddress, cell: () => Partial<Cell>): Partial<Cell>[][] { return Array.from({ length: range.r2 - range.r1 + 1 }, () => Array.from({ length: range.c2 - range.c1 + 1 }, cell)); }
+function clearRangeCmd(range: RangeAddress): Command { const values = matrix(range, () => ({ text: '' })); return new SetRangeValues({ r1: range.r1, c1: range.c1, r2: range.r2, c2: range.c2, values }); }
+
+/** Several commands as one undoable unit (Excel: e.g. Delete across a multi-selection is a single undo). */
+class CompositeCommand extends Command<readonly Command[]> {
+  public execute(store: Store): void { for (const cmd of this.args) cmd.execute(store); }
+  public getUndo(): Command { return new CompositeCommand([...this.args].reverse().map((cmd) => cmd.getUndo())); }
+  public override describe(): string { return 'Composite'; }
+}
+function applyMatrix(store: Store, cmdManager: CommandManager | undefined, r: number, c: number, values: readonly (readonly CellPatch[])[]): void { const lastRow = values[values.length - 1]; if (lastRow === undefined) return; executeRange(store, cmdManager, r, c, values); }
+function executeRange(store: Store | undefined, cmdManager: CommandManager | undefined, r: number, c: number, values: readonly (readonly CellPatch[])[]): void { const r2 = r + values.length - 1; const c2 = c + (values[0]?.length ?? 1) - 1; const cmd = new SetRangeValues({ r1: r, c1: c, r2, c2, values }); if (cmdManager === undefined) { if (store !== undefined) cmd.execute(store); } else cmdManager.execute(cmd); }
+function matrix(range: RangeAddress, cell: () => CellPatch): CellPatch[][] { return Array.from({ length: range.r2 - range.r1 + 1 }, () => Array.from({ length: range.c2 - range.c1 + 1 }, cell)); }
 function addSheet(store: Store): void { const name = window.prompt('Sheet name', `Sheet${store.getSheets().length + 1}`); if (name !== null) store.addSheet(name); }
 function renameSheet(store: Store, id: string): void { const current = store.getSheets().find((s) => s.id === id)?.name ?? ''; const name = window.prompt('Rename sheet', current); if (name !== null) store.renameSheet(id, name); }
 function deleteSheet(store: Store, id: string): void { if (window.confirm('Delete this sheet?')) store.deleteSheet(id); }
@@ -533,8 +828,52 @@ function withClose<T extends Omit<React.ComponentProps<typeof MenuBar>, 'closeDe
   return onClose === undefined ? props : { ...props, closeDemo: onClose };
 }
 
+/** Excel: Enter/Tab cycle the active cell through a multi-cell selection (Shift reverses). */
+function cycleActive(range: RangeAddress, active: { readonly r: number; readonly c: number }, key: 'Enter' | 'Tab', shiftKey: boolean): { r: number; c: number } {
+  let { r, c } = active;
+  const d = shiftKey ? -1 : 1;
+  if (key === 'Enter') {
+    r += d;
+    if (r > range.r2) { r = range.r1; c += 1; }
+    if (r < range.r1) { r = range.r2; c -= 1; }
+    if (c > range.c2) c = range.c1;
+    if (c < range.c1) c = range.c2;
+  } else {
+    c += d;
+    if (c > range.c2) { c = range.c1; r += 1; }
+    if (c < range.c1) { c = range.c2; r -= 1; }
+    if (r > range.r2) r = range.r1;
+    if (r < range.r1) r = range.r2;
+  }
+  return { r, c };
+}
+
+/** Excel Alt+=: SUM over the contiguous numbers above the active cell, else to its left. */
+function autoSumFormula(store: Store, r: number, c: number): string {
+  const numericAt = (rr: number, cc: number): boolean => {
+    const cell = store.getCell(rr, cc);
+    if (cell === undefined) return false;
+    return typeof cell.value === 'number' || (cell.text.trim() !== '' && !Number.isNaN(Number(cell.text)));
+  };
+  let top = r - 1;
+  while (top >= 0 && numericAt(top, c)) top -= 1;
+  if (top < r - 1) return `=SUM(${num2alpha(c)}${top + 2}:${num2alpha(c)}${r})`;
+  let left = c - 1;
+  while (left >= 0 && numericAt(r, left)) left -= 1;
+  if (left < c - 1) return `=SUM(${num2alpha(left + 1)}${r + 1}:${num2alpha(c - 1)}${r + 1})`;
+  return '=SUM()';
+}
+
+function switchSheet(store: Store, delta: 1 | -1): void {
+  const sheets = store.getSheets();
+  if (sheets.length < 2) return;
+  const index = sheets.findIndex((sheet) => sheet.id === store.getActiveSheetId());
+  const next = sheets[(index + delta + sheets.length) % sheets.length];
+  if (next !== undefined) store.activateSheet(next.id);
+}
+
 function handleMenuShortcut(command: MenuShortcutCommand, store: Store, cmdManager: CommandManager | undefined, selected: RangeAddress, selectRange: (range: RangeAddress) => void, setView: Dispatch<SetStateAction<ViewState>>, setFindDialog: (name: DialogName | null) => void): void {
-  const map: Record<MenuShortcutCommand, () => void> = { save: () => saveToLocal(store), find: () => setFindDialog('find'), replace: () => setFindDialog('replace'), selectAll: () => selectRange(allSheetRange()), bold: () => applyShortcutStyle(store, cmdManager, selected, { bold: true }), italic: () => applyShortcutStyle(store, cmdManager, selected, { italic: true }), underline: () => applyShortcutStyle(store, cmdManager, selected, { underline: true }), zoom100: () => setView((current) => ({ ...current, zoom: 100 })), zoomIn: () => setView((current) => ({ ...current, zoom: Math.min(200, current.zoom + 10) })), zoomOut: () => setView((current) => ({ ...current, zoom: Math.max(50, current.zoom - 10) })), undo: () => cmdManager?.undo(), redo: () => cmdManager?.redo() };
+  const map: Record<MenuShortcutCommand, () => void> = { save: () => saveToLocal(store), find: () => setFindDialog('find'), replace: () => setFindDialog('replace'), selectAll: () => selectRange(allSheetRange()), bold: () => applyShortcutStyle(store, cmdManager, selected, { bold: true }), italic: () => applyShortcutStyle(store, cmdManager, selected, { italic: true }), underline: () => applyShortcutStyle(store, cmdManager, selected, { underline: true }), zoom100: () => setView((current) => ({ ...current, zoom: 100 })), zoomIn: () => setView((current) => ({ ...current, zoom: Math.min(200, current.zoom + 10) })), zoomOut: () => setView((current) => ({ ...current, zoom: Math.max(50, current.zoom - 10) })), undo: () => cmdManager?.undo(), redo: () => cmdManager?.redo(), formatCells: () => setFindDialog('numberFormat'), nextSheet: () => switchSheet(store, 1), prevSheet: () => switchSheet(store, -1) };
   map[command]();
 }
 function applyShortcutStyle(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress, style: Partial<Style>): void { const cmd = new SetRangeStyleCommand({ ...range, style }); if (cmdManager === undefined) cmd.execute(store); else cmdManager.execute(cmd); }
