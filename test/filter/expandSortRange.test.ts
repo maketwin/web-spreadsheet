@@ -4,7 +4,7 @@ import { FilterService } from '../../src/filter/FilterService';
 import { FormulaEngine } from '../../src/formula/FormulaEngine';
 import { createFormulaSync } from '../../src/components/Spreadsheet';
 import { formulaDependencies, formulaText } from '../../src/util/cell';
-import { SortRangeCommand, resolveSortRange } from '../../src/commands/impl/SortRange';
+import { SortRangeCommand } from '../../src/commands/impl/SortRange';
 import { CommandManager } from '../../src/commands/CommandManager';
 import { SetCellText } from '../../src/commands/impl/SetCellText';
 
@@ -37,7 +37,7 @@ function setupDemo() {
 describe('sort range expansion', () => {
   it('resolveSortRange expands a one-column selection to the data block', () => {
     const { store, sync } = setupDemo();
-    const resolved = resolveSortRange(store, { r1: 1, c1: 3, r2: 4, c2: 3, sortCol: 3, direction: 'desc' });
+    const resolved = new FilterService(store).resolveSortRange({ r1: 1, c1: 3, r2: 4, c2: 3, sortCol: 3, direction: 'desc' });
     expect(resolved).toEqual({ r1: 1, c1: 0, r2: 4, c2: 5, sortCol: 3, direction: 'desc' });
     sync.unsubscribe();
   });

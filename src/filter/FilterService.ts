@@ -179,25 +179,39 @@ export class FilterService {
     this.unhideRows(r1, r2);
   }
 
-  /** Sort rows in range by column `sortCol` ascending or descending. */
-  public sortRange(r1: number, c1: number, r2: number, c2: number, sortCol: number, direction: 'asc' | 'desc'): void {
+  /**
+   * Single source of truth for Excel's sort-range resolution: a single cell
+   * inside an AutoFilter sorts the whole filter (header pinned); a narrow
+   * selection expands to the data region; explicit multi-column ranges stay
+   * intact. Returns undefined when nothing sortable remains.
+   */
+  public resolveSortRange<T extends { readonly r1: number; readonly c1: number; readonly r2: number; readonly c2: number; readonly sortCol: number }>(args: T): T | undefined {
     const filter = this.store.getAutoFilter();
-    const isSingleCell = r1 === r2 && c1 === c2;
-    const isSingleColumn = c1 === c2;
-    let range = { r1, c1, r2, c2, sortCol };
-    if (filter !== undefined && isSingleCell && r1 >= filter.range.r1 && r1 <= filter.range.r2 && c1 >= filter.range.c1 && c1 <= filter.range.c2) {
-      range = { ...filter.range, sortCol: c1 };
+    const isSingleCell = args.r1 === args.r2 && args.c1 === args.c2;
+    const isSingleColumn = args.c1 === args.c2;
+    let range = { ...args };
+    if (filter !== undefined && isSingleCell && args.r1 >= filter.range.r1 && args.r1 <= filter.range.r2 && args.c1 >= filter.range.c1 && args.c1 <= filter.range.c2) {
+      range = { ...args, ...filter.range, sortCol: args.c1 };
     } else if (isSingleCell || isSingleColumn) {
       // Excel default: expand so a one-column highlight cannot tear formulas
       // away from their row labels. Explicit multi-column ranges stay intact.
-      const inferred = this.inferDataRegion({ r1, c1, r2, c2 });
-      range = { r1: isSingleCell ? inferred.r1 : r1, c1: inferred.c1, r2: isSingleCell ? inferred.r2 : r2, c2: inferred.c2, sortCol };
+      const inferred = this.inferDataRegion(args);
+      const sortCol = Math.min(Math.max(args.sortCol, inferred.c1), inferred.c2);
+      range = { ...args, r1: isSingleCell ? inferred.r1 : args.r1, c1: inferred.c1, r2: isSingleCell ? inferred.r2 : args.r2, c2: inferred.c2, sortCol };
     }
     if (filter !== undefined && range.r1 === filter.range.r1 && range.r2 === filter.range.r2) {
-      range.r1 += 1; // Excel keeps the AutoFilter header row in place.
+      range = { ...range, r1: range.r1 + 1 }; // Excel keeps the AutoFilter header row in place.
     }
-    if (range.r1 > range.r2) return;
+    return range.r1 > range.r2 ? undefined : range;
+  }
 
+  /**
+   * Low-level non-undoable sort. UI callers should route through
+   * SortRangeCommand so the sort joins the undo stack.
+   */
+  public sortRange(r1: number, c1: number, r2: number, c2: number, sortCol: number, direction: 'asc' | 'desc'): void {
+    const range = this.resolveSortRange({ r1, c1, r2, c2, sortCol });
+    if (range === undefined) return;
     sortRowsInPlace(this.store, range.r1, range.c1, range.r2, range.c2, range.sortCol, direction);
     this.applyFilters();
   }

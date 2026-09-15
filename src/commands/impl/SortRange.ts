@@ -26,7 +26,9 @@ export class SortRangeCommand extends Command<SortRangeArgs> {
   private applied: SortRangeArgs = this.args;
 
   public execute(store: Store): void {
-    this.applied = resolveSortRange(store, this.args);
+    const resolved = new FilterService(store).resolveSortRange(this.args);
+    if (resolved === undefined) { this.applied = this.args; this.before = []; this.after = []; return; }
+    this.applied = resolved;
     this.before = snapshot(store, this.applied);
     const outside = sortRowsInPlace(
       store,
@@ -71,20 +73,6 @@ interface RestoreArgs {
  * columns (Excel "expand the selection") so formulas stay with their row
  * labels. Multi-column ranges are left as given.
  */
-export function resolveSortRange(store: Store, args: SortRangeArgs): SortRangeArgs {
-  if (args.c1 !== args.c2) return args;
-  const region = new FilterService(store).inferDataRegion(args);
-  const sortCol = Math.min(Math.max(args.sortCol, region.c1), region.c2);
-  return {
-    r1: args.r1,
-    c1: region.c1,
-    r2: args.r2,
-    c2: region.c2,
-    sortCol,
-    direction: args.direction,
-  };
-}
-
 function snapshot(store: Store, range: RangeAddress): CellSnapshot {
   const sheetId = store.getActiveSheetId();
   const rows: Array<readonly [string, number, number, Cell | undefined]> = [];
