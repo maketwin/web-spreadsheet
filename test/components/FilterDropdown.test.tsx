@@ -5,6 +5,14 @@ import type { SetAutoFilterCriteriaCommand } from '../../src/commands/impl/SetAu
 import { FilterService } from '../../src/filter/FilterService';
 import { Store } from '../../src/store/Store';
 
+/** The confirm path wraps clear+set in one Composite undo unit — unwrap to the criteria command. */
+function lastCriteria(executed: SetAutoFilterCriteriaCommand[]): SetAutoFilterCriteriaCommand | undefined {
+  const last = executed.at(-1);
+  const args = (last as unknown as { args?: unknown } | undefined)?.args;
+  if (Array.isArray(args)) return args.at(-1) as SetAutoFilterCriteriaCommand;
+  return last;
+}
+
 describe('FilterDropdown', () => {
   vi.stubGlobal('matchMedia', (query: string): MediaQueryList => ({
     matches: false,
@@ -68,7 +76,7 @@ describe('FilterDropdown', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /确\s*定/ }));
     expect(onClose).toHaveBeenCalled();
-    const command = executed.at(-1);
+    const command = lastCriteria(executed);
     expect(command?.args.mode).toBe('set');
     expect(command?.args.criteria).toEqual({ selected: ['Alice', 'Charlie'], includeBlanks: true });
     expect(store.getRow(2)?.hide).toBe(true);
@@ -113,7 +121,7 @@ describe('FilterDropdown', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /Bob/ }));
     fireEvent.click(screen.getByRole('checkbox', { name: /Charlie/ }));
     fireEvent.click(screen.getByRole('button', { name: /确\s*定/ }));
-    expect(executed.at(-1)?.args.mode).toBe('clearColumn');
+    expect(lastCriteria(executed)?.args.mode).toBe('clearColumn');
     expect(store.getAutoFilter()?.criteria[0]).toBeUndefined();
   });
 
@@ -126,7 +134,7 @@ describe('FilterDropdown', () => {
     fireEvent.click(screen.getByRole('button', { name: /确\s*定/ }));
 
     // Unchecking the visible "Alice" while Bob/Charlie stay checked.
-    expect(executed.at(-1)?.args.criteria).toEqual({ selected: ['Bob', 'Charlie'], includeBlanks: true });
+    expect(lastCriteria(executed)?.args.criteria).toEqual({ selected: ['Bob', 'Charlie'], includeBlanks: true });
   });
 
   it('applies a custom condition and closes', async () => {
@@ -142,7 +150,7 @@ describe('FilterDropdown', () => {
     fireEvent.click(buttons[0]); // the condition editor's 确定
 
     expect(onClose).toHaveBeenCalled();
-    expect(executed.at(-1)?.args.criteria).toEqual({
+    expect(lastCriteria(executed)?.args.criteria).toEqual({
       selected: [],
       includeBlanks: false,
       conditions: [{ operator: 'contains', value: 'ali' }],

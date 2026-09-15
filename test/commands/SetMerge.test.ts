@@ -56,3 +56,74 @@ describe('SetMerge', () => {
     expect(store.getMergeAt(2, 2)).toBe('C3:D4');
   });
 });
+
+describe('SetMerge Excel semantics', () => {
+  it('keeps only the anchor value and clears covered cells', () => {
+    const store = new Store();
+    store.setCell(0, 0, { text: 'keep' });
+    store.setCell(0, 1, { text: 'drop' });
+    store.setCell(1, 0, { text: 'drop2' });
+
+    new SetMerge({ range: 'A1:B2', active: true }).execute(store);
+
+    expect(store.getCell(0, 0)?.text).toBe('keep');
+    expect(store.getCell(0, 1)).toBeUndefined();
+    expect(store.getCell(1, 0)).toBeUndefined();
+  });
+
+  it('undo restores cleared values', () => {
+    const store = new Store();
+    store.setCell(0, 0, { text: 'keep' });
+    store.setCell(0, 1, { text: 'drop' });
+    const cmd = new SetMerge({ range: 'A1:B2', active: true });
+
+    cmd.execute(store);
+    cmd.getUndo().execute(store);
+
+    expect(store.getMerges()).toEqual([]);
+    expect(store.getCell(0, 1)?.text).toBe('drop');
+  });
+
+  it('replaces an overlapping merge', () => {
+    const store = new Store();
+    new SetMerge({ range: 'A1:B2', active: true }).execute(store);
+
+    new SetMerge({ range: 'B2:D4', active: true }).execute(store);
+
+    expect(store.getMerges()).toEqual(['B2:D4']);
+  });
+
+  it('undo of a replacing merge restores the prior merge', () => {
+    const store = new Store();
+    new SetMerge({ range: 'A1:B2', active: true }).execute(store);
+    const cmd = new SetMerge({ range: 'B2:D4', active: true });
+
+    cmd.execute(store);
+    cmd.getUndo().execute(store);
+
+    expect(store.getMerges()).toEqual(['A1:B2']);
+  });
+
+  it('unmerge removes every merge intersecting the range', () => {
+    const store = new Store();
+    new SetMerge({ range: 'A1:B2', active: true }).execute(store);
+    new SetMerge({ range: 'C3:D4', active: true }).execute(store);
+
+    new SetMerge({ range: 'A1:D4', active: false }).execute(store);
+
+    expect(store.getMerges()).toEqual([]);
+  });
+
+  it('redo re-applies the merge', () => {
+    const store = new Store();
+    store.setCell(0, 1, { text: 'x' });
+    const cmd = new SetMerge({ range: 'A1:B2', active: true });
+    cmd.execute(store);
+    cmd.getUndo().execute(store);
+
+    cmd.execute(store);
+
+    expect(store.getMerges()).toEqual(['A1:B2']);
+    expect(store.getCell(0, 1)).toBeUndefined();
+  });
+});

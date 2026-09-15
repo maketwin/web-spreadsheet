@@ -143,6 +143,19 @@
       font-size: 12px;
       white-space: nowrap;
     }
+    /* 合并下拉按钮：左键带文字，豁免工具栏 26px 图标方块规则（右侧箭头键除外）。 */
+    .ss-interaction-toolbar .ss-merge-btn .ant-btn-sm:not(.ant-btn-icon-only) {
+      width: auto;
+      min-width: auto;
+      height: 26px;
+      padding-inline: 8px;
+      gap: 4px;
+      white-space: nowrap;
+    }
+    .ss-interaction-toolbar .ss-merge-btn .ant-btn-sm:not(.ant-btn-icon-only) > span {
+      font-size: 12px;
+      white-space: nowrap;
+    }
   </style>
 </head>
 <body>

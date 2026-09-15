@@ -12,6 +12,7 @@ import { ResizeHandler } from './ResizeHandler';
 import { VirtualScroller, type VisibleRange } from './VirtualScroller';
 import type { StoreEvent, Style } from '../types';
 import { parseRange } from '../util/cell';
+import { coveredBySameMerge } from '../util/merge';
 import { formatValue } from '../format/NumberFormatter';
 import { ConditionalService } from '../conditional/ConditionalService';
 import { WRAP_LINE_HEIGHT, wrapTextLines } from '../util/wrapText';
@@ -855,12 +856,22 @@ export class CanvasRenderer {
       const r = q.r0 + j;
       ys[j] = this.gridLineY(r, frozenRowQuad);
     }
+    // Excel: no grid lines inside a merged cell. Fast path when the quad has none.
+    let merges: Array<{ r1: number; c1: number; r2: number; c2: number }> | null = null;
+    for (const m of this.opts.store.getMerges()) {
+      const a = parseRange(m);
+      if (a.r2 < q.r0 || a.r1 > q.r1 || a.c2 < q.c0 || a.c1 > q.c1) continue;
+      if (merges === null) merges = [];
+      merges.push(a);
+    }
     for (let i = 0; i <= colCount; i += 1) {
       const c = q.c0 + i;
       const lx = xs[i]!;
       for (let j = 0; j < rowCount; j += 1) {
         const r = q.r0 + j;
         if (hasBorderOnEdge(this.borderEdges, 'v', c, r)) continue;
+        // Vertical segment between (r,c-1) and (r,c): interior only when both cells are in the SAME merge.
+        if (merges !== null && coveredBySameMerge(merges, r, c - 1, r, c)) continue;
         this.ctx.moveTo(lx, ys[j]!);
         this.ctx.lineTo(lx, ys[j + 1]!);
       }
@@ -871,6 +882,8 @@ export class CanvasRenderer {
       for (let i = 0; i < colCount; i += 1) {
         const c = q.c0 + i;
         if (hasBorderOnEdge(this.borderEdges, 'h', r, c)) continue;
+        // Horizontal segment between (r-1,c) and (r,c): interior only when both cells are in the SAME merge.
+        if (merges !== null && coveredBySameMerge(merges, r - 1, c, r, c)) continue;
         this.ctx.moveTo(xs[i]!, ly);
         this.ctx.lineTo(xs[i + 1]!, ly);
       }
@@ -930,6 +943,14 @@ export class CanvasRenderer {
       for (let c = c0; c < c1; c += 1) {
         const style = this.cellStyle(r, c);
         collectCellBorderEdges(this.borderEdges, r, c, style?.border);
+      }
+    }
+    // Excel: a merged cell's borders are its outer outline — interior edges vanish.
+    for (const m of this.opts.store.getMerges()) {
+      const { r1, c1, r2, c2 } = parseRange(m);
+      for (const [key, edge] of this.borderEdges) {
+        if (edge.orient === 'v' && edge.bound > c1 && edge.bound <= c2 && edge.along >= r1 && edge.along <= r2) this.borderEdges.delete(key);
+        else if (edge.orient === 'h' && edge.bound > r1 && edge.bound <= r2 && edge.along >= c1 && edge.along <= c2) this.borderEdges.delete(key);
       }
     }
   }
@@ -1392,6 +1413,9 @@ export class CanvasRenderer {
 
   /** Viewport rect of a cell (includes scroll) — use this for the editor overlay so it matches canvas geometry. */
   public getCellViewportRect(r: number, c: number): { x: number; y: number; w: number; h: number } {
+    // Excel: the in-cell editor covers the whole merged area, not just the anchor cell.
+    const merge = this.opts.store.getMergeAt(r, c);
+    if (merge !== undefined) return this.rangeRect(parseRange(merge));
     const { x, y } = this.cellVP(r, c);
     return { x, y, w: this.scroller.getColWidth(c), h: this.scroller.getRowHeight(r) };
   }

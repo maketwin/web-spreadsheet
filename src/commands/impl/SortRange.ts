@@ -2,6 +2,7 @@ import { Command } from '../Command';
 import type { Store } from '../../store/Store';
 import type { Cell } from '../../types';
 import { FilterService } from '../../filter/FilterService';
+import { mergesIntersecting } from '../../util/merge';
 import { sortRowsInPlace } from '../../filter/sortRows';
 import type { OutsideRewrite } from '../../formula/rowMoveRefs';
 import type { RangeAddress } from '../../selection/Range';
@@ -28,6 +29,8 @@ export class SortRangeCommand extends Command<SortRangeArgs> {
   public execute(store: Store): void {
     const resolved = new FilterService(store).resolveSortRange(this.args);
     if (resolved === undefined) { this.applied = this.args; this.before = []; this.after = []; return; }
+    // Excel refuses to sort a range containing merged cells.
+    if (mergesIntersecting(store, resolved).length > 0) { this.applied = this.args; this.before = []; this.after = []; return; }
     this.applied = resolved;
     this.before = snapshot(store, this.applied);
     const outside = sortRowsInPlace(

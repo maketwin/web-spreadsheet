@@ -1,5 +1,5 @@
 import { Button, ColorPicker, Divider, Dropdown, Form, Input, Modal, Select, Space, Switch, Tooltip, message } from 'antd';
-import { AlignCenterOutlined, AlignLeftOutlined, AlignRightOutlined, BgColorsOutlined, BoldOutlined, BorderBottomOutlined, BorderInnerOutlined, BorderLeftOutlined, BorderOuterOutlined, BorderRightOutlined, BorderTopOutlined, ClearOutlined, ColumnHeightOutlined, FontColorsOutlined, FormatPainterOutlined, ItalicOutlined, LockOutlined, SelectOutlined, UnderlineOutlined, ZoomInOutlined, ZoomOutOutlined, TableOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined } from '@ant-design/icons';
+import { DownOutlined, AlignCenterOutlined, AlignLeftOutlined, AlignRightOutlined, BgColorsOutlined, BoldOutlined, BorderBottomOutlined, BorderInnerOutlined, BorderLeftOutlined, BorderOuterOutlined, BorderRightOutlined, BorderTopOutlined, ClearOutlined, ColumnHeightOutlined, FontColorsOutlined, FormatPainterOutlined, ItalicOutlined, LockOutlined, SelectOutlined, UnderlineOutlined, ZoomInOutlined, ZoomOutOutlined, TableOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, MergeCellsOutlined } from '@ant-design/icons';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type Dispatch, type FC, type KeyboardEvent as ReactKeyboardEvent, type RefObject, type SetStateAction } from 'react';
@@ -17,6 +17,8 @@ import { SetRangeBorderCommand, type BorderPreset, type BorderLine } from '../co
 import { SetRangeValues } from '../commands/impl/SetRangeValues';
 import { EventBus } from '../events/EventBus';
 import { FormulaEngine } from '../formula/FormulaEngine';
+import { isSingleMergeSelection, mergeSelection } from './mergeActions';
+import { isExactlyOneMerge, moveDirection, resolveArrowTarget, resolveEditAnchor, snapClickSelection, snapRangeSelection } from '../selection/mergeSnap';
 import { KeyboardHandler, type MenuShortcutCommand } from '../keys/KeyboardHandler';
 import { PluginManager, type Plugin } from '../plugin/PluginManager';
 import { CanvasRenderer, COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS, type CellAddress } from '../renderer/CanvasRenderer';
@@ -49,7 +51,7 @@ import { startAutoSave } from '../db/autoSave';
 import { loadWorkbook, DEFAULT_ID, saveWorkbook as saveToDB } from '../db/WorkbookDB';
 import type { Cell, Style } from '../types';
 import { WRAP_LINE_HEIGHT, wrappedContentHeight } from '../util/wrapText';
-import { autoFitRowHeight, autofitRowsForSelection } from '../util/rowAutofit';
+import { autoFitRowHeight, autofitRowHeights } from '../util/rowAutofit';
 import { fillShortcut } from '../fill/fillShortcut';
 import { cycleDollars, endsWithRef, isPointTrigger, refAtCaret, upsertRef } from '../formula/pointMode';
 
@@ -125,11 +127,12 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       // Excel Ctrl+click: keep the existing selection as an extra range, activate the new cell.
       const current = selectedRef.current;
       setMulti([...multiRef.current, ...(current !== null ? [current.range] : [])]);
-      selectSelection(cellSelection(cell.r, cell.c));
+      selectSelection(snapClickSelection(store, cell.r, cell.c));
       return;
     }
     if (!ctrl) setMulti([]);
-    selectSelection(shift && selectedRef.current ? extendSelection(selectedRef.current, cell) : cellSelection(cell.r, cell.c));
+    // Excel: clicking a merged cell selects the whole merge; shift-extend snaps to merge edges.
+    selectSelection(shift && selectedRef.current ? snapRangeSelection(store, extendSelection(selectedRef.current, cell)) : snapClickSelection(store, cell.r, cell.c));
   }, [painting, sourceStyle, selectSelection, cmdManager, store, setMulti]);
   const commitEditingRef = useRef<((value: string) => void) | null>(null);
   const closeCtxMenu = useCallback(() => setCtxMenu(null), []);
@@ -180,16 +183,23 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   // Excel "End mode": End arms the next arrow key to edge-jump (like Ctrl+arrow).
   const endModeRef = useRef(false);
   const { clipboardSession, clearClipboardSession, runClipboard, runCtxClipboard, pasteSpecialOpen, setPasteSpecialOpen, applyPasteSpecial } = useClipboardSession(store, cmdManager, rendererRef, selectedRef, multiRef);
-  const startEditing = (cell: CellAddress, value = cellEditValue(store, cell), editMode = false): void => {
+  const startEditing = (cell: CellAddress, value?: string, editMode = false): void => {
     // Excel: entering edit mode cancels the marching-ants clipboard session.
     if (clipboardSession.current !== null) clearClipboardSession();
+    // Excel: editing a merged cell always targets the anchor (upper-left) cell.
+    const { anchor, merge } = resolveEditAnchor(store, cell.r, cell.c);
+    const editValue = value ?? cellEditValue(store, anchor);
     // Excel: typing with a multi-cell selection keeps the range (Ctrl+Enter fills it all).
     const cur = selectedRef.current;
-    const keep = cur !== null && (cur.range.r1 !== cur.range.r2 || cur.range.c1 !== cur.range.c2) && new Range(cur.range).contains(cell.r, cell.c);
-    const next = keep && cur !== null ? rangeSelection(cur.range, cur.anchor, { r: cell.r, c: cell.c }) : cellSelection(cell.r, cell.c);
+    const keep = cur !== null && (cur.range.r1 !== cur.range.r2 || cur.range.c1 !== cur.range.c2) && new Range(cur.range).contains(anchor.r, anchor.c);
+    const next = keep && cur !== null
+      ? rangeSelection(cur.range, cur.anchor, anchor)
+      : merge !== undefined
+        ? rangeSelection(merge, { r: merge.r1, c: merge.c1 }, { r: merge.r1, c: merge.c1 })
+        : cellSelection(anchor.r, anchor.c);
     selectedRef.current = next;
     setSelected(next);
-    setEditing({ ...cell, value, editMode });
+    setEditing({ ...anchor, value: editValue, editMode });
   };
   const commitEditing = (value: string, moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection = false): void => {
     const ed = editingRef.current;
@@ -214,7 +224,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       if (value.includes('\n')) {
         const range = fillAll && selRange !== undefined ? selRange : { r1: ed.r, c1: ed.c, r2: ed.r, c2: ed.c };
         applyShortcutStyle(store, cmdManager, range, { wrap: true });
-        autofitRowsForSelection(store, cmdManager, range);
+        growRowsToContent(store, range);
       }
       if (moveAfter !== undefined) {
         const next = Range.single(
@@ -386,7 +396,7 @@ function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick
   useEffect(() => {
     if (canvasRef.current === null) return undefined;
     const currentSelection = selectedLiveRef.current;
-    const base = { canvas: canvasRef.current, store, zoom: view.zoom, showFormula: view.showFormula, showGrid: view.showGrid, frozenRows: view.frozenRows, frozenCols: view.frozenCols, onCellClick: (cell: CellAddress, shift?: boolean) => flushSync(() => callbacks.current.onCellClick(cell, shift === true)), onSelectionChange: (range: RangeAddress, active?: CellAddress, anchor?: CellAddress) => flushSync(() => callbacks.current.onSelectionChange(rangeSelection(range, anchor ?? selectedLiveRef.current?.anchor, active ?? { r: range.r2, c: range.c2 }))), onColumnSelect: (c: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(columnSelection(c, TOTAL_ROWS, shift && current?.kind === 'column' ? current.anchor.c : c)); }), onRowSelect: (r: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(rowSelection(r, TOTAL_COLS, shift && current?.kind === 'row' ? current.anchor.r : r)); }), onSheetSelect: () => flushSync(() => callbacks.current.onSelectionChange(sheetSelection(allSheetRange()))), onRowResize: (r: number, height: number) => { const cmd = new SetRowHeight({ r, height }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColResize: (c: number, width: number) => { const cmd = new SetColWidth({ c, width }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onRowDblClick: (r: number) => { const fit = autoFitRowHeight(store, r); const cmd = new SetRowHeight({ r, height: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColDblClick: (c: number) => { const fit = autoFitColWidth(store, c); const cmd = new SetColWidth({ c, width: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onFill: (source: RangeAddress, target: RangeAddress, ctrlKey: boolean) => { const cmd = new FillRangeCommand({ ctrlKey, source, target }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onMoveRange: (source: RangeAddress, target: RangeAddress, copy?: boolean) => { const op = makeMoveRange({ source, target, copy }); if (cmdManager !== undefined) cmdManager.execute(op); else op.execute(store); }, onZoom: (delta: number) => setView((current) => ({ ...current, zoom: Math.min(200, Math.max(50, current.zoom + delta)) })), onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => callbacks.current.onHeaderContextMenu(info, x, y), onCellContextMenu: (cell: CellAddress, x: number, y: number) => callbacks.current.onCellContextMenu(cell, x, y), onAutoFilterClick: (r: number, c: number, x: number, y: number) => callbacks.current.onAutoFilterClick(r, c, x, y) };
+    const base = { canvas: canvasRef.current, store, zoom: view.zoom, showFormula: view.showFormula, showGrid: view.showGrid, frozenRows: view.frozenRows, frozenCols: view.frozenCols, onCellClick: (cell: CellAddress, shift?: boolean) => flushSync(() => callbacks.current.onCellClick(cell, shift === true)), onSelectionChange: (range: RangeAddress, active?: CellAddress, anchor?: CellAddress) => flushSync(() => callbacks.current.onSelectionChange(snapRangeSelection(store, rangeSelection(range, anchor ?? selectedLiveRef.current?.anchor, active ?? { r: range.r2, c: range.c2 })))), onColumnSelect: (c: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(columnSelection(c, TOTAL_ROWS, shift && current?.kind === 'column' ? current.anchor.c : c)); }), onRowSelect: (r: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(rowSelection(r, TOTAL_COLS, shift && current?.kind === 'row' ? current.anchor.r : r)); }), onSheetSelect: () => flushSync(() => callbacks.current.onSelectionChange(sheetSelection(allSheetRange()))), onRowResize: (r: number, height: number) => { const cmd = new SetRowHeight({ r, height }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColResize: (c: number, width: number) => { const cmd = new SetColWidth({ c, width }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onRowDblClick: (r: number) => { const fit = autoFitRowHeight(store, r); const cmd = new SetRowHeight({ r, height: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColDblClick: (c: number) => { const fit = autoFitColWidth(store, c); const cmd = new SetColWidth({ c, width: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onFill: (source: RangeAddress, target: RangeAddress, ctrlKey: boolean) => { const cmd = new FillRangeCommand({ ctrlKey, source, target }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onMoveRange: (source: RangeAddress, target: RangeAddress, copy?: boolean) => { const op = makeMoveRange({ source, target, copy }); if (cmdManager !== undefined) cmdManager.execute(op); else op.execute(store); }, onZoom: (delta: number) => setView((current) => ({ ...current, zoom: Math.min(200, Math.max(50, current.zoom + delta)) })), onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => callbacks.current.onHeaderContextMenu(info, x, y), onCellContextMenu: (cell: CellAddress, x: number, y: number) => callbacks.current.onCellContextMenu(cell, x, y), onAutoFilterClick: (r: number, c: number, x: number, y: number) => callbacks.current.onAutoFilterClick(r, c, x, y) };
     const renderer = new CanvasRenderer(currentSelection === null ? base : { ...base, selectedRange: currentSelection.range, selectionKind: currentSelection.kind, activeCell: currentSelection.active });
     rendererRef.current = renderer;
     return () => { renderer.destroy(); rendererRef.current = null; };
@@ -510,12 +520,17 @@ function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selec
   const action = KeyboardHandler.fromReactEvent(event, keyboardBase);
   if (action === null) return;
   event.preventDefault();
-  if (action.type === 'move' && action.range !== undefined && (event.key === 'Enter' || event.key === 'Tab') && (range.r1 !== range.r2 || range.c1 !== range.c2)) {
+  if (action.type === 'move' && action.range !== undefined && (event.key === 'Enter' || event.key === 'Tab') && (range.r1 !== range.r2 || range.c1 !== range.c2) && !isExactlyOneMerge(store, range)) {
     // Excel: Enter/Tab walk the active cell through a multi-cell selection.
     selectSelection(rangeSelection(range, selected.anchor, cycleActive(range, selected.active, event.key, event.shiftKey)));
   }
-  else if (action.type === 'move' && action.range !== undefined && event.shiftKey) { clearMulti?.(); selectSelection(extendSelection(selected, { r: action.range.r1, c: action.range.c1 })); }
-  else if (action.type === 'move' && action.range !== undefined) { clearMulti?.(); selectRange(action.range); }
+  else if (action.type === 'move' && action.range !== undefined && event.shiftKey) { clearMulti?.(); selectSelection(snapRangeSelection(store, extendSelection(selected, { r: action.range.r1, c: action.range.c1 }))); }
+  else if (action.type === 'move' && action.range !== undefined) {
+    clearMulti?.();
+    // Excel: a merged cell is one navigation stop — stepping in selects it whole, stepping out jumps past it.
+    const { dr, dc } = moveDirection(range, action.range);
+    selectRange(resolveArrowTarget(store, range, action.range, dr, dc));
+  }
   else if (action.type === 'moveEdge') {
     // Excel Ctrl+arrow: jump to the data-region edge; Shift extends the selection to it.
     const target = edgeJump(store, selected.active, action.dr ?? 0, action.dc ?? 0, TOTAL_ROWS, TOTAL_COLS);
@@ -688,6 +703,14 @@ function loadData(store: Store, cmd: CommandManager, formula: FormulaEngine, dat
 function loadSheets(store: Store, cmd: CommandManager, formula: FormulaEngine, sheets: readonly SheetInput[]): void { sheets.forEach((sheet, index) => { const id = index === 0 ? store.getActiveSheetId() : store.addSheet(sheet.name); store.renameSheet(id, sheet.name); store.activateSheet(id); loadValues(cmd, sheet.data ?? []); syncExistingFormulas(store, formula); }); const first = store.getSheets()[0]; if (first !== undefined) store.activateSheet(first.id); }
 function loadValues(cmd: CommandManager, data: readonly (readonly CellInput[])[]): void { const values = data.map((row) => row.map(normalizeCellInput)); const maxCols = values.reduce((max, row) => Math.max(max, row.length), 0); if (values.length === 0 || maxCols === 0) return; cmd.execute(new SetRangeValues({ r1: 0, c1: 0, r2: values.length - 1, c2: maxCols - 1, values })); }
 
+/** Excel: rows grow to fit a just-applied font size / wrap. Direct write — see growRowsToContent note in MenuBar. */
+function growRowsToContent(store: Store, range: RangeAddress): void {
+  for (const { r, height } of autofitRowHeights(store, range)) {
+    const meta = store.getRow(r);
+    store.setRow(r, { ...meta, height });
+  }
+}
+
 function menuBarProps(store: Store, cmdManager: CommandManager | undefined, selected: Selection | null, selectRange: (range: RangeAddress) => void, allRange: () => void, onClose: (() => void) | undefined): React.ComponentProps<typeof MenuBar> {
   const range = selected?.range ?? null;
   const activeCell = selected?.active ?? null;
@@ -827,7 +850,7 @@ const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly sto
         options={FONT_SIZES.map((value) => ({ value, label: String(value) }))}
         onChange={(value) => {
           style({ fontSize: value });
-          if (range !== undefined) autofitRowsForSelection(store, cmdManager, range);
+          if (range !== undefined) growRowsToContent(store, range);
         }}
       />
       <Tooltip title="加粗"><Button size="small" type={current?.bold === true ? 'primary' : 'default'} icon={<BoldOutlined />} aria-label="Bold" onClick={() => style({ bold: !(current?.bold === true) })} /></Tooltip>
@@ -863,6 +886,25 @@ const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly sto
       <Tooltip title="顶端对齐"><Button size="small" type={current?.valign === 'top' ? 'primary' : 'default'} icon={<VerticalAlignTopOutlined />} aria-label="Align top" onClick={() => style({ valign: 'top' })} /></Tooltip>
       <Tooltip title="垂直居中"><Button size="small" type={(current?.valign ?? 'middle') === 'middle' ? 'primary' : 'default'} icon={<VerticalAlignMiddleOutlined />} aria-label="Align middle" onClick={() => style({ valign: 'middle' })} /></Tooltip>
       <Tooltip title="底端对齐"><Button size="small" type={current?.valign === 'bottom' ? 'primary' : 'default'} icon={<VerticalAlignBottomOutlined />} aria-label="Align bottom" onClick={() => style({ valign: 'bottom' })} /></Tooltip>
+      <Divider type="vertical" />
+      <Dropdown.Button
+        size="small"
+        className="ss-merge-btn"
+        type={isSingleMergeSelection(store, range ?? { r1: 0, c1: 0, r2: 0, c2: 0 }) && range !== undefined ? 'primary' : 'default'}
+        icon={<DownOutlined />}
+        aria-label="合并单元格"
+        menu={{
+          items: [
+            { key: 'center', label: '合并后居中' },
+            { key: 'across', label: '跨越合并' },
+            { key: 'plain', label: '合并单元格' },
+            { key: 'unmerge', label: '取消合并' },
+          ],
+          onClick: ({ key }) => { if (range !== undefined) mergeSelection(store, cmdManager, range, key as 'center' | 'across' | 'plain' | 'unmerge'); },
+        }}
+        onClick={() => { if (range !== undefined) mergeSelection(store, cmdManager, range, 'center'); }}
+      ><MergeCellsOutlined /> 合并后居中</Dropdown.Button>
+      <Divider type="vertical" />
       <Tooltip title="自动换行">
         <Button
           size="small"
@@ -874,7 +916,7 @@ const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly sto
           onClick={() => {
             const next = !wrapping;
             style({ wrap: next });
-            if (next && range !== undefined) autofitRowsForSelection(store, cmdManager, range);
+            if (next && range !== undefined) growRowsToContent(store, range);
           }}
         >自动换行</Button>
       </Tooltip>

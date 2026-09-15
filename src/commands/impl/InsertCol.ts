@@ -1,6 +1,7 @@
 import { Command } from '../Command';
 import { TOTAL_COLS } from '../../renderer/CanvasRenderer';
 import { captureSheet, parseKey, restoreSheet, type SheetSnapshot } from './sheetSnapshot';
+import { replaceMerges, shiftMergesForInsert } from '../../util/merge';
 
 import type { Store } from '../../store/Store';
 
@@ -26,6 +27,7 @@ export class InsertColCommand extends Command<InsertColArgs> {
       store.setCol(c + count, store.getCol(c));
       store.setCol(c, undefined);
     }
+    replaceMerges(store, shiftMergesForInsert(store.getMerges(), start, count, 'col'));
   }
 
   public getUndo(): Command {

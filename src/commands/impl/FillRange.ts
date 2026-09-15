@@ -1,5 +1,6 @@
 import { Command } from '../Command';
 import { nextSeriesValues } from '../../fill/series';
+import { mergeToString, parseMerge, rangeContains, rangesIntersect } from '../../util/merge';
 import type { Store } from '../../store/Store';
 import type { RangeAddress } from '../../selection/Range';
 import type { Cell } from '../../types';
@@ -20,10 +21,12 @@ export interface FillRangeArgs {
 
 export class FillRangeCommand extends Command<FillRangeArgs> {
   private oldCells: Array<{ r: number; c: number; cell: ReturnType<Store['getCell']> }> = [];
+  private oldMerges: readonly string[] = [];
 
   public execute(store: Store): void {
     const { source, target } = this.args;
     this.saveOldCells(store, target);
+    this.oldMerges = store.getMerges().filter((m) => rangesIntersect(parseMerge(m), target));
     const ctrl = this.args.ctrlKey === true;
     const vertical = target.r2 > source.r2 || target.r1 < source.r1;
     if (vertical) {
@@ -31,10 +34,38 @@ export class FillRangeCommand extends Command<FillRangeArgs> {
     } else {
       for (let r = source.r1; r <= source.r2; r += 1) this.fillLine(store, source, target, r, false, ctrl);
     }
+    this.fillMerges(store, source, target);
   }
 
   public getUndo(): Command {
-    return new RestoreFillRange({ cells: this.oldCells });
+    return new RestoreFillRange({ cells: this.oldCells, merges: this.oldMerges, target: this.args.target });
+  }
+
+  /**
+   * Excel fill handle on merged cells: the source merge pattern tiles into
+   * the extended area. Mismatched existing merges stay untouched (the fill
+   * handle only creates the pattern it can replicate).
+   */
+  private fillMerges(store: Store, source: RangeAddress, target: RangeAddress): void {
+    const sourceMerges = store.getMerges().map(parseMerge).filter((m) => rangeContains(source, m));
+    if (sourceMerges.length === 0) return;
+    const srcRows = source.r2 - source.r1 + 1;
+    const srcCols = source.c2 - source.c1 + 1;
+    const rows = target.r2 - target.r1 + 1;
+    const cols = target.c2 - target.c1 + 1;
+    if (rows % srcRows !== 0 || cols % srcCols !== 0) return;
+    const existing = new Set(store.getMerges());
+    store.batch(() => {
+      for (let i = 0; i < rows; i += srcRows) {
+        for (let j = 0; j < cols; j += srcCols) {
+          if (i === 0 && j === 0) continue;
+          for (const m of sourceMerges) {
+            const name = mergeToString({ r1: target.r1 + i + (m.r1 - source.r1), c1: target.c1 + j + (m.c1 - source.c1), r2: target.r1 + i + (m.r2 - source.r1), c2: target.c1 + j + (m.c2 - source.c1) });
+            if (!existing.has(name)) store.addMerge(name);
+          }
+        }
+      }
+    });
   }
 
   private saveOldCells(store: Store, target: RangeAddress): void {
@@ -119,13 +150,20 @@ function rebuildCell(src: Cell, text: string): Cell {
 
 interface RestoreFillRangeArgs {
   readonly cells: ReadonlyArray<{ r: number; c: number; cell: ReturnType<Store['getCell']> }>;
+  readonly merges: readonly string[];
+  readonly target: RangeAddress;
 }
 
 class RestoreFillRange extends Command<RestoreFillRangeArgs> {
   public execute(store: Store): void {
-    for (const { r, c, cell } of this.args.cells) {
-      store.setCell(r, c, cell);
-    }
+    store.batch(() => {
+      // Remove merges created by the fill inside the target, restore prior ones.
+      store.getMerges().filter((m) => rangesIntersect(parseMerge(m), this.args.target)).forEach((m) => store.removeMerge(m));
+      this.args.merges.forEach((m) => { if (!store.getMerges().includes(m)) store.addMerge(m); });
+      for (const { r, c, cell } of this.args.cells) {
+        store.setCell(r, c, cell);
+      }
+    });
   }
 
   public getUndo(): Command {

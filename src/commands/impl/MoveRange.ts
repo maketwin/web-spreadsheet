@@ -1,4 +1,5 @@
 import { Command } from '../Command';
+import { mergeToString, parseMerge, rangeContains, rangesIntersect } from '../../util/merge';
 import type { Store } from '../../store/Store';
 import type { Cell } from '../../types';
 import type { RangeAddress } from '../../selection/Range';
@@ -15,6 +16,9 @@ type CellMatrix = readonly (readonly (Cell | undefined)[])[];
 export class MoveRange extends Command<MoveRangeArgs> {
   private sourceSnapshot: CellMatrix = [];
   private targetSnapshot: CellMatrix = [];
+  private sourceMerges: string[] = [];
+  private targetMerges: string[] = [];
+  private movedMerges: string[] = [];
 
   public execute(store: Store): void {
     const { source, target } = this.args;
@@ -46,6 +50,27 @@ export class MoveRange extends Command<MoveRangeArgs> {
         }
       }
     }
+
+    // Excel: merges fully inside the moved block travel with it.
+    this.sourceMerges = [];
+    this.targetMerges = store.getMerges().filter((m) => rangesIntersect(parseMerge(m), targetEnd));
+    const moved: string[] = [];
+    for (const m of store.getMerges()) {
+      const a = parseMerge(m);
+      if (rangeContains(source, a)) {
+        this.sourceMerges.push(m);
+        moved.push(mergeToString({ r1: a.r1 - source.r1 + target.r1, c1: a.c1 - source.c1 + target.c1, r2: a.r2 - source.r1 + target.r1, c2: a.c2 - source.c1 + target.c1 }));
+      }
+    }
+    this.movedMerges = moved;
+    store.batch(() => {
+      // Drop merges the block overwrites at the target; relocate source merges.
+      // The guard is checked after the removals so a copy onto its own merge
+      // (target overlaps source) re-adds it instead of losing it.
+      this.targetMerges.forEach((m) => store.removeMerge(m));
+      if (this.args.copy !== true) this.sourceMerges.forEach((m) => store.removeMerge(m));
+      moved.forEach((m) => { if (!store.getMerges().includes(m)) store.addMerge(m); });
+    });
   }
 
   public getUndo(): Command {
@@ -58,6 +83,9 @@ export class MoveRange extends Command<MoveRangeArgs> {
       },
       sourceSnapshot: this.sourceSnapshot,
       targetSnapshot: this.targetSnapshot,
+      sourceMerges: this.sourceMerges,
+      targetMerges: this.targetMerges,
+      movedMerges: this.movedMerges,
       copy: this.args.copy === true,
     });
   }
@@ -75,6 +103,9 @@ interface RestoreMoveRangeArgs {
   readonly sourceSnapshot: CellMatrix;
   readonly targetSnapshot: CellMatrix;
   readonly copy: boolean;
+  readonly sourceMerges: readonly string[];
+  readonly targetMerges: readonly string[];
+  readonly movedMerges: readonly string[];
 }
 
 class RestoreMoveRange extends Command<RestoreMoveRangeArgs> {
@@ -100,6 +131,12 @@ class RestoreMoveRange extends Command<RestoreMoveRangeArgs> {
         }
       }
     }
+
+    // Restore merge structure: drop relocated merges, bring back the prior ones.
+    store.batch(() => {
+      this.args.movedMerges.forEach((m) => { if (store.getMerges().includes(m)) store.removeMerge(m); });
+      [...this.args.sourceMerges, ...this.args.targetMerges].forEach((m) => { if (!store.getMerges().includes(m)) store.addMerge(m); });
+    });
   }
 
   public getUndo(): Command {

@@ -1,6 +1,7 @@
 import { Command } from '../Command';
 import { TOTAL_ROWS } from '../../renderer/CanvasRenderer';
 import { captureSheet, parseKey, restoreSheet, type SheetSnapshot } from './sheetSnapshot';
+import { replaceMerges, shiftMergesForInsert } from '../../util/merge';
 
 import type { Store } from '../../store/Store';
 
@@ -26,6 +27,7 @@ export class InsertRowCommand extends Command<InsertRowArgs> {
       store.setRow(r + count, store.getRow(r));
       store.setRow(r, undefined);
     }
+    replaceMerges(store, shiftMergesForInsert(store.getMerges(), start, count, 'row'));
   }
 
   public getUndo(): Command {

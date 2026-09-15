@@ -1,8 +1,8 @@
 import { COL_WIDTH, ROW_HEIGHT, TOTAL_COLS } from '../renderer/coordinate';
+import { Command } from '../commands/Command';
 import type { Store } from '../store/Store';
 import type { RangeAddress } from '../selection/Range';
-import type { CommandManager } from '../commands/CommandManager';
-import { SetRowHeight } from '../commands/impl/SetRowHeight';
+import type { RowMeta } from '../types';
 import { excelRowHeightPx, wrapTextLinesCanvas } from './wrapText';
 
 function clampVal(v: number, min: number, max: number): number {
@@ -55,11 +55,13 @@ export function autoFitRowHeight(store: Store, r: number): number {
 /**
  * Excel: after changing font size / wrap on a selection, row height follows the
  * largest required height for cells in that selection (empty cells still count
- * via the applied font size).
+ * via the applied font size). Pure measurement — the style command that
+ * triggers the autofit folds these into its single undo unit.
  */
-export function autofitRowsForSelection(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress): void {
+export function autofitRowHeights(store: Store, range: RangeAddress): readonly { readonly r: number; readonly height: number }[] {
   const canvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
   const ctx = canvas?.getContext('2d') ?? null;
+  const out: Array<{ readonly r: number; readonly height: number }> = [];
   for (let r = range.r1; r <= range.r2; r += 1) {
     let maxH = ROW_HEIGHT;
     for (let c = range.c1; c <= range.c2; c += 1) {
@@ -74,14 +76,40 @@ export function autofitRowsForSelection(store: Store, cmdManager: CommandManager
       if (!hasText) continue;
       maxH = Math.max(maxH, excelRowHeightPx(fontSize, lineCount));
     }
-    const height = clampVal(maxH, 15, 500);
-    const cmd = new SetRowHeight({ r, height });
-    if (cmdManager !== undefined) cmdManager.execute(cmd);
-    else cmd.execute(store);
+    out.push({ r, height: clampVal(maxH, 15, 500) });
+  }
+  return out;
+}
+
+/**
+ * Excel: a font size / wrap change is one undo step that includes the
+ * row-height adjustment it triggers. Measured lazily at execute time so it
+ * sees the style the companion SetRangeStyleCommand just applied.
+ */
+export class AutoRowHeightsCommand extends Command<RangeAddress> {
+  private before: readonly (readonly [number, RowMeta | undefined])[] = [];
+
+  public execute(sheet: Store): void {
+    const before: Array<readonly [number, RowMeta | undefined]> = [];
+    for (const { r, height } of autofitRowHeights(sheet, this.args)) {
+      const meta = sheet.getRow(r);
+      before.push([r, meta]);
+      sheet.setRow(r, { ...meta, height });
+    }
+    this.before = before;
+  }
+
+  public getUndo(): Command {
+    return new RestoreRowHeights(this.before);
   }
 }
 
-/** @deprecated use autofitRowsForSelection */
-export function autofitRowsForWrap(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress): void {
-  autofitRowsForSelection(store, cmdManager, range);
+class RestoreRowHeights extends Command<readonly (readonly [number, RowMeta | undefined])[]> {
+  public execute(sheet: Store): void {
+    for (const [r, meta] of this.args) sheet.setRow(r, meta);
+  }
+
+  public getUndo(): Command {
+    return this;
+  }
 }

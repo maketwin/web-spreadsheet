@@ -1,4 +1,4 @@
-import { Button, Checkbox, Input, Radio, Select } from 'antd';
+import { Button, Checkbox, Input, Radio, Select, message } from 'antd';
 import { useEffect, useMemo, useState, type FC } from 'react';
 import { createPortal } from 'react-dom';
 import { FilterService, type FilterItem } from '../filter/FilterService';
@@ -6,6 +6,8 @@ import { SetAutoFilterCriteriaCommand } from '../commands/impl/SetAutoFilterCrit
 import { SortRangeCommand } from '../commands/impl/SortRange';
 import type { Command } from '../commands/Command';
 import type { Store } from '../store/Store';
+import { CompositeCommand } from '../util/rangeValues';
+import { mergesIntersecting } from '../util/merge';
 import type { FilterCondition, FilterConditionOperator } from '../types';
 
 const BLANK = '(空白)';
@@ -113,10 +115,12 @@ export const FilterDropdown: FC<FilterDropdownProps> = ({ store, cmdManagerExecu
 
   const confirmChecklist = (): void => {
     const allSelected = items.length > 0 && items.every((item) => checked.has(keyOf(item)));
+    // Excel: re-applying a filter (clear + set) is one undo step.
+    const parts: Command[] = [];
     if (allSelected) {
-      if (hasCriteria) run(new SetAutoFilterCriteriaCommand({ column: c, mode: 'clearColumn' }));
+      if (hasCriteria) parts.push(new SetAutoFilterCriteriaCommand({ column: c, mode: 'clearColumn' }));
     } else {
-      run(new SetAutoFilterCriteriaCommand({
+      parts.push(new SetAutoFilterCriteriaCommand({
         column: c,
         mode: 'set',
         criteria: {
@@ -125,6 +129,7 @@ export const FilterDropdown: FC<FilterDropdownProps> = ({ store, cmdManagerExecu
         },
       }));
     }
+    if (parts.length > 0) run(new CompositeCommand(parts));
     onClose();
   };
 
@@ -132,16 +137,19 @@ export const FilterDropdown: FC<FilterDropdownProps> = ({ store, cmdManagerExecu
     const conditions: FilterCondition[] = [];
     if (cond1.value !== '') conditions.push(cond1);
     if (cond2 !== undefined && cond2.value !== '') conditions.push(cond2);
+    // Excel: re-applying filter conditions (clear + set) is one undo step.
+    const parts: Command[] = [];
     if (conditions.length === 0) {
-      if (hasCriteria) run(new SetAutoFilterCriteriaCommand({ column: c, mode: 'clearColumn' }));
+      if (hasCriteria) parts.push(new SetAutoFilterCriteriaCommand({ column: c, mode: 'clearColumn' }));
     } else {
-      run(new SetAutoFilterCriteriaCommand({
+      parts.push(new SetAutoFilterCriteriaCommand({
         column: c,
         mode: 'set',
         // Custom conditions replace the checklist, like Excel.
         criteria: { selected: [], includeBlanks: false, conditions, conditionsOp: condOp },
       }));
     }
+    if (parts.length > 0) run(new CompositeCommand(parts));
     onClose();
   };
 
@@ -151,6 +159,8 @@ export const FilterDropdown: FC<FilterDropdownProps> = ({ store, cmdManagerExecu
   };
 
   const sort = (direction: 'asc' | 'desc'): void => {
+    // Excel: sorting a range containing merged cells is refused.
+    if (mergesIntersecting(store, dataRange).length > 0) { message.error('此操作要求合并单元格都具有相同大小'); onClose(); return; }
     run(new SortRangeCommand({ ...dataRange, sortCol: c, direction }));
     onClose();
   };

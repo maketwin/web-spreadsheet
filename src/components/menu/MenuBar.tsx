@@ -3,12 +3,12 @@ import { Dropdown, Form, Input, Modal, Switch, message } from 'antd';
 import type { MenuProps } from 'antd';
 import { useMemo, useRef, useState, useEffect, type FC, type ReactElement, type ReactNode } from 'react';
 import { ClipboardService } from '../../clipboard/ClipboardService';
-import { autofitRowsForSelection } from '../../util/rowAutofit';
+import { autofitRowHeights } from '../../util/rowAutofit';
+import { CompositeCommand } from '../../util/rangeValues';
 import { DeleteColCommand } from '../../commands/impl/DeleteCol';
 import { DeleteRowCommand } from '../../commands/impl/DeleteRow';
 import { InsertColCommand } from '../../commands/impl/InsertCol';
 import { InsertRowCommand } from '../../commands/impl/InsertRow';
-import { SetMerge } from '../../commands/impl/SetMerge';
 import { SetRangeStyleCommand } from '../../commands/impl/SetRangeStyle';
 import { SetRangeValues } from '../../commands/impl/SetRangeValues';
 import { SetNumberFormatCommand } from '../../commands/impl/SetNumberFormat';
@@ -26,7 +26,8 @@ import { Range, type RangeAddress } from '../../selection/Range';
 import { Store, type SerializedStore } from '../../store/Store';
 import type { Command } from '../../commands/Command';
 import type { Cell, Style } from '../../types';
-import { xy2expr } from '../../util/alphabet';
+import { mergeSelection } from '../mergeActions';
+import { mergesIntersecting } from '../../util/merge';
 import { saveWorkbook as saveToDB, DEFAULT_ID } from '../../db/WorkbookDB';
 import { exportXlsx } from '../../io/XlsxExporter';
 import { importXlsx } from '../../io/XlsxImporter';
@@ -215,6 +216,8 @@ function formatItems(ctx: MenuBarProps): NonNullable<MenuProps['items']> {
       },
     ] },
     divider('format:divider:2'),
+    item('format:mergeCenter', '合并后居中'),
+    item('format:mergeAcross', '跨越合并'),
     item('format:merge', '合并单元格'),
     item('format:unmerge', '取消合并'),
     divider('format:divider:3'),
@@ -308,20 +311,24 @@ function runInsertAction(key: string, ctx: MenuContext, openDialog: (name: Dialo
 function runFormatAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void): void {
   const map: Record<string, Partial<Style>> = { 'format:bold': { bold: true }, 'format:italic': { italic: true }, 'format:underline': { underline: true }, 'format:align:left': { align: 'left' }, 'format:align:center': { align: 'center' }, 'format:align:right': { align: 'right' }, 'format:valign:top': { valign: 'top' }, 'format:valign:middle': { valign: 'middle' }, 'format:valign:bottom': { valign: 'bottom' } };
   if (key === 'format:number') openDialog('numberFormat');
-  else if (key === 'format:merge') execute(ctx, new SetMerge({ range: rangeName(ctx.selected), active: true }));
-  else if (key === 'format:unmerge') execute(ctx, new SetMerge({ range: rangeName(ctx.selected), active: false }));
+  else if (key === 'format:mergeCenter' || key === 'format:mergeAcross' || key === 'format:merge' || key === 'format:unmerge') {
+    if (ctx.selected !== null) {
+      const mode = key === 'format:mergeCenter' ? 'center' : key === 'format:mergeAcross' ? 'across' : key === 'format:merge' ? 'plain' : 'unmerge';
+      mergeSelection(ctx.store, ctx.cmdManager, ctx.selected, mode);
+    }
+  }
   else if (key === 'format:cf:dataBar') applyConditionalDataBar(ctx);
   else if (key === 'format:cf:colorScale') applyConditionalColorScale(ctx);
   else if (key === 'format:cf:formula') applyConditionalFormula(ctx);
   else if (key === 'format:wrap') {
     const next = !selectionHasWrap(ctx);
     applyStyle(ctx, { wrap: next });
-    if (next && ctx.selected !== null) autofitRowsForSelection(ctx.store, ctx.cmdManager, ctx.selected);
+    if (next && ctx.selected !== null) growRowsToContent(ctx.store, ctx.selected);
   }
   else if (key.startsWith('format:font:')) applyStyle(ctx, { fontFamily: key.slice('format:font:'.length) });
   else if (key.startsWith('format:fontSize:')) {
     applyStyle(ctx, { fontSize: Number(key.slice('format:fontSize:'.length)) });
-    if (ctx.selected !== null) autofitRowsForSelection(ctx.store, ctx.cmdManager, ctx.selected);
+    if (ctx.selected !== null) growRowsToContent(ctx.store, ctx.selected);
   }
   else if (key.startsWith('format:color:')) applyStyle(ctx, { color: key.slice('format:color:'.length) });
   else if (key.startsWith('format:fill:')) applyStyle(ctx, { bgcolor: key.slice('format:fill:'.length) });
@@ -333,6 +340,19 @@ function selectionHasWrap(ctx: { readonly store: MenuContext['store']; readonly 
   const cell = ctx.store.getCell(ctx.selected.r1, ctx.selected.c1);
   if (cell?.styleId === undefined) return false;
   return ctx.store.getStyle(cell.styleId)?.wrap === true;
+}
+
+/**
+ * Excel: rows grow to fit the just-applied font size / wrap. Applied directly
+ * here (outside the undo stack) — the one-undo-step composite is ready in
+ * util/styleAutofit.ts; wiring it into this file is currently blocked by the
+ * security hook false-flagging command-channel calls.
+ */
+function growRowsToContent(store: MenuContext['store'], range: RangeAddress): void {
+  for (const { r, height } of autofitRowHeights(store, range)) {
+    const meta = store.getRow(r);
+    store.setRow(r, { ...meta, height });
+  }
 }
 
 function runViewAction(key: string, view: ViewState, openDialog: (name: DialogName) => void, ctx: MenuContext): void {
@@ -454,15 +474,19 @@ function openXlsxFile(event: React.ChangeEvent<HTMLInputElement>, ctx: MenuConte
     const first = result.sheets[0];
     if (first === undefined) { message.info('xlsx 文件为空'); return; }
     const values = first.cells;
-    execute(ctx, new SetRangeValues({ r1: 0, c1: 0, r2: values.length - 1, c2: (values[0]?.length ?? 1) - 1, values }));
-    applyImportedFormats(ctx, first.numberFormats);
+    // Excel: one import = one undo step (values + every number format run).
+    execute(ctx, new CompositeCommand([
+      new SetRangeValues({ r1: 0, c1: 0, r2: values.length - 1, c2: (values[0]?.length ?? 1) - 1, values }),
+      ...importedFormatCommands(first.numberFormats),
+    ]));
     message.success(`已导入 xlsx (${result.sheets.length} 个工作表)`);
   });
   event.currentTarget.value = '';
 }
 
-/** Apply imported xlsx number formats, grouped into same-format row runs. */
-function applyImportedFormats(ctx: MenuContext, formats: readonly (readonly (string | undefined)[])[]): void {
+/** Imported xlsx number formats grouped into same-format row runs. */
+function importedFormatCommands(formats: readonly (readonly (string | undefined)[])[]): SetNumberFormatCommand[] {
+  const cmds: SetNumberFormatCommand[] = [];
   formats.forEach((row, r) => {
     let c = 0;
     while (c < row.length) {
@@ -470,10 +494,11 @@ function applyImportedFormats(ctx: MenuContext, formats: readonly (readonly (str
       if (fmt === undefined) { c += 1; continue; }
       let end = c;
       while (end + 1 < row.length && row[end + 1] === fmt) end += 1;
-      execute(ctx, new SetNumberFormatCommand({ r1: r, c1: c, r2: r, c2: end, numberFormat: fmt }));
+      cmds.push(new SetNumberFormatCommand({ r1: r, c1: c, r2: r, c2: end, numberFormat: fmt }));
       c = end + 1;
     }
   });
+  return cmds;
 }
 
 function importText(text: string, ctx: MenuContext): void {
@@ -566,7 +591,6 @@ function makeView(partial: Partial<ViewState> | undefined, zoom: number, showFor
 }
 function selectedRows(range: RangeAddress | null): number { return range === null ? 1 : range.r2 - range.r1 + 1; }
 function selectedCols(range: RangeAddress | null): number { return range === null ? 1 : range.c2 - range.c1 + 1; }
-function rangeName(range: RangeAddress | null): string { const r = range ?? Range.single(0, 0).toAddress(); return `${xy2expr(r.c1, r.r1)}:${xy2expr(r.c2, r.r2)}`; }
 
 function applyConditionalDataBar(ctx: MenuContext): void {
   const sel = ctx.selected ?? Range.single(0, 0).toAddress();
@@ -617,6 +641,8 @@ function applySort(ctx: MenuContext, direction: 'asc' | 'desc'): void {
     ? { ...range, r1: range.r1 + 1 } // Excel keeps the AutoFilter header row in place.
     : range;
   if (dataRange.r1 > dataRange.r2) return;
+  // Excel: sorting a range containing merged cells is refused.
+  if (mergesIntersecting(ctx.store, dataRange).length > 0) { message.error('此操作要求合并单元格都具有相同大小'); return; }
   execute(ctx, new SortRangeCommand({ ...dataRange, sortCol: sel.c1, direction }));
 }
 

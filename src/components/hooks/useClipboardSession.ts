@@ -2,8 +2,11 @@ import { useCallback, useRef, useState, type MutableRefObject, type RefObject } 
 import { message } from 'antd';
 import { ClipboardService } from '../../clipboard/ClipboardService';
 import { buildPasteSpecialMatrix, type PasteSpecialOptions } from '../../clipboard/pasteSpecial';
-import { buildSessionPasteValues, combineMultiRanges, pasteFromClipboard, snapshotCells, type ClipboardSessionState } from '../../clipboard/session';
-import { applyMatrix, clearRange } from '../../util/rangeValues';
+import { buildSessionPasteValues, combineMultiRanges, mergePasteErrorMessage, pasteFromClipboard, planMergePaste, snapshotCells, snapshotMerges, type ClipboardSessionState } from '../../clipboard/session';
+import { CompositeCommand, clearRange, clearRangeCmd } from '../../util/rangeValues';
+import { SetRangeValues } from '../../commands/impl/SetRangeValues';
+import { ApplyMergeChanges } from '../../commands/impl/SetMerge';
+import { mergeToString } from '../../util/merge';
 import type { CommandManager } from '../../commands/CommandManager';
 import type { CanvasRenderer } from '../../renderer/CanvasRenderer';
 import type { RangeAddress } from '../../selection/Range';
@@ -43,24 +46,44 @@ export function useClipboardSession(store: Store, cmdManager: CommandManager | u
       ? session
       : { type: 'copy' as const, range: { r1: 0, c1: 0, r2: 0, c2: 0 }, cells: await ClipboardService.read() };
     if (source.cells.length === 0) return;
-    applyMatrix(store, cmdManager, target.r1, target.c1, buildPasteSpecialMatrix(store, source, target.r1, target.c1, target, opts));
+    const values = buildPasteSpecialMatrix(store, source, target.r1, target.c1, target, opts);
+    // Excel: paste-special (and the source clear of a cut) is one undo step.
+    const pasteCmd = new SetRangeValues({ r1: target.r1, c1: target.c1, r2: target.r1 + values.length - 1, c2: target.c1 + (values[0]?.length ?? 1) - 1, values });
+    const clearCmd = session !== null && session.type === 'cut' && opts.mode !== 'formats' && opts.operation === 'none' && !opts.transpose ? clearRangeCmd(session.range) : undefined;
+    const op = clearCmd === undefined ? pasteCmd : new CompositeCommand([pasteCmd, clearCmd]);
+    if (cmdManager === undefined) op.execute(store); else cmdManager.execute(op);
     // Excel: a cut session ends on the first paste; the source clears when content moved.
-    if (session !== null && session.type === 'cut') {
-      if (opts.mode !== 'formats' && opts.operation === 'none' && !opts.transpose) clearRange(store, cmdManager, session.range);
-      clearClipboardSession();
-    }
+    if (session !== null && session.type === 'cut') clearClipboardSession();
   }, [store, cmdManager, selectedRef, clearClipboardSession]);
   const runClipboard = useCallback(async (type: 'cut' | 'copy' | 'paste', range: RangeAddress) => {
     if (type === 'paste') {
       const session = clipboardSession.current;
       if (session !== null) {
+        // Excel: pasting over mismatched merged cells is refused.
+        const plan = planMergePaste(store, session.merges ?? [], session.range, range.r1, range.c1, range);
+        if (!plan.ok) { message.error(mergePasteErrorMessage(plan.error)); return; }
         // Excel in-app paste: formulas ride along (copy shifts relative refs to
-        // the target, cut moves them verbatim) and cell styles are preserved.
-        applyMatrix(store, cmdManager, range.r1, range.c1, buildSessionPasteValues(session, range.r1, range.c1, range));
-        if (session.type === 'cut') { clearRange(store, cmdManager, session.range); clearClipboardSession(); }
+        // the target, cut moves them verbatim), styles and merges are preserved.
+        // plan.rect is the merge-validated paste rectangle (anchor-only when a
+        // single plain cell lands inside a merged cell).
+        const values = buildSessionPasteValues(session, plan.rect.r1, plan.rect.c1, plan.rect);
+        const parts: Array<InstanceType<typeof SetRangeValues> | InstanceType<typeof ApplyMergeChanges> | ReturnType<typeof clearRangeCmd>> = [
+          new SetRangeValues({ r1: plan.rect.r1, c1: plan.rect.c1, r2: plan.rect.r2, c2: plan.rect.c2, values }),
+          new ApplyMergeChanges({ add: plan.add, remove: [] }),
+        ];
+        if (session.type === 'cut') {
+          // Cut = move (Excel): the source block and its merges move to the target.
+          parts.push(clearRangeCmd(session.range));
+          const moved = new Set(plan.add);
+          parts.push(new ApplyMergeChanges({ add: [], remove: (session.merges ?? []).map(mergeToString).filter((m) => !moved.has(m)) }));
+        }
+        const op = new CompositeCommand(parts);
+        if (cmdManager === undefined) op.execute(store); else cmdManager.execute(op);
+        if (session.type === 'cut') clearClipboardSession();
         return;
       }
-      await pasteFromClipboard(store, cmdManager, range);
+      const plan = await pasteFromClipboard(store, cmdManager, range);
+      if (!plan.ok) message.error(mergePasteErrorMessage(plan.error));
       return;
     }
     const extras = multiRef.current ?? [];
@@ -76,7 +99,7 @@ export function useClipboardSession(store: Store, cmdManager: CommandManager | u
     const payload = ClipboardService.createPayload(store, range);
     if (payload === null) return;
     await ClipboardService.copy(store, range);
-    clipboardSession.current = { type, range, text: payload.text, cells: snapshotCells(store, range) };
+    clipboardSession.current = { type, range, text: payload.text, cells: snapshotCells(store, range), merges: snapshotMerges(store, range) };
     rendererRef.current?.setClipboardRange(range);
   }, [store, cmdManager, rendererRef, multiRef, clearClipboardSession]);
   const runCtxClipboard = useCallback((type: 'cut' | 'copy' | 'paste' | 'clear') => {

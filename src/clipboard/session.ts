@@ -4,10 +4,75 @@ import type { Cell } from '../types';
 import { shiftFormula } from '../commands/impl/FillRange';
 import type { CellPatch } from '../commands/impl/SetRangeValues';
 import { ClipboardService } from './ClipboardService';
+import { mergeToString, parseMerge, rangesIntersect, sameRange } from '../util/merge';
 import { applyMatrix } from '../util/rangeValues';
 import type { CommandManager } from '../commands/CommandManager';
 
-export interface ClipboardSessionState { readonly type: 'cut' | 'copy'; readonly range: RangeAddress; readonly text: string; readonly cells: ReadonlyArray<ReadonlyArray<Cell | undefined>> }
+export interface ClipboardSessionState { readonly type: 'cut' | 'copy'; readonly range: RangeAddress; readonly text: string; readonly cells: ReadonlyArray<ReadonlyArray<Cell | undefined>>; readonly merges?: readonly RangeAddress[] }
+
+/** Merges fully inside the copied range ride along on paste (Excel replicates the merge structure). */
+export function snapshotMerges(store: Store, range: RangeAddress): readonly RangeAddress[] {
+  const out: RangeAddress[] = [];
+  for (const m of store.getMerges()) {
+    const a = parseMerge(m);
+    if (a.r1 >= range.r1 && a.c1 >= range.c1 && a.r2 <= range.r2 && a.c2 <= range.c2) out.push(a);
+  }
+  return out;
+}
+
+export type MergePasteError = 'size-mismatch' | 'plain-over-merged';
+
+export interface MergePastePlan {
+  readonly ok: boolean;
+  readonly rect: RangeAddress;
+  readonly add: readonly string[];
+  readonly error?: MergePasteError;
+}
+
+/** Excel's two merge-paste refusal messages, keyed by cause. */
+export function mergePasteErrorMessage(error: MergePasteError | undefined): string {
+  return error === 'plain-over-merged' ? '不能对合并单元格执行此操作' : '此操作要求合并单元格都具有相同大小';
+}
+
+/**
+ * Excel paste validation: every merge intersecting the paste rectangle must
+ * exactly match a merge the paste would create — otherwise Excel refuses with
+ * 「此操作要求合并单元格都具有相同大小」 (or 「不能对合并单元格执行此操作」
+ * when the clipboard itself carries no merges). Source merges are replicated
+ * per tile (exact-multiple targets tile the whole clipboard block).
+ */
+export function planMergePaste(store: Store, sourceMerges: readonly RangeAddress[], sourceRange: RangeAddress, r: number, c: number, target?: RangeAddress): MergePastePlan {
+  const srcRows = sourceRange.r2 - sourceRange.r1 + 1;
+  const srcCols = sourceRange.c2 - sourceRange.c1 + 1;
+  const [rows, cols] = tiledDims(srcRows, srcCols, target);
+  const rect: RangeAddress = { r1: r, c1: c, r2: r + rows - 1, c2: c + cols - 1 };
+  // Excel: pasting a single plain cell into a merged cell keeps the merge — a
+  // merged cell is one cell, so the value lands in its anchor only.
+  if (sourceMerges.length === 0 && srcRows === 1 && srcCols === 1) {
+    const merge = store.getMergeAt(r, c);
+    if (merge !== undefined) {
+      const addr = parseMerge(merge);
+      if (sameRange(addr, rect)) return { ok: true, rect: { r1: addr.r1, c1: addr.c1, r2: addr.r1, c2: addr.c1 }, add: [] };
+    }
+  }
+  const error: MergePasteError = sourceMerges.length === 0 ? 'plain-over-merged' : 'size-mismatch';
+  const desired: RangeAddress[] = [];
+  for (let i = 0; i < rows; i += srcRows) {
+    for (let j = 0; j < cols; j += srcCols) {
+      for (const m of sourceMerges) {
+        desired.push({ r1: r + i + (m.r1 - sourceRange.r1), c1: c + j + (m.c1 - sourceRange.c1), r2: r + i + (m.r2 - sourceRange.r1), c2: c + j + (m.c2 - sourceRange.c1) });
+      }
+    }
+  }
+  for (const m of store.getMerges()) {
+    const a = parseMerge(m);
+    if (!rangesIntersect(a, rect)) continue;
+    if (!desired.some((d) => sameRange(d, a))) return { ok: false, rect, add: [], error };
+  }
+  const existing = new Set(store.getMerges());
+  const add = desired.map(mergeToString).filter((name) => !existing.has(name));
+  return { ok: true, rect, add };
+}
 
 /** Deep-enough snapshot of the source block so the paste is value/style/formula-faithful. */
 export function snapshotCells(store: Store, range: RangeAddress): ReadonlyArray<ReadonlyArray<Cell | undefined>> {
@@ -111,4 +176,13 @@ export function combineMultiRanges(store: Store, ranges: readonly RangeAddress[]
   return { range: union, cells: cellRows, text };
 }
 
-export async function pasteFromClipboard(store: Store, cmdManager: CommandManager | undefined, target: RangeAddress): Promise<void> { const cells = await ClipboardService.read(); applyMatrix(store, cmdManager, target.r1, target.c1, tilePlainCells(cells, target)); }
+export async function pasteFromClipboard(store: Store, cmdManager: CommandManager | undefined, target: RangeAddress): Promise<MergePastePlan> {
+  const cells = await ClipboardService.read();
+  if (cells.length === 0) return { ok: true, rect: target, add: [] };
+  // Plain clipboard data carries no merges; Excel still refuses pasting it over merged cells.
+  const sourceRange: RangeAddress = { r1: 0, c1: 0, r2: cells.length - 1, c2: (cells[0]?.length ?? 1) - 1 };
+  const plan = planMergePaste(store, [], sourceRange, target.r1, target.c1, target);
+  if (!plan.ok) return plan;
+  applyMatrix(store, cmdManager, plan.rect.r1, plan.rect.c1, tilePlainCells(cells, plan.rect));
+  return plan;
+}
