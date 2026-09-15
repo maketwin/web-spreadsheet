@@ -2,6 +2,7 @@ import { Button, Checkbox, Form, Input, Modal, Space, message } from 'antd';
 import type { FC } from 'react';
 import type { FindReplaceService, FindMatch, FindResult } from '../../../find/FindReplaceService';
 import type { Store } from '../../../store/Store';
+import type { CommandManager } from '../../../commands/CommandManager';
 import type { RangeAddress } from '../../../selection/Range';
 import type { CellAddress } from '../../../renderer/coordinate';
 
@@ -10,6 +11,7 @@ export interface FindReplaceDialogProps {
   readonly replaceMode?: boolean;
   readonly onCancel: () => void;
   readonly store: Store;
+  readonly cmdManager?: CommandManager | undefined;
   readonly selected: RangeAddress | null;
   readonly service: FindReplaceService;
   readonly onNavigate: (cell: CellAddress) => void;
@@ -25,7 +27,7 @@ interface DialogState {
 
 import { useState, useCallback } from 'react';
 
-export const FindReplaceDialog: FC<FindReplaceDialogProps> = ({ open, replaceMode = false, onCancel, store, selected, service, onNavigate, onHighlight }) => {
+export const FindReplaceDialog: FC<FindReplaceDialogProps> = ({ open, replaceMode = false, onCancel, store, cmdManager, selected, service, onNavigate, onHighlight }) => {
   const [form] = Form.useForm<FormValues>();
   const [state, setState] = useState<DialogState>({ result: null, searching: false });
 
@@ -52,21 +54,21 @@ export const FindReplaceDialog: FC<FindReplaceDialogProps> = ({ open, replaceMod
     const findText = form.getFieldValue('find') as string;
     const replaceText = form.getFieldValue('replace') as string;
     const caseSensitive = form.getFieldValue('caseSensitive') as boolean;
-    const result = service.replaceCurrent(store, { findText, replaceText, caseSensitive });
+    const result = service.replaceCurrent(store, { findText, replaceText, caseSensitive }, cmdManager);
     setState({ result, searching: true });
     if (result.currentCell !== null) onNavigate(result.currentCell);
     message.success('已替换');
-  }, [form, service, store, onNavigate]);
+  }, [form, service, store, cmdManager, onNavigate]);
 
   const doReplaceAll = useCallback((): void => {
     const findText = form.getFieldValue('find') as string;
     const replaceText = form.getFieldValue('replace') as string;
     const caseSensitive = form.getFieldValue('caseSensitive') as boolean;
-    const count = service.replaceAll(store, { findText, replaceText, caseSensitive });
+    const count = service.replaceAll(store, { findText, replaceText, caseSensitive }, cmdManager);
     setState({ result: null, searching: false });
     onHighlight([]);
     message.success(`已替换 ${count} 处`);
-  }, [form, service, store, onHighlight]);
+  }, [form, service, store, cmdManager, onHighlight]);
 
   const label = state.result !== null && state.result.matches.length > 0
     ? `${(state.result.current + 1)} / ${state.result.matches.length}`

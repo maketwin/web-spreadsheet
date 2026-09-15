@@ -495,7 +495,7 @@ function importText(text: string, ctx: MenuContext): void {
 function Dialogs({ dialog, setDialog, props, view, findService: svc }: { readonly dialog: DialogName | null; readonly setDialog: (name: DialogName | null) => void; readonly props: MenuBarProps; readonly view: ViewState; readonly findService: FindReplaceService }): ReactElement {
   const close = (): void => setDialog(null);
   return <>
-    <FindReplaceDialog open={dialog === 'find' || dialog === 'replace'} replaceMode={dialog === 'replace'} onCancel={close} store={props.store} selected={props.selected} service={svc} onNavigate={(cell) => props.onFindNavigate?.(cell)} onHighlight={(cells) => props.onFindHighlight?.(cells)} />
+    <FindReplaceDialog open={dialog === 'find' || dialog === 'replace'} replaceMode={dialog === 'replace'} onCancel={close} store={props.store} cmdManager={props.cmdManager} selected={props.selected} service={svc} onNavigate={(cell) => props.onFindNavigate?.(cell)} onHighlight={(cells) => props.onFindHighlight?.(cells)} />
     <InsertRowDialog open={dialog === 'insertRow'} onCancel={close} onSubmit={(v) => submitRow(v, props, close)} />
     <InsertColDialog open={dialog === 'insertCol'} onCancel={close} onSubmit={(v) => submitCol(v, props, close)} />
     <ZoomDialog open={dialog === 'zoom'} zoom={view.zoom} onCancel={close} onSubmit={(v) => submitZoom(v, view, close)} />
