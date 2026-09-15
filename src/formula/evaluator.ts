@@ -81,15 +81,22 @@ function evaluateBinary(node: Extract<AstNode, { type: 'binary' }>, resolve: Cel
   const left = scalar(evaluate(node.left, resolve, resolveName));
   const right = scalar(evaluate(node.right, resolve, resolveName));
 
+  // Excel error values ('#DIV/0!', '#N/A', …) propagate through arithmetic.
+  const leftError = errorValueOf(left);
+  if (leftError !== undefined) return leftError;
+  const rightError = errorValueOf(right);
+  if (rightError !== undefined) return rightError;
+
   switch (node.op) {
     case '+':
-      return Number(left) + Number(right);
+      return finiteOrError(Number(left) + Number(right));
     case '-':
-      return Number(left) - Number(right);
+      return finiteOrError(Number(left) - Number(right));
     case '*':
-      return Number(left) * Number(right);
+      return finiteOrError(Number(left) * Number(right));
     case '/':
-      return Number(left) / Number(right);
+      if (Number(right) === 0) return '#DIV/0!';
+      return finiteOrError(Number(left) / Number(right));
     case '&':
       return `${textOf(left)}${textOf(right)}`;
     case '>':
@@ -115,6 +122,21 @@ function compare(a: FormulaValue, b: FormulaValue): number {
   const bn = numericOr(b);
   if (an !== undefined && bn !== undefined) return an - bn;
   return textOf(a).toLowerCase().localeCompare(textOf(b).toLowerCase());
+}
+
+/** The seven Excel error literals; plain text like "#tag" must NOT be treated as an error. */
+const EXCEL_ERRORS: ReadonlySet<string> = new Set(['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A']);
+
+/** A cell/formula value that is itself an Excel error literal ('#DIV/0!', '#N/A', …). */
+function errorValueOf(v: FormulaValue): string | undefined {
+  return typeof v === 'string' && EXCEL_ERRORS.has(v) ? v : undefined;
+}
+
+/** Map JS arithmetic accidents to Excel error values: NaN → #VALUE!, ±Infinity → #NUM!. */
+function finiteOrError(n: number): FormulaValue {
+  if (Number.isNaN(n)) return '#VALUE!';
+  if (!Number.isFinite(n)) return '#NUM!';
+  return n;
 }
 
 /** Excel `=`: numbers compare numerically; text compares case-insensitively. */

@@ -39,3 +39,29 @@ describe('evaluate', () => {
     expect(evaluate(node, emptyResolver)).toBe(5);
   });
 });
+
+describe('Excel error propagation', () => {
+  const cellValue = (v: unknown): CellResolver => () => v as never;
+  const add = (resolve: CellResolver): unknown =>
+    evaluate({ type: 'binary', op: '+', left: { type: 'cell', x: 0, y: 0 }, right: { type: 'number', value: 1 } }, resolve);
+
+  it('propagates real Excel error literals through arithmetic', () => {
+    for (const err of ['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A']) {
+      expect(add(cellValue(err))).toBe(err);
+    }
+  });
+
+  it('does not treat plain #-prefixed text as an error', () => {
+    expect(add(cellValue('#tag'))).toBe('#VALUE!');
+    expect(add(cellValue('#'))).toBe('#VALUE!');
+  });
+
+  it('returns #DIV/0! when dividing by zero', () => {
+    expect(evaluate({ type: 'binary', op: '/', left: { type: 'number', value: 1 }, right: { type: 'number', value: 0 } }, emptyResolver)).toBe('#DIV/0!');
+  });
+
+  it('maps NaN to #VALUE! and Infinity to #NUM!', () => {
+    expect(add(cellValue('abc'))).toBe('#VALUE!');
+    expect(evaluate({ type: 'binary', op: '*', left: { type: 'number', value: 1e308 }, right: { type: 'number', value: 1e308 } }, emptyResolver)).toBe('#NUM!');
+  });
+});
