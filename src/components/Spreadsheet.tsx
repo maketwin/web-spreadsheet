@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type Dispatch, type FC, type KeyboardEvent as ReactKeyboardEvent, type RefObject, type SetStateAction } from 'react';
 import { applyMatrix, clearRange, clearRangeCmd, CompositeCommand } from '../util/rangeValues';
 import { fillSelectionPatches } from '../fill/fillSelection';
+import { repeatOnRange } from '../commands/repeat';
 import { useMultiSelection } from './hooks/useMultiSelection';
 import { useClipboardSession } from './hooks/useClipboardSession';
 import type { Command } from '../commands/Command';
@@ -530,6 +531,12 @@ function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selec
     else selectRange(Range.single(target.r, target.c).toAddress());
   }
   else if (action.type === 'fill' && action.fillDir !== undefined) { const op = fillShortcut(range, action.fillDir); if (op !== undefined) execCmd(op); }
+  else if (action.type === 'repeat') {
+    // Excel F4: replay the last command against the current selection.
+    const last = cmdManager?.getLastExecuted();
+    const rebound = last !== undefined ? repeatOnRange(last, range) : undefined;
+    if (rebound !== undefined) execCmd(rebound);
+  }
   else if (action.type === 'fillSelection') {
     // Excel Ctrl+Enter (no pending edit): re-enter the anchor cell's content across
     // the selection (Excel's active cell stays at the anchor after Shift+arrows/drag).

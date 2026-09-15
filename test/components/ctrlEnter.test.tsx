@@ -91,3 +91,23 @@ describe('Ctrl+Enter (Excel: fill the whole selection)', () => {
     expect(store.getCell(1, 0)).toBeUndefined();
   });
 });
+
+describe('F4 (Excel: repeat last action)', () => {
+  it('repeats the last style command on the new selection', async () => {
+    const { CommandManager } = await import('../../src/commands/CommandManager');
+    installCanvasContext();
+    const store = new Store();
+    const mgr = new CommandManager(store);
+    render(<SpreadsheetComponent store={store} cmdManager={mgr} theme={false} />);
+    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+    installCanvasRect(canvas);
+
+    fireEvent.keyDown(canvas, { key: 'b', ctrlKey: true }); // bold A1
+    fireEvent.keyDown(canvas, { key: 'ArrowRight' }); // select B1
+    fireEvent.keyDown(canvas, { key: 'F4' });
+
+    const b1 = store.getCell(0, 1);
+    expect(b1?.styleId).toBeDefined();
+    expect(store.getStyle(b1!.styleId!)?.bold).toBe(true);
+  });
+});

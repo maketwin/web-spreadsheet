@@ -10,6 +10,8 @@ export interface HistoryEntry {
 export class CommandManager {
   private undoStack: Command[] = [];
   private redoStack: Command[] = [];
+  /** Most recent user-executed command — the F4 repeat source (Excel). Undo/redo do not touch it. */
+  private lastExecuted: Command | undefined;
 
   public constructor(
     private readonly store: Store,
@@ -24,6 +26,7 @@ export class CommandManager {
     cmd.execute(this.store);
     this.undoStack.push(cmd);
     this.redoStack = [];
+    this.lastExecuted = cmd;
     this.events?.emit('command:executed', { cmd });
   }
 
@@ -43,6 +46,10 @@ export class CommandManager {
     cmd.execute(this.store);
     this.undoStack.push(cmd);
     this.events?.emit('command:redone', { cmd });
+  }
+
+  public getLastExecuted(): Command | undefined {
+    return this.lastExecuted;
   }
 
   public canUndo(): boolean {

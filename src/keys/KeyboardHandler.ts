@@ -4,7 +4,7 @@ import { Range, type RangeAddress } from '../selection/Range';
 
 export interface KeyboardAction {
   readonly type: 'move' | 'edit' | 'clear' | 'cancel' | 'copy' | 'paste' | 'cut' | 'type' | 'menu'
-    | 'moveEdge' | 'jump' | 'fill' | 'selectColumn' | 'selectRow' | 'page' | 'backspace' | 'insertDate' | 'fillSelection';
+    | 'moveEdge' | 'jump' | 'fill' | 'selectColumn' | 'selectRow' | 'page' | 'backspace' | 'insertDate' | 'fillSelection' | 'repeat';
   /** `page`: PageUp (-1) / PageDown (+1) — the caller resolves the viewport row count. */
   readonly pageDir?: -1 | 1;
   readonly range?: RangeAddress;
@@ -23,6 +23,8 @@ export type MenuShortcutCommand = 'save' | 'find' | 'replace' | 'selectAll' | 'b
 
 export class KeyboardHandler {
   public static next(key: string, range: RangeAddress, shiftKey = false, metaKey = false, ctrlKey = false): KeyboardAction | null {
+    // Excel: F4 repeats the last action on the current selection.
+    if (key === 'F4' && !metaKey && !ctrlKey) return { type: 'repeat' };
     if (metaKey || ctrlKey) return shortcutAction(key);
     // Excel: Shift+Space selects the entire row of the active cell.
     if (key === ' ' && shiftKey) return { type: 'selectRow' };
