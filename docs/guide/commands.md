@@ -1,6 +1,6 @@
 # 命令与撤销
 
-所有对电子表格的修改都通过**命令模式**完成：每个命令是一个携带参数的对象，`execute(store)` 执行修改，`getUndo()` 返回一个能恢复原状的逆命令。`CommandManager` 维护 undo / redo 两个栈，**全部 22 个命令都可撤销**，且每个命令的撤销路径都有测试覆盖。
+所有对电子表格的修改都通过**命令模式**完成：每个命令是一个携带参数的对象，`execute(store)` 执行修改，`getUndo()` 返回一个能恢复原状的逆命令。`CommandManager` 维护 undo / redo 两个栈，**全部 23 个命令都可撤销**，且每个命令的撤销路径都有测试覆盖。
 
 ## 基本用法
 
@@ -32,7 +32,7 @@ export interface RangeAddress {
 }
 ```
 
-## 命令清单（22 个）
+## 命令清单（23 个）
 
 ### 内容
 
@@ -65,6 +65,7 @@ export interface RangeAddress {
 | `SetRowHeight` | `{ r, height }` | 行高 |
 | `SetColWidth` | `{ c, width }` | 列宽 |
 | `SetMerge` | `{ range, active }` | 合并 / 取消合并 |
+| `SetMergeAcross` | `{ range }` | 跨越合并（选区每行独立合并） |
 
 插入/删除行（列）会整体快照受影响区域，公式引用的行号也会相应重映射，保证撤销恢复完整。
 
@@ -83,6 +84,7 @@ export interface RangeAddress {
 ## 撤销栈特性
 
 - undo / redo 栈**没有上限**，不做截断。
+- **无操作命令不进历史**：命令可重写 `isNoOp()`，`execute` 后若未产生任何变化（如对无合并区域「取消合并」、单列「跨越合并」），`CommandManager` 不压栈、不更新 F4 重复源——对齐 Excel「没变化的操作不可撤销」。
 - 撤销通过执行逆命令实现（`cmd.getUndo().execute(store)`），因此「撤销公式」连计算结果也会一起恢复。
 - 初始数据（构造时传入的 `data` / `sheets`、IndexedDB 恢复）在加载后调用 `cmdManager.clear()`，**不计入撤销历史**——用户不能把初始内容「撤销掉」。
 - `getUndoStack()` / `getRedoStack()` 返回 `HistoryEntry[]`（`{ description, index }`），可用于自绘历史面板；`undoToIndex(i)` 可一次回退多步。
@@ -104,7 +106,7 @@ ss.events.on('command:executed', ({ cmd }) => {
 ```
 
 ::: tip 从包根可用的命令
-22 个命令中，以下 11 个从包根导出，可直接 `import { ... } from 'web-spreadsheet'`：
+23 个命令中，以下 11 个从包根导出，可直接 `import { ... } from 'web-spreadsheet'`：
 
 `InsertRowCommand`、`InsertColCommand`、`DeleteRowCommand`、`DeleteColCommand`、`SetCellStyleCommand`、`SetRangeStyleCommand`、`SetRangeBorderCommand`（含 `edgesForPreset`）、`SetConditionalFormatCommand`、`SetValidationCommand`、`CreateChartCommand`、`SetSparklineCommand`。
 

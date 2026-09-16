@@ -39,7 +39,7 @@ hero:
 
 **命令与撤销**
 
-- 命令模式覆盖所有修改，**22 个命令全部可撤销**（含公式结果恢复）
+- 命令模式覆盖所有修改，**23 个命令全部可撤销**（含公式结果恢复）
 
 **数据功能**
 
@@ -76,7 +76,7 @@ ss.mount();
 | [数据模型](/guide/data-model) | Cell / Style / Sheet / 序列化 |
 | [渲染层](/guide/rendering) | 双 canvas 分层、AxisIndex、blit 缓存、冻结四象限 |
 | [公式引擎](/guide/formulas) | 语法、函数表、已知限制 |
-| [命令与撤销](/guide/commands) | 22 个命令、undo/redo、自定义命令 |
+| [命令与撤销](/guide/commands) | 23 个命令、undo/redo、自定义命令 |
 | [智能填充](/guide/fill) | 序列识别规则、Ctrl 行为 |
 | [格式化](/guide/formatting) | 数字格式、条件格式、数据验证 |
 | [数据功能](/guide/data-features) | 筛选、排序、命名区域、保护、图表 |

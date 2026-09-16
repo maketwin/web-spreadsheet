@@ -92,7 +92,16 @@ store.getMergeAt(0, 0);     // 查询 (0,0) 所在的合并区域
 store.getMerges();          // 当前 sheet 全部合并区域
 ```
 
-UI 层对应 `SetMerge` 命令（`{ range, active: boolean }`），可撤销。
+UI 层由 `mergeSelection`（`src/components/mergeActions.ts`）统一入口，菜单栏与工具栏共用，语义对齐 Excel：
+
+- **合并后居中（Merge & Center）**：合并 + 锚点居中是**单个撤销步**（`CompositeCommand`）；选区恰好等于某个已有合并时再点一次即取消合并（开关行为）。
+- **跨越合并（Merge Across）**：选区每行独立合并，对应 `SetMergeAcross` 命令。
+- **多值冲突警告**：选区内非锚点单元格有内容时先弹「仅保留左上角的值」确认（`mergeConflictCount`；公式单元格即使结果为空串也算有内容）。
+- **重叠吸收**：新合并范围与已有合并相交时，旧合并整体移除，只保留新合并锚点的值。
+- **单格守卫**：单个（未合并）单元格上合并/跨越合并/取消合并均无操作，「合并后居中」只居中；无实际变化的合并命令不进撤销历史（见[命令与撤销](/guide/commands#撤销栈特性)的 `isNoOp()`）。
+- **行列增删**：插入时下方/右方合并平移、跨越插入点的合并扩大；删除时被覆盖的合并收缩或移除（`shiftMergesForInsert` / `shiftMergesForDelete`）。
+
+底层命令为 `SetMerge`（`{ range, active: boolean }`），可撤销；粘贴等只需改动合并结构、不动值的场景使用 `ApplyMergeChanges`。
 
 ## Sheet
 
