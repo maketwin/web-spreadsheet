@@ -44,3 +44,17 @@ describe('SetMergeAcross (Excel Merge Across)', () => {
     expect(store.getMerges()).toEqual([]);
   });
 });
+
+import { CommandManager } from '../../src/commands/CommandManager';
+
+describe('SetMergeAcross no-op guard (Excel)', () => {
+  it('single-column selection is a no-op and stays out of history', () => {
+    const store = new Store();
+    const cm = new CommandManager(store);
+
+    cm.execute(new SetMergeAcross({ range: 'A1:A3' }));
+
+    expect(store.getMerges()).toEqual([]);
+    expect(cm.canUndo()).toBe(false);
+  });
+});

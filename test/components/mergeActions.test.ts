@@ -54,3 +54,48 @@ describe('mergeSelection (Excel Merge & Center)', () => {
     expect(alignOf(store, 4, 4)).toBe('center');
   });
 });
+
+
+describe('mergeSelection single-cell guards (Excel)', () => {
+  const single = { r1: 2, c1: 2, r2: 2, c2: 2 };
+
+  it('plain merge on a single cell does nothing', () => {
+    const store = new Store();
+    const cmdManager = new CommandManager(store);
+
+    mergeSelection(store, cmdManager, single, 'plain');
+
+    expect(store.getMerges()).toEqual([]);
+    expect(cmdManager.canUndo()).toBe(false);
+  });
+
+  it('merge across on a single cell does nothing', () => {
+    const store = new Store();
+    const cmdManager = new CommandManager(store);
+
+    mergeSelection(store, cmdManager, single, 'across');
+
+    expect(store.getMerges()).toEqual([]);
+    expect(cmdManager.canUndo()).toBe(false);
+  });
+
+  it('unmerge on a single unmerged cell does nothing', () => {
+    const store = new Store();
+    const cmdManager = new CommandManager(store);
+
+    mergeSelection(store, cmdManager, single, 'unmerge');
+
+    expect(cmdManager.canUndo()).toBe(false);
+  });
+
+  it('Merge & Center on a single cell only centers (one undo step, no merge)', () => {
+    const store = new Store();
+    const cmdManager = new CommandManager(store);
+
+    mergeSelection(store, cmdManager, single, 'center');
+
+    expect(store.getMerges()).toEqual([]);
+    expect(alignOf(store, 2, 2)).toBe('center');
+    expect(cmdManager.getUndoStack()).toHaveLength(1);
+  });
+});

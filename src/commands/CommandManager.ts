@@ -24,6 +24,8 @@ export class CommandManager {
 
   public execute(cmd: Command): void {
     cmd.execute(this.store);
+    // No-op commands (e.g. unmerge where nothing is merged) never enter history.
+    if (cmd.isNoOp()) return;
     this.undoStack.push(cmd);
     this.redoStack = [];
     this.lastExecuted = cmd;

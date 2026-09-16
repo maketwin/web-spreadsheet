@@ -24,15 +24,26 @@ interface MergeSnapshot {
  */
 export class SetMerge extends Command<SetMergeArgs> {
   private before: MergeSnapshot | undefined;
+  private noop = false;
 
   public execute(store: Store): void {
     const target = Range.normalize(parseMerge(this.args.range));
+    // Excel: merging a single cell does nothing; unmerging a range without
+    // merges does nothing. Neither enters the undo history.
+    const singleCell = target.r1 === target.r2 && target.c1 === target.c2;
+    const nothingToUnmerge = !this.args.active && store.getMerges().every((m) => !rangesIntersect(parseMerge(m), target));
+    if ((this.args.active && singleCell) || nothingToUnmerge) { this.noop = true; this.before = undefined; return; }
+    this.noop = false;
     this.before = snapshotArea(store, target);
     if (this.args.active) {
       applyMerge(store, target);
     } else {
       applyUnmerge(store, target);
     }
+  }
+
+  public override isNoOp(): boolean {
+    return this.noop;
   }
 
   public getUndo(): Command {
@@ -47,9 +58,13 @@ export interface SetMergeAcrossArgs {
 
 export class SetMergeAcross extends Command<SetMergeAcrossArgs> {
   private before: MergeSnapshot | undefined;
+  private noop = false;
 
   public execute(store: Store): void {
     const target = Range.normalize(parseMerge(this.args.range));
+    // Excel: Merge Across on a single column does nothing.
+    if (target.c1 === target.c2) { this.noop = true; this.before = undefined; return; }
+    this.noop = false;
     this.before = snapshotArea(store, target);
     store.batch(() => {
       for (let r = target.r1; r <= target.r2; r += 1) {
@@ -58,6 +73,10 @@ export class SetMergeAcross extends Command<SetMergeAcrossArgs> {
         applyMerge(store, rowRange);
       }
     });
+  }
+
+  public override isNoOp(): boolean {
+    return this.noop;
   }
 
   public getUndo(): Command {

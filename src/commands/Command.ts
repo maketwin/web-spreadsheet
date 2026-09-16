@@ -15,6 +15,11 @@ export abstract class Command<TArgs = unknown> {
     return false;
   }
 
+  /** True when execute() changed nothing — CommandManager keeps it out of the undo history. */
+  public isNoOp(): boolean {
+    return false;
+  }
+
   public describe(): string {
     return this.constructor.name;
   }

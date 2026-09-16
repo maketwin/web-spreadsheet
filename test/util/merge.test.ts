@@ -121,3 +121,13 @@ describe('mergeConflictCount', () => {
     expect(mergeConflictCount(store, { r1: 0, c1: 0, r2: 1, c2: 1 })).toBe(0);
   });
 });
+
+
+describe('mergeConflictCount formula cells', () => {
+  it('counts a formula cell as data even when its text is empty', () => {
+    const store = new Store();
+    store.setCell(0, 1, { text: '', formula: '=1+1', value: 2 });
+
+    expect(mergeConflictCount(store, { r1: 0, c1: 0, r2: 0, c2: 1 })).toBe(1);
+  });
+});

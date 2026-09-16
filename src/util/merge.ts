@@ -96,7 +96,8 @@ export function mergeConflictCount(store: Store, range: RangeAddress): number {
     for (let c = normalized.c1; c <= normalized.c2; c += 1) {
       if (r === normalized.r1 && c === normalized.c1) continue;
       const cell = store.getCell(r, c);
-      if (cell !== undefined && cell.text !== '') count += 1;
+      // A formula cell counts as data even when its result is an empty string (Excel).
+      if (cell !== undefined && (cell.text !== '' || cell.formula !== undefined)) count += 1;
     }
   }
   return count;

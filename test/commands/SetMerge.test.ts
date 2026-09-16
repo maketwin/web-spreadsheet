@@ -127,3 +127,26 @@ describe('SetMerge Excel semantics', () => {
     expect(store.getCell(0, 1)).toBeUndefined();
   });
 });
+
+import { CommandManager } from '../../src/commands/CommandManager';
+
+describe('SetMerge no-op guards (Excel)', () => {
+  it('merging a single cell is a no-op and stays out of history', () => {
+    const store = new Store();
+    const cm = new CommandManager(store);
+
+    cm.execute(new SetMerge({ range: 'A1:A1', active: true }));
+
+    expect(store.getMerges()).toEqual([]);
+    expect(cm.canUndo()).toBe(false);
+  });
+
+  it('unmerge where nothing is merged is a no-op and stays out of history', () => {
+    const store = new Store();
+    const cm = new CommandManager(store);
+
+    cm.execute(new SetMerge({ range: 'B2:C3', active: false }));
+
+    expect(cm.canUndo()).toBe(false);
+  });
+});

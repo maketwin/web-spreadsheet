@@ -36,6 +36,12 @@ export function isSingleMergeSelection(store: Store, range: RangeAddress): boole
  */
 export function mergeSelection(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress, mode: MergeMode): void {
   const name = rangeToName(range);
+  const singleCell = range.r1 === range.r2 && range.c1 === range.c2;
+  // Excel: on a single (unmerged) cell only Merge & Center does anything — it just centers.
+  if (singleCell && store.getMergeAt(range.r1, range.c1) === undefined) {
+    if (mode === 'center') execute(store, cmdManager, new SetRangeStyleCommand({ ...range, style: { align: 'center' } }));
+    return;
+  }
   if (mode === 'unmerge') { execute(store, cmdManager, new SetMerge({ range: name, active: false })); return; }
   if (mode === 'center' && isSingleMergeSelection(store, range)) {
     execute(store, cmdManager, new SetMerge({ range: name, active: false }));
