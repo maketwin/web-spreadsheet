@@ -307,6 +307,45 @@ export class Store {
     };
   }
 
+  /**
+   * Hot-swap the whole workbook (file import). Sheet data is replaced in
+   * place so existing subscribers keep working; the caller clears the undo
+   * history afterwards (Excel cannot undo opening a file either).
+   */
+  public replaceAll(data: SerializedStore): void {
+    if (data.sheets.length === 0) throw new Error('replaceAll requires at least one sheet');
+    const next = data.sheets;
+    this.batch(() => {
+      const oldIds = [...this.sheets.keys()];
+      this.sheets.clear();
+      this.sheetNames.clear();
+      for (const sheet of next) {
+        this.sheets.set(sheet.id, SheetData.deserialize(sheet.data));
+        this.sheetNames.set(sheet.id, sheet.name);
+      }
+      const ids = new Set(this.sheets.keys());
+      this.activeSheetId = ids.has(data.activeSheetId) ? data.activeSheetId : (this.sheets.keys().next().value as string);
+      this.nextSheetNumber = this.sheets.size + 1;
+      oldIds.forEach((sheetId) => { if (!ids.has(sheetId)) this.notify({ type: 'sheet', action: 'delete', sheetId }); });
+      next.forEach((sheet) => this.notify({ type: 'sheet', action: 'add', sheetId: sheet.id, name: sheet.name }));
+      this.notify({ type: 'sheet', action: 'activate', sheetId: this.activeSheetId });
+      // Replay content events so subscribers (formula engine, renderer scroll
+      // sizes) observe the swapped-in data — sheet events alone leave the
+      // formula dependency graph empty and imported formulas never recalc.
+      for (const sheet of next) {
+        const d = sheet.data;
+        d.cells.forEach(([key, cell]) => {
+          const [r, c] = key.split(',').map(Number);
+          this.notify(eventWithSheet({ type: 'cell', r: r ?? 0, c: c ?? 0, cell }, sheet.id));
+        });
+        d.rows.forEach(([r, meta]) => this.notify(eventWithSheet({ type: 'row', r, meta }, sheet.id)));
+        d.cols.forEach(([c, meta]) => this.notify(eventWithSheet({ type: 'col', c, meta }, sheet.id)));
+        d.styles.forEach(([id, style]) => this.notify(eventWithSheet({ type: 'style', id, style }, sheet.id)));
+        d.merges.forEach((range) => this.notify(eventWithSheet({ type: 'merge', range }, sheet.id)));
+      }
+    });
+  }
+
   public static deserialize(data: SerializedStore): Store {
     const store = new Store();
     store.sheets.clear();

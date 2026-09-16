@@ -4,7 +4,6 @@ import type { MenuProps } from 'antd';
 import { useMemo, useRef, useState, useEffect, type FC, type ReactElement, type ReactNode } from 'react';
 import { ClipboardService } from '../../clipboard/ClipboardService';
 import { autofitRowHeights } from '../../util/rowAutofit';
-import { CompositeCommand } from '../../util/rangeValues';
 import { DeleteColCommand } from '../../commands/impl/DeleteCol';
 import { DeleteRowCommand } from '../../commands/impl/DeleteRow';
 import { InsertColCommand } from '../../commands/impl/InsertCol';
@@ -470,35 +469,17 @@ function openXlsxFile(event: React.ChangeEvent<HTMLInputElement>, ctx: MenuConte
   const file = event.currentTarget.files?.[0];
   if (file === undefined) return;
   void file.arrayBuffer().then((buf) => {
-    const result = importXlsx(buf);
-    const first = result.sheets[0];
-    if (first === undefined) { message.info('xlsx 文件为空'); return; }
-    const values = first.cells;
-    // Excel: one import = one undo step (values + every number format run).
-    execute(ctx, new CompositeCommand([
-      new SetRangeValues({ r1: 0, c1: 0, r2: values.length - 1, c2: (values[0]?.length ?? 1) - 1, values }),
-      ...importedFormatCommands(first.numberFormats),
-    ]));
-    message.success(`已导入 xlsx (${result.sheets.length} 个工作表)`);
-  });
-  event.currentTarget.value = '';
-}
-
-/** Imported xlsx number formats grouped into same-format row runs. */
-function importedFormatCommands(formats: readonly (readonly (string | undefined)[])[]): SetNumberFormatCommand[] {
-  const cmds: SetNumberFormatCommand[] = [];
-  formats.forEach((row, r) => {
-    let c = 0;
-    while (c < row.length) {
-      const fmt = row[c];
-      if (fmt === undefined) { c += 1; continue; }
-      let end = c;
-      while (end + 1 < row.length && row[end + 1] === fmt) end += 1;
-      cmds.push(new SetNumberFormatCommand({ r1: r, c1: c, r2: r, c2: end, numberFormat: fmt }));
-      c = end + 1;
+    try {
+      const imported = importXlsx(buf);
+      // Excel semantics: opening a file replaces the document and cannot be undone.
+      ctx.store.replaceAll(imported);
+      ctx.cmdManager?.clear();
+      message.success(`已导入 xlsx（${imported.sheets.length} 个工作表）`);
+    } catch {
+      message.error('xlsx 解析失败，请检查文件是否损坏');
     }
-  });
-  return cmds;
+  }).catch(() => message.error('文件读取失败'));
+  event.currentTarget.value = '';
 }
 
 function importText(text: string, ctx: MenuContext): void {

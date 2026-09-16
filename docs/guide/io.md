@@ -17,21 +17,34 @@ import { exportXlsx, exportXlsxBuffer } from 'web-spreadsheet';
 | 能力 | 支持情况 |
 |------|----------|
 | 多 Sheet | ✅ 每个 sheet 一张表，保留 sheet 名 |
+| 公式 | ✅ 写入 `f` 字段（缓存值随行，Excel 打开后重算） |
 | 数字格式 | ✅ 写入 xlsx 单元格 `z` 字段；内置格式映射：`number→#,##0.00`、`currency→¥#,##0.00`、`percent→0.00%`、`date→yyyy-mm-dd`、`time→hh:mm:ss`、`scientific→0.00E+00` |
-| 单元格样式 | ❌ 不导出 |
-| 合并单元格 | ❌ 不导出 |
+| 合并单元格 | ✅ 写入 `!merges` |
+| 单元格样式 | ❌ 不导出（SheetJS 社区版限制） |
 
 产出标准 xlsx 二进制（MIME `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`），UI 下载为 `workbook.xlsx`。
 
 ### 导入
 
 ```ts
-const result = importXlsx(buffer); // { sheets: [{ name, cells, numberFormats }] }
+const imported: SerializedStore = importXlsx(buffer);
+store.replaceAll(imported);  // 整体热替换当前工作簿
+cmdManager.clear();          // Excel 语义：打开文件不可撤销
 ```
 
-- 用 `XLSX.read(buffer, { type: 'array', cellNF: true })` 读取，每个 sheet 转为二维单元格数组。
-- 数字格式从 xlsx `z` 字段提取，随内容一起应用。
-- 当前 UI 的「打开文件」**只导入第一个 sheet** 到当前表，数字格式以 `SetNumberFormatCommand` 批量应用；样式与合并单元格不导入。
+| 能力 | 支持情况 |
+|------|----------|
+| 多 Sheet | ✅ 全部导入，sheet 名保留（含中文名） |
+| 公式 | ✅ 读 `f` 字段写入 `cell.formula`，缓存值随行，UI 公式引擎接管重算 |
+| 数字格式 | ✅ 从 `z` 字段提取进 `style.numberFormat`；与内置格式等价的反向映射回枚举名（`#,##0.00→number` 等），其余作为自定义格式串 |
+| 日期 | ✅ 保留 Excel 序列值 + 日期格式识别（`cell.type='date'`），渲染层按格式显示 |
+| 布尔 / 错误 | ✅ `TRUE/FALSE` 与 `#DIV/0!` 等错误字面量 |
+| 合并单元格 | ✅ 读 `!merges` |
+| 单元格样式 | ✅ 粗体/斜体/下划线/字号/字体/文字颜色/实底背景色/水平垂直对齐/自动换行；含「有样式无内容」的空单元格（从原始 sheet XML 的 `s` 属性恢复样式索引，再映射 SheetJS 解析好的 styles.xml 字体/填充/对齐表） |
+| 行高 / 列宽 | ✅ `!rows` / `!cols`（含隐藏标记） |
+
+- UI 的「导入 xlsx」用 `Store.replaceAll` 热替换整个工作簿并清空撤销历史（Excel 打开文件同样不可撤销）；解析失败弹错误提示。
+- 已知限制：图表、条件格式、数据验证、筛选状态、边框与主题色（theme/indexed 非实底填充）不导入。
 - 文件选择器接受 `.csv .tsv .xlsx .json`。
 
 ## CSV / TSV / JSON

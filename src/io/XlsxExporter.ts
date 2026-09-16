@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import type { Store } from '../store/Store';
 import type { Cell } from '../types';
+import { parseRange } from '../util/cell';
 
 export function exportXlsxBuffer(store: Store): ArrayBuffer {
   const wb = XLSX.utils.book_new();
@@ -13,6 +14,8 @@ export function exportXlsxBuffer(store: Store): ArrayBuffer {
     const aoa = buildAoa(cells);
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     applyNumberFormats(ws, cells, store, id);
+    applyFormulas(ws, cells);
+    applyMerges(ws, store.getMerges(id));
     XLSX.utils.book_append_sheet(wb, ws, name);
   }
 
@@ -22,6 +25,27 @@ export function exportXlsxBuffer(store: Store): ArrayBuffer {
 export function exportXlsx(store: Store): Blob {
   const buf = exportXlsxBuffer(store);
   return new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+/** Formula cells export the formula itself (Excel recalculates on open); the cached value rides along. */
+function applyFormulas(ws: XLSX.WorkSheet, cells: readonly [string, Cell][]): void {
+  for (const [key, cell] of cells) {
+    if (cell.formula === undefined) continue;
+    const [r, c] = key.split(',').map(Number);
+    const addr = XLSX.utils.encode_cell({ r: r ?? 0, c: c ?? 0 });
+    const existing = ws[addr] as XLSX.CellObject | undefined;
+    if (existing === undefined) continue;
+    existing.f = cell.formula.replace(/^=/, '');
+  }
+}
+
+/** Merged cells round-trip through the worksheet `!merges` list. */
+function applyMerges(ws: XLSX.WorkSheet, merges: readonly string[]): void {
+  if (merges.length === 0) return;
+  ws['!merges'] = merges.map((m) => {
+    const a = parseRange(m);
+    return { s: { r: a.r1, c: a.c1 }, e: { r: a.r2, c: a.c2 } };
+  });
 }
 
 const BUILT_IN_NUMFMT: Readonly<Record<string, string>> = {
