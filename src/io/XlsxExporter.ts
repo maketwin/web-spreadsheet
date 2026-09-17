@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
 import type { Store } from '../store/Store';
 import type { Cell } from '../types';
 import { parseRange } from '../util/cell';
@@ -71,7 +72,7 @@ function applyNumberFormats(ws: XLSX.WorkSheet, cells: readonly [string, Cell][]
   }
 }
 
-function buildAoa(cells: readonly [string, Cell][]): (string | number | null)[][] {
+function buildAoa(cells: readonly [string, Cell][]): (string | number | boolean | null)[][] {
   let maxR = 0;
   let maxC = 0;
   const cellMap = new Map<string, Cell>();
@@ -80,19 +81,24 @@ function buildAoa(cells: readonly [string, Cell][]): (string | number | null)[][
     const parts = key.split(',');
     const r = Number(parts[0]);
     const c = Number(parts[1]);
+    // Bounded by the fixed grid: a stray far-away key can never turn the
+    // dense export loop into a multi-billion-iteration walk.
+    if (!Number.isInteger(r) || !Number.isInteger(c) || r < 0 || r >= TOTAL_ROWS || c < 0 || c >= TOTAL_COLS) continue;
     if (r > maxR) maxR = r;
     if (c > maxC) maxC = c;
     cellMap.set(key, cell);
   }
 
-  const rows: (string | number | null)[][] = [];
+  const rows: (string | number | boolean | null)[][] = [];
   for (let r = 0; r <= maxR; r += 1) {
-    const row: (string | number | null)[] = [];
+    const row: (string | number | boolean | null)[] = [];
     for (let c = 0; c <= maxC; c += 1) {
       const cell = cellMap.get(`${r},${c}`);
       if (cell === undefined) {
         row.push(null);
       } else if (typeof cell.value === 'number') {
+        row.push(cell.value);
+      } else if (typeof cell.value === 'boolean') {
         row.push(cell.value);
       } else {
         row.push(cell.text);

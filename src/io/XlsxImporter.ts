@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
 import type { Cell, Style } from '../types';
 import type { SerializedStore } from '../store/Store';
 import type { SerializedSheetData } from '../store/SheetData';
@@ -153,6 +154,14 @@ function convertSheet(ws: XLSX.WorkSheet, tables: StyleTables, styleIdx: Map<str
   const merges = data.merges as string[];
   const rows = data.rows as Array<[number, { height?: number; hide?: boolean }]>;
   const cols = data.cols as Array<[number, { width?: number; hide?: boolean }]>;
+  // The grid is fixed-size: coordinates beyond it are dropped, never silently
+  // invisible. A crafted far-away cell cannot inflate the workbook either.
+  let skippedOutOfGrid = 0;
+  const inGrid = (r: number, c: number): boolean => {
+    if (r >= 0 && r < TOTAL_ROWS && c >= 0 && c < TOTAL_COLS) return true;
+    skippedOutOfGrid += 1;
+    return false;
+  };
   // Identical styles share one id (content-hash dedup) instead of one id per
   // cell — keeps serialized size proportional to distinct styles, not cells.
   const styleIds = new Map<string, string>();
@@ -180,6 +189,7 @@ function convertSheet(ws: XLSX.WorkSheet, tables: StyleTables, styleIdx: Map<str
   for (const key of Object.keys(ws)) {
     if (key.startsWith('!')) continue;
     const { r, c } = XLSX.utils.decode_cell(key);
+    if (!inGrid(r, c)) continue;
     const raw = ws[key] as XLSX.CellObject;
     const cell = convertCell(raw);
     if (raw.t === 'n') {
@@ -195,9 +205,11 @@ function convertSheet(ws: XLSX.WorkSheet, tables: StyleTables, styleIdx: Map<str
     const style = convertStyle(tables, xfIdx);
     if (style === undefined) continue;
     const { r, c } = XLSX.utils.decode_cell(addr);
+    if (!inGrid(r, c)) continue;
     const cell: Cell = { text: '', styleId: internStyle(style) };
     cells.push([`${r},${c}`, cell]);
   }
+  if (skippedOutOfGrid > 0) console.warn(`xlsx import: skipped ${skippedOutOfGrid} cells outside the ${TOTAL_ROWS}×${TOTAL_COLS} grid`);
 
   for (const m of (ws as { '!merges'?: XLSX.Range[] })['!merges'] ?? []) {
     merges.push(`${XLSX.utils.encode_cell(m.s)}:${XLSX.utils.encode_cell(m.e)}`);
