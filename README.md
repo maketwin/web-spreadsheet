@@ -3,7 +3,7 @@
 ![version](https://img.shields.io/badge/version-v1.5.0-brightgreen)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![typescript](https://img.shields.io/badge/TypeScript-strict%20%7C%20zero--any-3178c6)
-![tests](https://img.shields.io/badge/tests-442%20passed-brightgreen)
+![tests](https://img.shields.io/badge/tests-748%20passed-brightgreen)
 
 A modern, lightweight TypeScript spreadsheet SDK — a canvas-rendered,
 Excel-compatible grid with a formula engine, full undo/redo, and a plugin
@@ -82,6 +82,8 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full breakdown.
 
 ```bash
 # Install (not yet on npm — install from git)
+# React 18+ is a peer dependency and must be installed in the host app.
+pnpm add react react-dom
 pnpm add github:maketwin/web-spreadsheet
 
 # Or run the demo locally
@@ -99,7 +101,7 @@ The `Spreadsheet` facade accepts an element (or selector) plus options
 
 ```bash
 pnpm dev            # dev server with HMR
-pnpm test           # vitest — 442 tests, 88 files
+pnpm test           # vitest — 748 tests, 119 files
 pnpm typecheck      # tsc --noEmit (strict, noUncheckedIndexedAccess)
 pnpm lint           # eslint
 pnpm build          # typecheck + library build (ESM/UMD + d.ts)
