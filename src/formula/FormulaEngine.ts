@@ -37,7 +37,7 @@ export class FormulaEngine {
 
     const { sheetId, r, c } = parseScopedKey(scopedId);
     try {
-      const value = scalar(evaluate(ast, (x, y, sheetName) => this.resolveCell(x, y, sheetName), this.nameResolver));
+      const value = scalar(evaluate(ast, (x, y, sheetName) => this.resolveCell(x, y, sheetName, sheetId), this.nameResolver));
       const existing = this.store.getCell(r, c, sheetId);
       this.store.setCell(r, c, { ...existing, text: String(value ?? ''), value }, sheetId);
     } catch (err) {
@@ -62,9 +62,10 @@ export class FormulaEngine {
     for (const id of affected) this.recalculate(id);
   }
 
-  private resolveCell(x: number, y: number, sheetName?: string): FormulaValue {
+  /** Unscoped references resolve against the formula's own sheet, not the active one. */
+  private resolveCell(x: number, y: number, sheetName: string | undefined, formulaSheetId: string): FormulaValue {
     const cell = sheetName === undefined
-      ? this.store.getCell(y, x)
+      ? this.store.getCell(y, x, formulaSheetId)
       : this.store.getCellBySheetName(sheetName, y, x);
     if (cell === undefined) return null;
     return cell.value ?? cell.text;

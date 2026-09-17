@@ -13,10 +13,11 @@ function isWrappedInParens(expr: string): boolean {
 }
 
 const TWO_CHAR_OPS = new Set(['>=', '<=', '<>']);
-const SINGLE_CHAR_OPS = new Set(['&', '=', '+', '-', '*', '/', '>', '<']);
+const SINGLE_CHAR_OPS = new Set(['&', '=', '+', '-', '*', '/', '>', '<', '^']);
 
-/** Excel operator precedence: higher binds tighter. */
+/** Excel operator precedence: higher binds tighter. Unary sign binds above ^ (Excel: -2^2 = 4). */
 const OP_PRECEDENCE: Record<string, number> = {
+  '^': 5,
   '*': 4, '/': 4,
   '+': 3, '-': 3,
   '&': 2,
@@ -27,6 +28,17 @@ interface TopLevelSplit {
   /** Operand texts; ops[i] sits between atoms[i] and atoms[i+1]. */
   readonly atoms: readonly string[];
   readonly ops: readonly string[];
+}
+
+/** Characters after which a +/- is a unary sign rather than a binary operator. */
+const SIGN_CONTEXT_CHARS = new Set(['+', '-', '*', '/', '&', '=', '<', '>', '^', '(', ',']);
+
+/** True when the +/- at `i` directly follows an operator, '(', ',', or the start. */
+function isSignPosition(expr: string, i: number): boolean {
+  let j = i - 1;
+  while (j >= 0 && /\s/.test(expr[j] ?? '')) j -= 1;
+  if (j < 0) return true;
+  return SIGN_CONTEXT_CHARS.has(expr[j] ?? '');
 }
 
 /**
@@ -56,6 +68,9 @@ function splitTopLevelOps(expr: string): TopLevelSplit | null {
     if (depth !== 0 || i === 0) continue;
     const prev = expr[i - 1];
     if ((ch === '-' || ch === '+') && (prev === 'e' || prev === 'E') && /\d/.test(expr[i - 2] ?? '')) continue;
+    // A +/- whose previous non-space character is an operator, '(', or ','
+    // is a unary sign (e.g. `2*-3`, `SUM(-A1, -2)`), not a binary split.
+    if ((ch === '-' || ch === '+') && isSignPosition(expr, i)) continue;
     const two = expr.slice(i, i + 2);
     const op = TWO_CHAR_OPS.has(two) ? two : (SINGLE_CHAR_OPS.has(ch ?? '') ? ch : undefined);
     if (op === undefined) continue;
@@ -81,6 +96,13 @@ export class FormulaParser {
 
     const binary = this.parseBinary(expr);
     if (binary) return binary;
+
+    // Leading sign with no binary operator left: unary node. The sign is
+    // otherwise kept glued to its atom so it binds tighter than any binary
+    // operator (Excel: -2^2 = (-2)^2, -A1+1 = (-A1)+1).
+    if (expr.startsWith('-') || expr.startsWith('+')) {
+      return { type: 'unary', op: expr[0] as '-' | '+', operand: this.parseExpression(expr.slice(1).trim()) };
+    }
 
     const func = this.parseFunction(expr);
     if (func) return func;

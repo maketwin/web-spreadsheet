@@ -41,9 +41,47 @@ function evaluateFunction(node: Extract<AstNode, { type: 'func' }>, resolve: Cel
   // VLOOKUP needs the 2-D shape of its table range, which the flat
   // FormulaArgument list cannot express — resolved per-cell here instead.
   if (node.name === 'VLOOKUP') return vlookup(node, resolve, resolveName);
+  // IF is lazy in Excel: an error in the not-taken branch does not propagate.
+  if (node.name === 'IF') return ifLazy(node, resolve, resolveName);
   const spec = registry.get(node.name);
-  if (!spec) return null;
-  return spec.evaluate(node.args.map((arg) => evaluate(arg, resolve, resolveName)));
+  if (!spec) return '#NAME?';
+  const args = node.args.map((arg) => evaluate(arg, resolve, resolveName));
+  // Excel: an error argument propagates out of any function call.
+  for (const arg of args) {
+    const err = firstErrorIn(arg);
+    if (err !== undefined) return err;
+  }
+  return guardNumeric(spec.evaluate(args));
+}
+
+/** Excel IF(cond, then, [else]): evaluates only the taken branch. */
+function ifLazy(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver, resolveName?: NamedRangeResolver): FormulaValue {
+  const [condArg, thenArg, elseArg] = node.args;
+  if (condArg === undefined) return null;
+  const cond = scalar(evaluate(condArg, resolve, resolveName));
+  const condError = errorValueOf(cond);
+  if (condError !== undefined) return condError;
+  if (cond === false || cond === 0 || cond === null || cond === '') {
+    return elseArg === undefined ? false : scalar(evaluate(elseArg, resolve, resolveName));
+  }
+  return thenArg === undefined ? null : scalar(evaluate(thenArg, resolve, resolveName));
+}
+
+/** Map a function's non-finite numeric result to an Excel error literal. */
+function guardNumeric(result: FormulaArgument): FormulaArgument {
+  if (typeof result === 'number' && !Number.isFinite(result)) return finiteOrError(result);
+  return result;
+}
+
+function firstErrorIn(value: FormulaArgument): string | undefined {
+  if (isFormulaList(value)) {
+    for (const entry of value) {
+      const err = errorValueOf(entry);
+      if (err !== undefined) return err;
+    }
+    return undefined;
+  }
+  return errorValueOf(value);
 }
 
 /**
@@ -97,6 +135,9 @@ function evaluateBinary(node: Extract<AstNode, { type: 'binary' }>, resolve: Cel
     case '/':
       if (Number(right) === 0) return '#DIV/0!';
       return finiteOrError(Number(left) / Number(right));
+    case '^':
+      if (Number(right) === 0 && Number(left) === 0) return '#NUM!';
+      return finiteOrError(Math.pow(Number(left), Number(right)));
     case '&':
       return `${textOf(left)}${textOf(right)}`;
     case '>':
@@ -125,7 +166,7 @@ function compare(a: FormulaValue, b: FormulaValue): number {
 }
 
 /** The seven Excel error literals; plain text like "#tag" must NOT be treated as an error. */
-const EXCEL_ERRORS: ReadonlySet<string> = new Set(['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A']);
+export const EXCEL_ERRORS: ReadonlySet<string> = new Set(['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A']);
 
 /** A cell/formula value that is itself an Excel error literal ('#DIV/0!', '#N/A', …). */
 function errorValueOf(v: FormulaValue): string | undefined {
@@ -162,13 +203,19 @@ function textOf(v: FormulaValue): string {
 
 function evaluateUnary(node: Extract<AstNode, { type: 'unary' }>, resolve: CellResolver, resolveName?: NamedRangeResolver): FormulaValue {
   const value = scalar(evaluate(node.operand, resolve, resolveName));
-  return node.op === '-' ? -Number(value) : Number(value);
+  const err = errorValueOf(value);
+  if (err !== undefined) return err;
+  return finiteOrError(node.op === '-' ? -Number(value) : Number(value));
 }
 
 function evaluateName(node: Extract<AstNode, { type: 'name' }>, resolve: CellResolver, resolveName?: NamedRangeResolver): FormulaArgument {
-  if (resolveName === undefined) return null;
+  // Excel boolean literals are ordinary identifiers, case-insensitive.
+  const upper = node.value.toUpperCase();
+  if (upper === 'TRUE') return true;
+  if (upper === 'FALSE') return false;
+  if (resolveName === undefined) return '#NAME?';
   const resolved = resolveName(node.value);
-  if (resolved === null) return null;
+  if (resolved === null) return '#NAME?';
   return evaluate(resolved, resolve, resolveName);
 }
 
