@@ -61,6 +61,7 @@ web-spreadsheet is organized as a modern TypeScript spreadsheet SDK with a small
 | `src/formula/` | Parser, evaluator, registry, dependency graph, formula engine |
 | `src/renderer/` | Virtual scroller, dirty-region tracker, canvas renderer |
 | `src/components/` | React shell and user-facing UI components |
+| `src/print/` | Print pipeline: used-range detection, page pagination, offscreen page painter, print DOM + `@page` injection |
 | `src/plugin/` | PluginManager, PluginAPI, public plugin contract |
 | `src/events/` | EventBus with direct and wildcard subscriptions |
 | `src/theme/` | CSS variables, light/dark theme utilities |

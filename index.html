@@ -61,11 +61,18 @@
     .ss-canvas:focus-visible, .ss-menu-trigger:focus-visible, .ss-interaction-toolbar .ant-btn-sm:focus-visible, .ss-sheet-tab:focus-visible { outline: 1px solid var(--ss-accent); outline-offset: -1px; }
     .ss-formula-input:focus-visible { outline: none; }
     @media print {
-      .ss-menu-bar, .ss-interaction-toolbar, .ss-formula-bar, .ss-status-bar, .ss-bottom-bar { display: none !important; }
-      .ss-root { height: auto; }
-      .ss-canvas-wrap { overflow: visible; }
+      /* The print document (#ss-print-root, injected by PrintPipeline) replaces the app. */
+      .ss-root { display: none !important; }
       .ant-modal-root { display: none !important; }
     }
+
+    /* Print preview dialog */
+    .ss-print-setting { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; font-size: 12px; color: var(--ss-text); }
+    .ss-print-setting > label { color: var(--ss-text-light); }
+    .ss-print-pages { flex: 1; min-width: 0; max-height: 470px; overflow: auto; display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 8px 12px; background: var(--ss-header-bg); border-radius: 4px; }
+    .ss-print-thumb { margin: 0; text-align: center; }
+    .ss-print-thumb canvas { display: block; width: 340px; max-width: 100%; height: auto; background: #ffffff; box-shadow: 0 1px 4px rgba(0,0,0,.22); border: 1px solid var(--ss-border); }
+    .ss-print-thumb figcaption { margin-top: 4px; font-size: 12px; color: var(--ss-text-light); }
 
     /* Excel-like context menu */
     .ss-excel-ctx {

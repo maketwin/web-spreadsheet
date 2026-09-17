@@ -42,6 +42,7 @@ import { shortcutLabel } from './shortcutLabel';
 import type { DialogName, MenuActions, MenuContext, ViewState } from './types';
 import type { CellAddress } from '../../renderer/coordinate';
 import { HistoryPanel } from '../HistoryPanel';
+import { PrintPreview } from '../PrintPreview';
 
 export interface MenuBarProps extends MenuContext {
   readonly view?: Partial<ViewState>;
@@ -276,14 +277,14 @@ function runMenuAction(key: string, ctx: MenuContext, openDialog: (name: DialogN
   else if (key.startsWith('help:')) runHelpAction(key, openDialog);
 }
 
-function runFileAction(key: string, ctx: MenuContext, _openDialog: (name: DialogName) => void, fileInput: React.RefObject<HTMLInputElement | null>, xlsxInput: React.RefObject<HTMLInputElement | null>): void {
+function runFileAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void, fileInput: React.RefObject<HTMLInputElement | null>, xlsxInput: React.RefObject<HTMLInputElement | null>): void {
   if (key === 'file:new') confirmNew(ctx);
   if (key === 'file:open' || key === 'file:import') fileInput.current?.click();
   if (key === 'file:importXlsx') xlsxInput.current?.click();
   if (key === 'file:save') saveWorkbook(ctx.store);
   if (key === 'file:saveAs' || key === 'file:export') downloadWorkbook(ctx.store);
   if (key === 'file:exportXlsx') downloadXlsx(ctx.store);
-  if (key === 'file:print') window.print();
+  if (key === 'file:print') openDialog('printPreview');
   if (key === 'file:close') ctx.closeDemo?.();
 }
 
@@ -513,6 +514,7 @@ function Dialogs({ dialog, setDialog, props, view, findService: svc }: { readonl
     <ProtectSheetDialog open={dialog === 'protectSheet'} store={props.store} onCancel={close} />
     <UnprotectSheetDialog open={dialog === 'unprotectSheet'} store={props.store} onCancel={close} />
     <HistoryPanel open={dialog === 'history'} onCancel={close} cmdManager={props.cmdManager} />
+    <PrintPreview open={dialog === 'printPreview'} onCancel={close} store={props.store} />
   </>;
 }
 

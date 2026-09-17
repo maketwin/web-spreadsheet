@@ -14,15 +14,15 @@ export class ConditionalService {
     return this.astCache.get(formula) ?? null;
   }
 
-  /** Compute the conditional overlay for a cell at (r, c). */
-  computeOverlay(store: Store, r: number, c: number): ConditionalOverlay {
-    const rules = store.getConditionalRules();
+  /** Compute the conditional overlay for a cell at (r, c) on `sheetId` (default: active sheet). */
+  computeOverlay(store: Store, r: number, c: number, sheetId?: string): ConditionalOverlay {
+    const rules = store.getConditionalRules(sheetId);
     let style: Partial<Style> | undefined;
     let dataBar: ConditionalOverlay['dataBar'];
 
     for (const [, ruleList] of rules) {
       for (const rule of ruleList) {
-        const overlay = this.applyRule(store, r, c, rule);
+        const overlay = this.applyRule(store, r, c, rule, sheetId);
         if (overlay.style !== undefined) style = { ...style, ...overlay.style };
         if (overlay.dataBar !== undefined) dataBar = overlay.dataBar;
       }
@@ -31,32 +31,32 @@ export class ConditionalService {
     return { style, dataBar };
   }
 
-  private applyRule(store: Store, r: number, c: number, rule: ConditionalRule): ConditionalOverlay {
-    if (rule.type === 'dataBar') return this.applyDataBar(store, r, c, rule);
-    if (rule.type === 'colorScale') return this.applyColorScale(store, r, c, rule);
-    return this.applyFormula(store, rule);
+  private applyRule(store: Store, r: number, c: number, rule: ConditionalRule, sheetId?: string): ConditionalOverlay {
+    if (rule.type === 'dataBar') return this.applyDataBar(store, r, c, rule, sheetId);
+    if (rule.type === 'colorScale') return this.applyColorScale(store, r, c, rule, sheetId);
+    return this.applyFormula(store, rule, sheetId);
   }
 
-  private applyDataBar(store: Store, r: number, c: number, rule: ConditionalRule & { type: 'dataBar' }): ConditionalOverlay {
-    const value = cellNumericValue(store.getCell(r, c));
+  private applyDataBar(store: Store, r: number, c: number, rule: ConditionalRule & { type: 'dataBar' }, sheetId?: string): ConditionalOverlay {
+    const value = cellNumericValue(store.getCell(r, c, sheetId));
     if (value === null) return {};
     return { dataBar: { ratio: barRatio(value, rule.min, rule.max), color: rule.color } };
   }
 
-  private applyColorScale(store: Store, r: number, c: number, rule: ConditionalRule & { type: 'colorScale' }): ConditionalOverlay {
-    const value = cellNumericValue(store.getCell(r, c));
+  private applyColorScale(store: Store, r: number, c: number, rule: ConditionalRule & { type: 'colorScale' }, sheetId?: string): ConditionalOverlay {
+    const value = cellNumericValue(store.getCell(r, c, sheetId));
     if (value === null) return {};
     const bgcolor = interpolateColor(rule.minColor, rule.maxColor, barRatio(value, rule.min, rule.max));
     return { style: { bgcolor } };
   }
 
-  private applyFormula(store: Store, rule: ConditionalRule & { type: 'formula' }): ConditionalOverlay {
+  private applyFormula(store: Store, rule: ConditionalRule & { type: 'formula' }, sheetId?: string): ConditionalOverlay {
     const ast = this.parseCached(rule.formula);
     if (ast === null) return {};
     try {
       const result = evaluate(ast, (x, y, sheetName) =>
         sheetName === undefined
-          ? cellValue(store.getCell(y, x))
+          ? cellValue(store.getCell(y, x, sheetId))
           : cellValue(store.getCellBySheetName(sheetName, y, x)),
       );
       // An error literal (#NAME?, #REF!, …) is not a truthy rule hit.

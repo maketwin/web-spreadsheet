@@ -4,6 +4,18 @@
 
 ### New Features (Excel parity batch)
 
+- **Printing, rebuilt** — `文件 → 打印...` and `Ctrl/Cmd+P` open a real print
+  preview instead of dumping the viewport through `window.print()`. The sheet
+  is paginated from its used range (paper A4/Letter/A3, portrait/landscape,
+  narrow/normal/wide margins, fit-to-width or custom 50–200% scale) and each
+  page is rendered offscreen at 192 dpi with cell fills, conditional
+  formatting/data bars, borders, merged cells, wrap/overflow text and number
+  formats in a fixed light palette. Page boundaries avoid slicing merged
+  cells when the merge fits a page. Printing injects `@page` rules plus a
+  hidden `#ss-print-root` (one paper-sized div per page) and cleans up on
+  `afterprint`; PDF export is the system dialog's "Save as PDF". New modules:
+  `src/print/` (types, PrintPaginator, PrintPainter, PrintPipeline); the old
+  dead `PrintPreview` placeholder is now the live preview dialog.
 - **Formula point mode** — While typing a formula that awaits an operand
   (`=`, after `+`/`-`/`*`/`(`/`,`…), arrow keys and canvas clicks insert or
   move a cell reference instead of committing the edit. `F4` cycles `$`

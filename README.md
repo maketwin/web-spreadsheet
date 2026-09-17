@@ -56,6 +56,7 @@ ss.mount();
 **I/O & persistence**
 - Real xlsx import/export (SheetJS) including number formats
 - CSV/TSV and JSON import, auto-save to IndexedDB with startup restore
+- Paginated printing: print preview with paper/orientation/margins/scale settings, merged-cell-aware page breaks, 192-dpi offscreen page rendering (`Ctrl+P`)
 
 **Extensibility**
 - Plugin system with a typed `PluginAPI` (see `src/plugins/CsvImportPlugin.ts` for an example)

@@ -246,6 +246,21 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   useFormulaValue(selected, editing, store, storeVersion, setFormulaValue);
   useAutoSave(store);
   useEffect(() => inputRef.current?.focus(), [editing]);
+  // Ctrl/Cmd+P: browser-native print would dump the viewport bitmap only —
+  // route the shortcut to the paginated print preview instead.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (!((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'p')) return;
+      // Excel: no print while editing a cell or typing in an input/dialog.
+      if (editing) return;
+      const target = e.target as HTMLElement | null;
+      if (target !== null && (target.closest('input, textarea, select, [contenteditable="true"]') !== null)) return;
+      e.preventDefault();
+      setFindDialogOpen('printPreview');
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [editing]);
 
   return <ErrorBoundary><div className="ss-root">
     <MenuBar {...menuBarProps(store, cmdManager, selected, selectRange, () => selectSelection(sheetSelection(allSheetRange())), onClose)} view={{ ...view, setZoom: (zoom) => setView((current) => ({ ...current, zoom })), setShowFormula: (showFormula) => setView((current) => ({ ...current, showFormula })), setShowGrid: (showGrid) => setView((current) => ({ ...current, showGrid })), setFreeze: (frozenRows, frozenCols) => setView((current) => ({ ...current, frozenRows, frozenCols })) }} onFindNavigate={(cell) => selectSelection(cellSelection(cell.r, cell.c))} onFindHighlight={(cells) => rendererRef.current?.setHighlightMatches(cells)} openDialogKey={findDialogOpen} />
