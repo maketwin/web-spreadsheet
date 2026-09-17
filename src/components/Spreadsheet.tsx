@@ -302,9 +302,11 @@ export class Spreadsheet {
   public readonly formula = new FormulaEngine(this.store);
   private readonly plugins = new PluginManager(this);
   private root: Root | null = null;
+  private userTouched = false;
+  private offTouch: (() => void) | null = null;
   public constructor(private readonly mountRoot: HTMLElement, private readonly options: SpreadsheetOptions = {}) {}
-  public mount(): void { this.loadInitialData(); void this.tryRestoreFromDB(); this.root = createRoot(this.mountRoot); this.root.render(<SpreadsheetComponent store={this.store} cmdManager={this.cmdManager} formulaEngine={this.formula} theme={this.options.theme} />); }
-  public destroy(): void { this.root?.unmount(); this.root = null; this.plugins.clear(); }
+  public mount(): void { this.loadInitialData(); this.offTouch = this.store.subscribe(() => { this.userTouched = true; }); void this.tryRestoreFromDB(); this.root = createRoot(this.mountRoot); this.root.render(<SpreadsheetComponent store={this.store} cmdManager={this.cmdManager} formulaEngine={this.formula} theme={this.options.theme} />); }
+  public destroy(): void { this.root?.unmount(); this.root = null; this.offTouch?.(); this.offTouch = null; this.plugins.clear(); }
   public use(plugin: Plugin): this { this.plugins.use(plugin); return this; }
   public get rowCount(): number { return this.options.data?.length ?? this.options.sheets?.[0]?.data?.length ?? 0; }
 
@@ -316,12 +318,16 @@ export class Spreadsheet {
 
   private async tryRestoreFromDB(): Promise<void> {
     if (this.options.sheets !== undefined || this.options.data !== undefined) return;
-    const data = await loadWorkbook(DEFAULT_ID);
-    if (data === undefined) return;
-    const restored = Store.deserialize(data);
-    restored.getSheets().forEach(({ id, name }) => { if (id !== 'sheet-1') this.store.addSheet(name); this.store.renameSheet(id, name); });
-    restored.getCells().forEach(([key, cell]) => { const [r, c] = key.split(',').map(Number); this.store.setCell(r ?? 0, c ?? 0, cell); });
-    this.cmdManager.clear();
+    try {
+      const data = await loadWorkbook(DEFAULT_ID);
+      // The load is async: anything the user (or app code) wrote meanwhile
+      // wins — a late restore must not clobber it or wipe fresh undo state.
+      if (data === undefined || this.userTouched) return;
+      this.store.replaceAll(data);
+      this.cmdManager.clear();
+    } catch (err) {
+      console.error('Failed to restore workbook from IndexedDB:', err);
+    }
   }
 }
 
@@ -386,7 +392,7 @@ const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editin
   />;
 };
 
-function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick: (cell: CellAddress, shift: boolean) => void, onSelectionChange: (selection: Selection) => void, view: ViewState, setView: Dispatch<SetStateAction<ViewState>>, cmdManager: CommandManager | undefined, onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => void, onCellContextMenu: (cell: CellAddress, x: number, y: number) => void, onAutoFilterClick: (r: number, c: number, x: number, y: number) => void): { canvasRef: RefObject<HTMLCanvasElement>; rendererRef: RefObject<CanvasRenderer | null> } {
+function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick: (cell: CellAddress, shift: boolean, ctrl: boolean) => void, onSelectionChange: (selection: Selection) => void, view: ViewState, setView: Dispatch<SetStateAction<ViewState>>, cmdManager: CommandManager | undefined, onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => void, onCellContextMenu: (cell: CellAddress, x: number, y: number) => void, onAutoFilterClick: (r: number, c: number, x: number, y: number) => void): { canvasRef: RefObject<HTMLCanvasElement>; rendererRef: RefObject<CanvasRenderer | null> } {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<CanvasRenderer | null>(null);
   const callbacks = useRef({ onCellClick, onSelectionChange, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick });
@@ -396,10 +402,28 @@ function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick
   useEffect(() => {
     if (canvasRef.current === null) return undefined;
     const currentSelection = selectedLiveRef.current;
-    const base = { canvas: canvasRef.current, store, zoom: view.zoom, showFormula: view.showFormula, showGrid: view.showGrid, frozenRows: view.frozenRows, frozenCols: view.frozenCols, onCellClick: (cell: CellAddress, shift?: boolean) => flushSync(() => callbacks.current.onCellClick(cell, shift === true)), onSelectionChange: (range: RangeAddress, active?: CellAddress, anchor?: CellAddress) => flushSync(() => callbacks.current.onSelectionChange(snapRangeSelection(store, rangeSelection(range, anchor ?? selectedLiveRef.current?.anchor, active ?? { r: range.r2, c: range.c2 })))), onColumnSelect: (c: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(columnSelection(c, TOTAL_ROWS, shift && current?.kind === 'column' ? current.anchor.c : c)); }), onRowSelect: (r: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(rowSelection(r, TOTAL_COLS, shift && current?.kind === 'row' ? current.anchor.r : r)); }), onSheetSelect: () => flushSync(() => callbacks.current.onSelectionChange(sheetSelection(allSheetRange()))), onRowResize: (r: number, height: number) => { const cmd = new SetRowHeight({ r, height }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColResize: (c: number, width: number) => { const cmd = new SetColWidth({ c, width }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onRowDblClick: (r: number) => { const fit = autoFitRowHeight(store, r); const cmd = new SetRowHeight({ r, height: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColDblClick: (c: number) => { const fit = autoFitColWidth(store, c); const cmd = new SetColWidth({ c, width: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onFill: (source: RangeAddress, target: RangeAddress, ctrlKey: boolean) => { const cmd = new FillRangeCommand({ ctrlKey, source, target }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onMoveRange: (source: RangeAddress, target: RangeAddress, copy?: boolean) => { const op = makeMoveRange({ source, target, copy }); if (cmdManager !== undefined) cmdManager.execute(op); else op.execute(store); }, onZoom: (delta: number) => setView((current) => ({ ...current, zoom: Math.min(200, Math.max(50, current.zoom + delta)) })), onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => callbacks.current.onHeaderContextMenu(info, x, y), onCellContextMenu: (cell: CellAddress, x: number, y: number) => callbacks.current.onCellContextMenu(cell, x, y), onAutoFilterClick: (r: number, c: number, x: number, y: number) => callbacks.current.onAutoFilterClick(r, c, x, y) };
+    const base = { canvas: canvasRef.current, store, zoom: view.zoom, showFormula: view.showFormula, showGrid: view.showGrid, frozenRows: view.frozenRows, frozenCols: view.frozenCols, onCellClick: (cell: CellAddress, shift?: boolean, ctrl?: boolean) => flushSync(() => callbacks.current.onCellClick(cell, shift === true, ctrl === true)), onSelectionChange: (range: RangeAddress, active?: CellAddress, anchor?: CellAddress) => flushSync(() => callbacks.current.onSelectionChange(snapRangeSelection(store, rangeSelection(range, anchor ?? selectedLiveRef.current?.anchor, active ?? { r: range.r2, c: range.c2 })))), onColumnSelect: (c: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(columnSelection(c, TOTAL_ROWS, shift && current?.kind === 'column' ? current.anchor.c : c)); }), onRowSelect: (r: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(rowSelection(r, TOTAL_COLS, shift && current?.kind === 'row' ? current.anchor.r : r)); }), onSheetSelect: () => flushSync(() => callbacks.current.onSelectionChange(sheetSelection(allSheetRange()))), onRowResize: (r: number, height: number) => { const cmd = new SetRowHeight({ r, height }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColResize: (c: number, width: number) => { const cmd = new SetColWidth({ c, width }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onRowDblClick: (r: number) => { const fit = autoFitRowHeight(store, r); const cmd = new SetRowHeight({ r, height: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColDblClick: (c: number) => { const fit = autoFitColWidth(store, c); const cmd = new SetColWidth({ c, width: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onFill: (source: RangeAddress, target: RangeAddress, ctrlKey: boolean) => { const cmd = new FillRangeCommand({ ctrlKey, source, target }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onMoveRange: (source: RangeAddress, target: RangeAddress, copy?: boolean) => { const op = makeMoveRange({ source, target, copy }); if (cmdManager !== undefined) cmdManager.execute(op); else op.execute(store); }, onZoom: (delta: number) => setView((current) => ({ ...current, zoom: Math.min(200, Math.max(50, current.zoom + delta)) })), onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => callbacks.current.onHeaderContextMenu(info, x, y), onCellContextMenu: (cell: CellAddress, x: number, y: number) => callbacks.current.onCellContextMenu(cell, x, y), onAutoFilterClick: (r: number, c: number, x: number, y: number) => callbacks.current.onAutoFilterClick(r, c, x, y) };
     const renderer = new CanvasRenderer(currentSelection === null ? base : { ...base, selectedRange: currentSelection.range, selectionKind: currentSelection.kind, activeCell: currentSelection.active });
     rendererRef.current = renderer;
-    return () => { renderer.destroy(); rendererRef.current = null; };
+    // Container resizes and devicePixelRatio changes (window dragged between
+    // monitors) must re-sync the canvas bitmap — nothing else repaints them.
+    const repaint = (): void => { renderer.invalidateAll(); };
+    const resizeObserver = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(repaint) : null;
+    resizeObserver?.observe(canvasRef.current);
+    let dprQuery = typeof window.matchMedia === 'function' ? window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`) : null;
+    const onDprChange = (): void => {
+      repaint();
+      dprQuery?.removeEventListener('change', onDprChange);
+      dprQuery = typeof window.matchMedia === 'function' ? window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`) : null;
+      dprQuery?.addEventListener('change', onDprChange);
+    };
+    dprQuery?.addEventListener('change', onDprChange);
+    return () => {
+      dprQuery?.removeEventListener('change', onDprChange);
+      resizeObserver?.disconnect();
+      renderer.destroy();
+      rendererRef.current = null;
+    };
   }, [store, view.zoom, view.showFormula, view.showGrid]);
   useEffect(() => rendererRef.current?.setSelection(selected?.range, selected?.kind, selected?.active), [selected]);
   useEffect(() => rendererRef.current?.setFreeze(view.frozenRows, view.frozenCols), [view.frozenRows, view.frozenCols]);

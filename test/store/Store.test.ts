@@ -28,7 +28,8 @@ describe('Store', () => {
     store.subscribe((event) => events.push(event));
     store.setCell(0, 0, { text: 'x' });
 
-    expect(events).toEqual([{ type: 'cell', r: 0, c: 0, cell: { text: 'x' } }]);
+    // Every event carries its sheet id, sheet-1 included.
+    expect(events).toEqual([{ type: 'cell', r: 0, c: 0, cell: { text: 'x' }, sheetId: 'sheet-1' }]);
   });
 
   it('unsubscribe', () => {

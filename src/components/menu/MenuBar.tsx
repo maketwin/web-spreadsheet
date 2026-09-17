@@ -428,13 +428,13 @@ async function paste(ctx: MenuContext): Promise<void> {
 }
 
 function confirmNew(ctx: MenuContext): void {
-  Modal.confirm({ title: '新建工作簿', content: '清空当前工作簿？', onOk: () => restoreEmpty(ctx.store) });
+  Modal.confirm({ title: '新建工作簿', content: '清空当前工作簿？', onOk: () => restoreEmpty(ctx) });
 }
 
-function restoreEmpty(store: Store): void {
-  const empty = new Store();
-  store.getCells().forEach(([key]) => { const [r, c] = key.split(',').map(Number); store.setCell(r ?? 0, c ?? 0, undefined); });
-  empty.getSheets().forEach((sheet) => store.renameSheet(sheet.id, sheet.name));
+/** New workbook: full hot-swap (cells, sheets, merges, styles, rules) like opening a file. */
+function restoreEmpty(ctx: MenuContext): void {
+  ctx.store.replaceAll(new Store().serialize());
+  ctx.cmdManager?.clear();
   message.success('已新建空白工作簿');
 }
 
@@ -486,8 +486,9 @@ function importText(text: string, ctx: MenuContext): void {
   if (text.trim().startsWith('{')) {
     try {
       const data = JSON.parse(text) as SerializedStore;
-      const restored = Store.deserialize(data);
-      restored.getCells().forEach(([key, cell]) => { const [r, c] = key.split(',').map(Number); ctx.store.setCell(r ?? 0, c ?? 0, cell); });
+      // JSON workbooks replace the document wholesale, like the xlsx path.
+      ctx.store.replaceAll(data);
+      ctx.cmdManager?.clear();
       message.success('已导入 JSON 工作簿');
     } catch { message.error('JSON 解析失败'); }
     return;

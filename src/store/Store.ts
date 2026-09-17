@@ -408,7 +408,10 @@ export class Store {
 }
 
 function eventWithSheet<T extends StoreEvent>(event: T, sheetId: string): T {
-  return sheetId === 'sheet-1' ? event : { ...event, sheetId };
+  // Every event carries its sheet id — including sheet-1 — so subscribers
+  // (formula sync, deferred recalc) never lose sheet identity when another
+  // sheet is active.
+  return { ...event, sheetId };
 }
 
 /** Coalescing key for deferred batch events; undefined events always fire in order. */

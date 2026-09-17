@@ -11,7 +11,11 @@ export function startAutoSave(store: Store): AutoSaveHandle {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const flush = (): void => {
     timer = undefined;
-    void saveWorkbook(DEFAULT_ID, store.serialize());
+    // Quota exceeded / private mode / blocked upgrades surface as an error,
+    // never an unhandled rejection crashing later unrelated code.
+    void saveWorkbook(DEFAULT_ID, store.serialize()).catch((err) => {
+      console.error('Auto-save to IndexedDB failed:', err);
+    });
   };
 
   const unsub = store.subscribe(() => {
@@ -21,8 +25,12 @@ export function startAutoSave(store: Store): AutoSaveHandle {
 
   return {
     stop: () => {
-      if (timer !== undefined) clearTimeout(timer);
-      unsub?.();
+      // Flush whatever the debounce was still holding, then detach.
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        flush();
+      }
+      unsub();
     },
   };
 }

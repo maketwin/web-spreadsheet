@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Spreadsheet, SpreadsheetComponent } from '../../src/index';
+import { CanvasRenderer, COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT } from '../../src/renderer/CanvasRenderer';
 import { Store } from '../../src/store/Store';
 
 function installCanvasContext(): void {
@@ -72,6 +73,22 @@ describe('Spreadsheet', () => {
     fireEvent.keyDown(target, { key: 'x' });
 
     expect(screen.getByLabelText('Cell editor')).toHaveValue('x');
+  });
+
+  it('Ctrl+click extends the selection into a multi-range', () => {
+    installCanvasContext();
+    const setExtraRanges = vi.spyOn(CanvasRenderer.prototype, 'setExtraRanges');
+    render(<SpreadsheetComponent store={new Store()} theme={false} />);
+    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+    installCanvasRect(canvas);
+
+    // Plain click selects A1 and clears any extra ranges.
+    fireEvent.mouseDown(canvas, { clientX: ROW_HEADER_WIDTH + 1, clientY: COL_HEADER_HEIGHT + 1 });
+    // Ctrl+click on C3 keeps A1 as an extra range (Excel multi-selection).
+    fireEvent.mouseDown(canvas, { clientX: ROW_HEADER_WIDTH + COL_WIDTH * 2 + 1, clientY: COL_HEADER_HEIGHT + ROW_HEIGHT * 2 + 1, ctrlKey: true });
+
+    expect(setExtraRanges).toHaveBeenCalledTimes(1);
+    expect(setExtraRanges.mock.calls[0]?.[0]).toHaveLength(1);
   });
 
   it('opens the editor on F2 for the selected cell', () => {
