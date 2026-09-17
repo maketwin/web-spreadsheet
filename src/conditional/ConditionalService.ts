@@ -1,11 +1,18 @@
 import type { Store } from '../store/Store';
 import type { Cell, Style } from '../types';
-import { evaluate } from '../formula/evaluator';
+import { evaluate, EXCEL_ERRORS } from '../formula/evaluator';
 import { FormulaParser } from '../formula/parser';
 import type { ConditionalOverlay, ConditionalRule } from './ConditionalRule';
 
 export class ConditionalService {
   private parser = new FormulaParser();
+  /** Rule formulas re-parse per visible cell per paint — cache the ASTs. */
+  private astCache = new Map<string, ReturnType<FormulaParser['parse']>>();
+
+  private parseCached(formula: string): ReturnType<FormulaParser['parse']> {
+    if (!this.astCache.has(formula)) this.astCache.set(formula, this.parser.parse(formula));
+    return this.astCache.get(formula) ?? null;
+  }
 
   /** Compute the conditional overlay for a cell at (r, c). */
   computeOverlay(store: Store, r: number, c: number): ConditionalOverlay {
@@ -33,20 +40,18 @@ export class ConditionalService {
   private applyDataBar(store: Store, r: number, c: number, rule: ConditionalRule & { type: 'dataBar' }): ConditionalOverlay {
     const value = cellNumericValue(store.getCell(r, c));
     if (value === null) return {};
-    const ratio = clamp01((value - rule.min) / (rule.max - rule.min));
-    return { dataBar: { ratio, color: rule.color } };
+    return { dataBar: { ratio: barRatio(value, rule.min, rule.max), color: rule.color } };
   }
 
   private applyColorScale(store: Store, r: number, c: number, rule: ConditionalRule & { type: 'colorScale' }): ConditionalOverlay {
     const value = cellNumericValue(store.getCell(r, c));
     if (value === null) return {};
-    const t = clamp01((value - rule.min) / (rule.max - rule.min));
-    const bgcolor = interpolateColor(rule.minColor, rule.maxColor, t);
+    const bgcolor = interpolateColor(rule.minColor, rule.maxColor, barRatio(value, rule.min, rule.max));
     return { style: { bgcolor } };
   }
 
   private applyFormula(store: Store, rule: ConditionalRule & { type: 'formula' }): ConditionalOverlay {
-    const ast = this.parser.parse(rule.formula);
+    const ast = this.parseCached(rule.formula);
     if (ast === null) return {};
     try {
       const result = evaluate(ast, (x, y, sheetName) =>
@@ -54,10 +59,18 @@ export class ConditionalService {
           ? cellValue(store.getCell(y, x))
           : cellValue(store.getCellBySheetName(sheetName, y, x)),
       );
+      // An error literal (#NAME?, #REF!, …) is not a truthy rule hit.
+      if (typeof result === 'string' && EXCEL_ERRORS.has(result)) return {};
       if (isTruthy(result)) return { style: rule.style };
     } catch { /* formula error → no overlay */ }
     return {};
   }
+}
+
+/** 0..1 bar position; a degenerate min===max rule shows a full bar, never NaN. */
+function barRatio(value: number, min: number, max: number): number {
+  if (!(max > min)) return clamp01(value >= max ? 1 : 0);
+  return clamp01((value - min) / (max - min));
 }
 
 function cellNumericValue(cell: Cell | undefined): number | null {
