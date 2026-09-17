@@ -2,6 +2,7 @@ import { Command } from '../Command';
 import { TOTAL_ROWS } from '../../renderer/CanvasRenderer';
 import { captureSheet, parseKey, restoreSheet, type SheetSnapshot } from './sheetSnapshot';
 import { replaceMerges, shiftMergesForInsert } from '../../util/merge';
+import { shiftSheetFormulas } from './shiftFormulas';
 
 import type { Store } from '../../store/Store';
 
@@ -21,13 +22,15 @@ export class InsertRowCommand extends Command<InsertRowArgs> {
     const cells = store.getCells().map(([key, cell]) => [...parseKey(key), cell] as const);
     cells.filter(([r]) => r >= start).sort((a, b) => b[0] - a[0]).forEach(([r, c, cell]) => {
       store.setCell(r, c, undefined);
-      store.setCell(r + count, c, cell);
+      // Cells pushed past the grid edge are dropped (the grid is fixed-size).
+      if (r + count < TOTAL_ROWS) store.setCell(r + count, c, cell);
     });
     for (let r = TOTAL_ROWS - 1; r >= start; r -= 1) {
-      store.setRow(r + count, store.getRow(r));
+      if (r + count < TOTAL_ROWS) store.setRow(r + count, store.getRow(r));
       store.setRow(r, undefined);
     }
     replaceMerges(store, shiftMergesForInsert(store.getMerges(), start, count, 'row'));
+    shiftSheetFormulas(store, 'row', start, count);
   }
 
   public getUndo(): Command {

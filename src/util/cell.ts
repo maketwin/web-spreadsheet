@@ -1,6 +1,7 @@
 import type { Cell, CellValue, Style } from '../types';
 import { formatValue } from '../format/NumberFormatter';
-import { alpha2num } from './alphabet';
+import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
+import { alpha2num, num2alpha } from './alphabet';
 
 export interface CellAddress {
   readonly r: number;
@@ -122,7 +123,7 @@ export function remapFormulaRows(formula: string, rows: ReadonlyMap<number, numb
       if (!inSortDomain(start.c, c1, c2)) return token;
       const target = rows.get(start.r);
       if (target === undefined) return token;
-      return rebuildRefToken(parts[0] ?? '', target);
+      return rebuildRefTokenRow(parts[0] ?? '', target);
     }
     const startIn = inSortDomain(start.c, c1, c2);
     const endIn = inSortDomain(end.c, c1, c2);
@@ -149,7 +150,7 @@ export function remapFormulaRows(formula: string, rows: ReadonlyMap<number, numb
       from = to;
       to = swap;
     }
-    return `${rebuildRefToken(parts[0] ?? '', from.r)}:${rebuildRefToken(parts[1] ?? '', to.r)}`;
+    return `${rebuildRefTokenRow(parts[0] ?? '', from.r)}:${rebuildRefTokenRow(parts[1] ?? '', to.r)}`;
   });
 }
 
@@ -160,12 +161,134 @@ function scopeNameBefore(formula: string, offset: number): string | undefined {
   return match?.[1] ?? match?.[2];
 }
 
-function inSortDomain(col: number, c1: number, c2: number): boolean {
-  return col >= c1 && col <= c2;
+/** Scope for insert/delete reference rewriting: which sheet's rows/cols moved. */
+export interface ShiftScope {
+  /** Name of the sheet where rows/cols were inserted or deleted. */
+  readonly sheetName: string;
+  /** True for formulas living on OTHER sheets: only `SheetName!`-scoped tokens shift. */
+  readonly scopedOnly?: boolean;
 }
 
-function rebuildRefToken(token: string, r0: number): string {
+/**
+ * Rewrite references for a row insert (count > 0) or delete (count < 0) at
+ * 0-based `start`, Excel semantics: refs below an insert shift down; ranges
+ * spanning an insert grow at shifted endpoints only; deleted refs become
+ * #REF!; ranges shrink with deleted endpoints clamping into the zone, and a
+ * fully-deleted range becomes #REF!. Tokens scoped to another sheet and
+ * (with scopedOnly) unscoped tokens in other sheets' formulas stay put.
+ */
+export function shiftFormulaRows(formula: string, start: number, count: number, scope?: ShiftScope): string {
+  return formula.replace(REF_OR_RANGE_TOKEN, (token, offset: number) => {
+    if (!tokenInShiftScope(formula, offset, scope)) return token;
+    const clamp = (i: number): number => Math.min(i, TOTAL_ROWS - 1); // fixed grid: Excel clamps refs at the edge
+    const parts = token.split(':');
+    if (parts.length === 1) {
+      const ref = parseRefToken(token);
+      if (ref === null) return token;
+      const mapped = shiftAxis(ref.r, start, count);
+      return mapped < 0 ? '#REF!' : rebuildRefTokenRow(token, clamp(mapped));
+    }
+    const head = parseRefToken(parts[0] ?? '');
+    const tail = parseRefToken(parts[1] ?? '');
+    if (head === null || tail === null) return token;
+    const shifted = shiftRangeAxis(head.r, tail.r, start, count);
+    if (shifted === '#REF!') return '#REF!';
+    const [lo, hi] = shifted;
+    return `${rebuildRefTokenRow(parts[0] ?? '', clamp(lo))}:${rebuildRefTokenRow(parts[1] ?? '', clamp(hi))}`;
+  });
+}
+
+/** Column counterpart of {@link shiftFormulaRows}. */
+export function shiftFormulaCols(formula: string, start: number, count: number, scope?: ShiftScope): string {
+  return formula.replace(REF_OR_RANGE_TOKEN, (token, offset: number) => {
+    if (!tokenInShiftScope(formula, offset, scope)) return token;
+    const clamp = (i: number): number => Math.min(i, TOTAL_COLS - 1); // fixed grid: Excel clamps refs at the edge
+    const parts = token.split(':');
+    if (parts.length === 1) {
+      const ref = parseRefToken(token);
+      if (ref === null) return token;
+      const mapped = shiftAxis(ref.c, start, count);
+      return mapped < 0 ? '#REF!' : rebuildRefTokenCol(token, clamp(mapped));
+    }
+    const head = parseRefToken(parts[0] ?? '');
+    const tail = parseRefToken(parts[1] ?? '');
+    if (head === null || tail === null) return token;
+    const shifted = shiftRangeAxis(head.c, tail.c, start, count);
+    if (shifted === '#REF!') return '#REF!';
+    const [lo, hi] = shifted;
+    return `${rebuildRefTokenCol(parts[0] ?? '', clamp(lo))}:${rebuildRefTokenCol(parts[1] ?? '', clamp(hi))}`;
+  });
+}
+
+function tokenInShiftScope(formula: string, offset: number, scope: ShiftScope | undefined): boolean {
+  const prev = formula[offset - 1];
+  if (prev !== undefined && /[\w$.]/.test(prev)) return false;
+  if (prev === '!') return scopeNameBefore(formula, offset) === scope?.sheetName;
+  return scope?.scopedOnly !== true;
+}
+
+/** Map one 0-based index through an insert/delete; negative means deleted (#REF!). */
+export function shiftAxis(index: number, start: number, count: number): number {
+  if (count > 0) return index >= start ? index + count : index;
+  const deleted = -count;
+  if (index >= start + deleted) return index - deleted;
+  if (index >= start) return -1;
+  return index;
+}
+
+/** Map a range's endpoints; a range fully inside the deleted zone dies. */
+function shiftRangeAxis(a: number, b: number, start: number, count: number): readonly [number, number] | '#REF!' {
+  const lo = Math.min(a, b);
+  const hi = Math.max(a, b);
+  if (count < 0 && lo >= start && hi < start - count) return '#REF!';
+  const map = (index: number): number => {
+    if (count > 0) return index >= start ? index + count : index;
+    const deleted = -count;
+    if (index >= start + deleted) return index - deleted;
+    if (index >= start) return start; // deleted endpoint collapses into the zone
+    return index;
+  };
+  return [map(lo), map(hi)];
+}
+
+/**
+ * Shift an internal "r1,c1[:r2,c2]" range (named ranges, conditional-format
+ * and validation ranges, autofilter) with the same semantics as
+ * {@link shiftRangeAxis}: inserts grow, deletes shrink, a fully deleted
+ * range returns null. Unparsable input is returned unchanged.
+ */
+export function shiftInternalRange(range: string, axis: 'row' | 'col', start: number, count: number): string | null {
+  const read = (part: string | undefined): { readonly r: number; readonly c: number } | null => {
+    const coords = (part ?? '').split(',').map(Number);
+    const r = coords[0];
+    const c = coords[1];
+    return r !== undefined && c !== undefined && Number.isFinite(r) && Number.isFinite(c) ? { r, c } : null;
+  };
+  const parts = range.split(':');
+  const head = read(parts[0]);
+  const tail = parts[1] !== undefined ? read(parts[1]) : head;
+  if (head === null || tail === null) return range;
+  const pick = (p: { readonly r: number; readonly c: number }): number => (axis === 'row' ? p.r : p.c);
+  const shifted = shiftRangeAxis(pick(head), pick(tail), start, count);
+  if (shifted === '#REF!') return null;
+  const max = axis === 'row' ? TOTAL_ROWS - 1 : TOTAL_COLS - 1;
+  const [lo, hi] = shifted;
+  const rebuild = (p: { readonly r: number; readonly c: number }, v: number): string =>
+    axis === 'row' ? `${Math.min(v, max)},${p.c}` : `${p.r},${Math.min(v, max)}`;
+  const first = rebuild(head, lo);
+  return parts[1] !== undefined ? `${first}:${rebuild(tail, hi)}` : first;
+}
+
+function rebuildRefTokenRow(token: string, r0: number): string {
   return token.replace(/[1-9]\d*$/, String(r0 + 1));
+}
+
+function rebuildRefTokenCol(token: string, c0: number): string {
+  return token.replace(/^(\$?)[A-Za-z]+/, (_, dollar: string) => `${dollar}${num2alpha(c0)}`);
+}
+
+function inSortDomain(col: number, c1: number, c2: number): boolean {
+  return col >= c1 && col <= c2;
 }
 
 function parseRefToken(token: string): { readonly r: number; readonly c: number } | null {

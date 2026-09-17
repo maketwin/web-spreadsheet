@@ -2,6 +2,7 @@ import { Command } from '../Command';
 import { TOTAL_COLS } from '../../renderer/CanvasRenderer';
 import { captureSheet, parseKey, restoreSheet, type SheetSnapshot } from './sheetSnapshot';
 import { replaceMerges, shiftMergesForDelete } from '../../util/merge';
+import { shiftSheetFormulas } from './shiftFormulas';
 
 import type { Store } from '../../store/Store';
 
@@ -24,6 +25,7 @@ export class DeleteColCommand extends Command<DeleteColArgs> {
     shiftCellsLeft(store, start, count);
     for (let c = start; c < TOTAL_COLS; c += 1) store.setCol(c, store.getCol(c + count));
     replaceMerges(store, shiftMergesForDelete(store.getMerges(), start, start + count - 1, 'col'));
+    shiftSheetFormulas(store, 'col', start, -count);
   }
 
   public getUndo(): Command {
