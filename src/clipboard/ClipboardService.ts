@@ -62,7 +62,10 @@ function readCellTexts(store: Store, range: RangeAddress): string[][] {
 }
 
 function toTsv(rows: readonly (readonly string[])[]): string {
-  return rows.map((row) => row.join('\t')).join('\n');
+  // Excel-style quoting on write: a field containing a delimiter, newline, or
+  // quote is wrapped and its quotes doubled, so copy/paste round-trips.
+  const quote = (value: string): string => (/[\t\n\r"]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value);
+  return rows.map((row) => row.map(quote).join('\t')).join('\n');
 }
 
 function toHtml(rows: readonly (readonly string[])[]): string {
@@ -102,7 +105,9 @@ function parseDelimited(text: string): string[][] {
   const pushField = (): void => { row.push(field); field = ''; };
   const pushRow = (): void => { pushField(); rows.push(row); row = []; };
   while (i < text.length) {
-    if (text[i] === '"') {
+    // Only a quote at the very start of a field opens a quoted run — a quote
+    // mid-field (`ab"c`) is a literal, like Excel's external paste handling.
+    if (text[i] === '"' && field === '') {
       // Quoted field: consume until the closing quote.
       i += 1;
       while (i < text.length) {
