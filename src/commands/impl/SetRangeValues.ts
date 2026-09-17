@@ -13,13 +13,23 @@ export interface SetRangeValuesArgs {
   readonly r2: number;
   readonly c2: number;
   readonly values: readonly (readonly (CellPatch | undefined)[])[];
+  /** Target sheet; defaults to the active sheet (all pre-existing callers). */
+  readonly sheetId?: string;
 }
 
 export class SetRangeValues extends Command<SetRangeValuesArgs> {
   private oldValues: CellMatrix = [];
+  /** Sheet the last execute() ran against: the explicit arg, else the active sheet at execution time —
+   * so undo/redo restore to the right sheet even if the user has switched since. */
+  private execSheetId: string | undefined;
 
   public execute(store: Store): void {
-    const { r1, c1, r2, c2, values } = this.args;
+    const { r1, c1, r2, c2, values, sheetId } = this.args;
+    // First run without an explicit sheetId targets the active sheet and
+    // records it; a redo (re-run) reuses that sheet even if the user has
+    // switched since.
+    const target = sheetId ?? this.execSheetId ?? store.getActiveSheetId();
+    this.execSheetId = target;
     this.oldValues = [];
 
     for (let r = r1; r <= r2; r += 1) {
@@ -27,11 +37,11 @@ export class SetRangeValues extends Command<SetRangeValuesArgs> {
       const valueRow = values[r - r1];
 
       for (let c = c1; c <= c2; c += 1) {
-        const oldCell = store.getCell(r, c);
+        const oldCell = store.getCell(r, c, target);
         const newValue = valueRow?.[c - c1];
         row.push(oldCell);
 
-        if (newValue !== undefined) store.setCell(r, c, nextCell(oldCell, newValue));
+        if (newValue !== undefined) store.setCell(r, c, nextCell(oldCell, newValue), target);
       }
       this.oldValues.push(row);
     }
@@ -42,6 +52,7 @@ export class SetRangeValues extends Command<SetRangeValuesArgs> {
       r1: this.args.r1,
       c1: this.args.c1,
       values: this.oldValues,
+      ...(this.execSheetId !== undefined ? { sheetId: this.execSheetId } : {}),
     });
   }
 }
@@ -79,13 +90,14 @@ interface RestoreRangeValuesArgs {
   readonly r1: number;
   readonly c1: number;
   readonly values: CellMatrix;
+  readonly sheetId?: string;
 }
 
 class RestoreRangeValues extends Command<RestoreRangeValuesArgs> {
   public execute(store: Store): void {
     this.args.values.forEach((row, rowIndex) => {
       row.forEach((cell, colIndex) => {
-        store.setCell(this.args.r1 + rowIndex, this.args.c1 + colIndex, cell);
+        store.setCell(this.args.r1 + rowIndex, this.args.c1 + colIndex, cell, this.args.sheetId);
       });
     });
   }

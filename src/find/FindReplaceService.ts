@@ -1,32 +1,27 @@
 import type { CellAddress } from '../renderer/coordinate';
-import type { Store } from '../store/Store';
+import type { Store, SheetInfo } from '../store/Store';
 import type { CommandManager } from '../commands/CommandManager';
 import type { CellPatch } from '../commands/impl/SetRangeValues';
 import { executeRange } from '../util/rangeValues';
 import { formulaText } from '../util/cell';
 
-/** Replace every occurrence of the find text inside `text` (case-aware), leaving the rest of the cell intact (Excel). */
-export function replaceMatch(text: string, options: FindOptions): string {
-  const replacement = options.replaceText ?? '';
-  const find = options.findText;
-  if (find.length === 0) return text;
-  if (options.caseSensitive === true) {
-    return text.split(find).join(replacement);
-  }
-  const lowerText = text.toLowerCase();
-  const lowerFind = find.toLowerCase();
-  let out = '';
-  let i = 0;
-  while (i <= text.length) {
-    const idx = lowerText.indexOf(lowerFind, i);
-    if (idx < 0) { out += text.slice(i); break; }
-    out += text.slice(i, idx) + replacement;
-    i = idx + find.length;
-  }
-  return out;
+/** Search scope: active sheet only, or every sheet starting from the active one (Excel "Within"). */
+export type FindScope = 'sheet' | 'workbook';
+
+export interface FindOptions {
+  readonly findText: string;
+  readonly replaceText?: string;
+  readonly caseSensitive?: boolean;
+  /** Cell must equal the find text exactly (Excel "Match entire cell contents"). */
+  readonly matchEntireCell?: boolean;
+  /** findText is a regular expression; replacement supports $1 group references. */
+  readonly useRegex?: boolean;
+  readonly scope?: FindScope;
 }
 
 export interface FindMatch {
+  readonly sheetId: string;
+  readonly sheetName: string;
   readonly r: number;
   readonly c: number;
   readonly text: string;
@@ -35,21 +30,132 @@ export interface FindMatch {
 export interface FindResult {
   readonly matches: readonly FindMatch[];
   readonly current: number;
-  readonly currentCell: CellAddress | null;
+  readonly currentCell: FindMatch | null;
 }
 
-export interface FindOptions {
-  readonly findText: string;
-  readonly replaceText?: string;
-  readonly caseSensitive?: boolean;
-  readonly wholeWord?: boolean;
+export interface ReplaceAllResult {
+  /** Occurrences replaced (a cell with three hits counts three, like Excel). */
+  readonly replacements: number;
+  /** Distinct cells touched. */
+  readonly cells: number;
 }
 
-/** Search all cells in the store for matching text. */
-/** Parse a "r,c" patch map key back to coordinates. */
-function patchKeyCoords(key: string): readonly [number, number] {
+/** Invalid regex in FindOptions.useRegex mode. */
+export class InvalidFindPatternError extends Error {
+  public constructor(pattern: string) {
+    super(`无效的正则表达式: ${pattern}`);
+    this.name = 'InvalidFindPatternError';
+  }
+}
+
+interface CompiledMatcher {
+  /** Does this cell text match? */
+  readonly test: (text: string) => boolean;
+  /** Non-overlapping occurrence count in one cell text. */
+  readonly countIn: (text: string) => number;
+  /** Replace every occurrence inside one cell text. */
+  readonly replaceIn: (text: string) => string;
+}
+
+function compileMatcher(options: FindOptions): CompiledMatcher {
+  const find = options.findText;
+  if (find.length === 0) {
+    return { test: () => false, countIn: () => 0, replaceIn: (t) => t };
+  }
+  if (options.useRegex === true) {
+    let pattern: RegExp;
+    try {
+      pattern = new RegExp(find, options.caseSensitive === true ? 'g' : 'gi');
+    } catch {
+      throw new InvalidFindPatternError(find);
+    }
+    // Fresh instance per call — a shared /g regex carries lastIndex state.
+    const global = (): RegExp => new RegExp(pattern.source, pattern.flags);
+    const scan = (text: string): number => {
+      const re = global();
+      let n = 0;
+      let m = re.exec(text);
+      while (m !== null) {
+        n += 1;
+        if (m[0].length === 0) re.lastIndex += 1; // zero-width match: advance
+        m = re.exec(text);
+      }
+      return n;
+    };
+    const replacement = options.replaceText ?? '';
+    return {
+      test: (text) => scan(text) > 0,
+      countIn: scan,
+      replaceIn: (text) => text.replace(global(), replacement),
+    };
+  }
+  if (options.matchEntireCell === true) {
+    const target = options.caseSensitive === true ? find : find.toLowerCase();
+    const equals = (text: string): boolean => (options.caseSensitive === true ? text : text.toLowerCase()) === target;
+    const replacement = options.replaceText ?? '';
+    return {
+      test: equals,
+      countIn: (text) => (equals(text) ? 1 : 0),
+      replaceIn: (text) => (equals(text) ? replacement : text),
+    };
+  }
+  // Substring contains; case-insensitive via lowercased indexOf.
+  const needle = options.caseSensitive === true ? find : find.toLowerCase();
+  const lower = (text: string): string => (options.caseSensitive === true ? text : text.toLowerCase());
+  const indexOf = (text: string, from: number): number => lower(text).indexOf(needle, from);
+  const replacement = options.replaceText ?? '';
+  return {
+    test: (text) => indexOf(text, 0) >= 0,
+    countIn: (text) => {
+      let n = 0;
+      let i = indexOf(text, 0);
+      while (i >= 0) {
+        n += 1;
+        i = indexOf(text, i + needle.length);
+      }
+      return n;
+    },
+    replaceIn: (text) => {
+      let out = '';
+      let cursor = 0;
+      for (;;) {
+        const idx = indexOf(text, cursor);
+        if (idx < 0) return out + text.slice(cursor);
+        out += text.slice(cursor, idx) + replacement;
+        cursor = idx + needle.length;
+      }
+    },
+  };
+}
+
+/** Sheets to search, workbook order rotated so the active sheet comes first (Excel starts there). */
+function searchSheets(store: Store, scope: FindScope): readonly SheetInfo[] {
+  const sheets = store.getSheets();
+  if (scope === 'sheet') {
+    const active = sheets.find((s) => s.id === store.getActiveSheetId());
+    return active !== undefined ? [active] : sheets.slice(0, 1);
+  }
+  const activeIndex = sheets.findIndex((s) => s.id === store.getActiveSheetId());
+  if (activeIndex <= 0) return sheets;
+  return [...sheets.slice(activeIndex), ...sheets.slice(0, activeIndex)];
+}
+
+/** Parse a "r,c" cell-map key back to coordinates. */
+function keyCoords(key: string): readonly [number, number] {
   const sep = key.indexOf(',');
   return [Number(key.slice(0, sep)), Number(key.slice(sep + 1))];
+}
+
+/** Searchable source text of a cell: formula source first, then plain text (Excel "Look in: Formulas"). */
+function cellSource(cell: { text: string; formula?: string }): string {
+  return formulaText(cell) ?? cell.text;
+}
+
+interface CellWrite {
+  readonly sheetId: string;
+  readonly r: number;
+  readonly c: number;
+  readonly patch: CellPatch;
 }
 
 export class FindReplaceService {
@@ -63,19 +169,13 @@ export class FindReplaceService {
     if (this.matches.length === 0) {
       return { matches: [], current: -1, currentCell: null };
     }
-
+    const activeSheetId = store.getActiveSheetId();
     if (startFrom !== undefined && startFrom !== null) {
-      this.currentIndex = this.findNextIndex(startFrom);
+      this.currentIndex = this.findNextIndex(startFrom, activeSheetId);
     } else {
       this.currentIndex = 0;
     }
-
-    const match = this.matches[this.currentIndex];
-    return {
-      matches: this.matches,
-      current: this.currentIndex,
-      currentCell: match !== undefined ? { r: match.r, c: match.c } : null,
-    };
+    return this.snapshot();
   }
 
   public findNext(): FindResult {
@@ -83,94 +183,58 @@ export class FindReplaceService {
       return { matches: [], current: -1, currentCell: null };
     }
     this.currentIndex = (this.currentIndex + 1) % this.matches.length;
-    const match = this.matches[this.currentIndex];
-    return {
-      matches: this.matches,
-      current: this.currentIndex,
-      currentCell: match !== undefined ? { r: match.r, c: match.c } : null,
-    };
+    return this.snapshot();
   }
 
-  public replaceCurrent(store: Store, options: FindOptions, cmdManager?: CommandManager): FindResult {
-    if (this.currentIndex < 0 || this.currentIndex >= this.matches.length) {
-      return { matches: this.matches, current: this.currentIndex, currentCell: null };
+  public findPrevious(): FindResult {
+    if (this.matches.length === 0) {
+      return { matches: [], current: -1, currentCell: null };
     }
-    const match = this.matches[this.currentIndex];
-    if (match !== undefined && options.replaceText !== undefined) {
-      const patch = this.replacementPatch(store, match.r, match.c, options);
-      if (patch !== undefined) executeRange(store, cmdManager, match.r, match.c, [[patch]]);
-    }
-    return this.find(store, options, match !== undefined ? { r: match.r, c: match.c } : null);
+    this.currentIndex = this.currentIndex <= 0 ? this.matches.length - 1 : this.currentIndex - 1;
+    return this.snapshot();
   }
 
-  public replaceAll(store: Store, options: FindOptions, cmdManager?: CommandManager): number {
-    const allMatches = this.searchAll(store, options);
-    let count = 0;
-    const patches = new Map<string, CellPatch>();
-    for (const match of allMatches) {
-      if (options.replaceText === undefined) continue;
-      const patch = this.replacementPatch(store, match.r, match.c, options);
-      if (patch !== undefined) { patches.set(`${match.r},${match.c}`, patch); count += 1; }
+  /** Replace inside the current match's cell, then re-scan and land on the next match after it. */
+  public replaceCurrent(store: Store, options: FindOptions, cmdManager?: CommandManager): { result: FindResult; replaced: boolean } {
+    const match = this.matches[this.currentIndex];
+    if (match === undefined) {
+      return { result: this.snapshot(), replaced: false };
     }
-    if (patches.size > 0) this.applyScattered(store, cmdManager, patches);
+    let replaced = false;
+    if (options.replaceText !== undefined) {
+      const patch = this.replacementPatch(store, match, options);
+      if (patch !== undefined) {
+        this.applyWrites(store, cmdManager, [{ sheetId: match.sheetId, r: match.r, c: match.c, patch }]);
+        replaced = true;
+      }
+    }
+    const result = this.find(store, options, { r: match.r, c: match.c });
+    return { result, replaced };
+  }
+
+  public replaceAll(store: Store, options: FindOptions, cmdManager?: CommandManager): ReplaceAllResult {
+    const matcher = compileMatcher(options);
+    let replacements = 0;
+    let cells = 0;
+    const writes: CellWrite[] = [];
+    for (const sheet of searchSheets(store, options.scope ?? 'sheet')) {
+      for (const [key, cell] of store.getCells(sheet.id)) {
+        const source = cellSource(cell);
+        const hits = matcher.countIn(source);
+        if (hits <= 0) continue;
+        const next = matcher.replaceIn(source);
+        if (next === source) continue;
+        const [r, c] = keyCoords(key);
+        if (!Number.isInteger(r) || !Number.isInteger(c)) continue;
+        replacements += hits;
+        cells += 1;
+        writes.push({ sheetId: sheet.id, r, c, patch: { text: next } });
+      }
+    }
+    if (writes.length > 0) this.applyWrites(store, cmdManager, writes);
     this.matches = [];
     this.currentIndex = -1;
-    return count;
-  }
-
-  /**
-   * Excel's Replace All is one undo step. Matches usually sit in a compact
-   * block, so a single bounding-box SetRangeValues covers it; scattered
-   * matches (huge box) fall back to per-cell patches — still undoable, just
-   * not one step.
-   */
-  private applyScattered(store: Store, cmdManager: CommandManager | undefined, patches: Map<string, CellPatch>): void {
-    let r1 = Infinity; let c1 = Infinity; let r2 = -1; let c2 = -1;
-    for (const key of patches.keys()) {
-      const [r, c] = patchKeyCoords(key);
-      r1 = Math.min(r1, r); c1 = Math.min(c1, c); r2 = Math.max(r2, r); c2 = Math.max(c2, c);
-    }
-    const boxArea = (r2 - r1 + 1) * (c2 - c1 + 1);
-    if (boxArea > patches.size * 4 + 16) {
-      for (const [key, patch] of patches) {
-        const [r, c] = patchKeyCoords(key);
-        executeRange(store, cmdManager, r, c, [[patch]]);
-      }
-      return;
-    }
-    const values: CellPatch[][] = [];
-    for (let r = r1; r <= r2; r += 1) {
-      const row: CellPatch[] = [];
-      for (let c = c1; c <= c2; c += 1) {
-        const patch = patches.get(`${r},${c}`);
-        row.push(patch ?? this.identityPatch(store, r, c));
-      }
-      values.push(row);
-    }
-    executeRange(store, cmdManager, r1, c1, values);
-  }
-
-  /** Patch for an untouched cell inside a Replace All bounding box: keep it byte-identical. */
-  private identityPatch(store: Store, r: number, c: number): CellPatch {
-    const cell = store.getCell(r, c);
-    if (cell === undefined) return { text: '' };
-    const formula = formulaText(cell);
-    if (formula !== undefined) return { text: cell.text, formula };
-    return { text: cell.text };
-  }
-
-  /**
-   * Patch rewriting the matched substring in one cell. Excel's default
-   * "Look in: Formulas": a formula cell is rewritten in its formula source, a
-   * plain cell in its text. Undefined when the rewrite changes nothing.
-   */
-  private replacementPatch(store: Store, r: number, c: number, options: FindOptions): CellPatch | undefined {
-    if (options.replaceText === undefined) return undefined;
-    const cell = store.getCell(r, c);
-    const source = formulaText(cell) ?? cell?.text ?? '';
-    const next = replaceMatch(source, options);
-    if (next === source) return undefined;
-    return { text: next };
+    return { replacements, cells };
   }
 
   public getMatches(): readonly FindMatch[] {
@@ -181,48 +245,103 @@ export class FindReplaceService {
     return this.currentIndex;
   }
 
+  /** Jump the cursor to a match (result-list click); ignored when out of range. */
+  public setCurrentIndex(index: number): void {
+    if (index >= 0 && index < this.matches.length) this.currentIndex = index;
+  }
+
+  /**
+   * Write patches through SetRangeValues commands, grouped per target sheet:
+   * the sheet is activated for its group (executeRange writes to the active
+   * sheet; SetRangeValues records the execution sheet so undo/redo stay
+   * correct), a dense group lands as ONE command (single undo), a scattered
+   * group falls back to one command per cell. Unmatched cells inside a
+   * bounding box pass as `undefined` and are never touched.
+   */
+  private applyWrites(store: Store, cmdManager: CommandManager | undefined, writes: readonly CellWrite[]): void {
+    if (writes.length === 0) return;
+    const originalSheet = store.getActiveSheetId();
+    const bySheet = new Map<string, CellWrite[]>();
+    for (const w of writes) {
+      const list = bySheet.get(w.sheetId);
+      if (list === undefined) bySheet.set(w.sheetId, [w]);
+      else list.push(w);
+    }
+    for (const [sheetId, list] of bySheet) {
+      if (store.getActiveSheetId() !== sheetId) store.activateSheet(sheetId);
+      let r1 = Infinity; let c1 = Infinity; let r2 = -1; let c2 = -1;
+      for (const w of list) {
+        r1 = Math.min(r1, w.r); c1 = Math.min(c1, w.c);
+        r2 = Math.max(r2, w.r); c2 = Math.max(c2, w.c);
+      }
+      const boxArea = (r2 - r1 + 1) * (c2 - c1 + 1);
+      if (boxArea <= list.length * 4 + 16) {
+        const patchAt = new Map(list.map((w) => [`${w.r},${w.c}`, w.patch]));
+        const values: Array<Array<CellPatch | undefined>> = [];
+        for (let r = r1; r <= r2; r += 1) {
+          const row: Array<CellPatch | undefined> = [];
+          for (let c = c1; c <= c2; c += 1) row.push(patchAt.get(`${r},${c}`));
+          values.push(row);
+        }
+        executeRange(store, cmdManager, r1, c1, values);
+      } else {
+        for (const w of list) executeRange(store, cmdManager, w.r, w.c, [[w.patch]]);
+      }
+    }
+    if (store.getActiveSheetId() !== originalSheet) store.activateSheet(originalSheet);
+  }
+
+  /**
+   * Rewrites the matched text in one cell. Excel's "Look in: Formulas": a
+   * formula cell is rewritten in its formula source (and recalculates), a
+   * plain cell in its text. Undefined when the rewrite changes nothing.
+   */
+  private replacementPatch(store: Store, match: FindMatch, options: FindOptions): CellPatch | undefined {
+    if (options.replaceText === undefined) return undefined;
+    const cell = store.getCell(match.r, match.c, match.sheetId);
+    const source = cell !== undefined ? cellSource(cell) : '';
+    const next = compileMatcher(options).replaceIn(source);
+    if (next === source) return undefined;
+    return { text: next };
+  }
+
   private searchAll(store: Store, options: FindOptions): FindMatch[] {
     const results: FindMatch[] = [];
     if (options.findText.length === 0) return results;
-
-    const cells = store.getCells();
-    for (const [key, cell] of cells) {
-      const text = cell.text;
-      if (this.matchText(text, options)) {
-        const parts = key.split(',');
-        const r = Number(parts[0]);
-        const c = Number(parts[1]);
-        if (!Number.isNaN(r) && !Number.isNaN(c)) {
-          results.push({ r, c, text });
-        }
+    const matcher = compileMatcher(options);
+    for (const sheet of searchSheets(store, options.scope ?? 'sheet')) {
+      for (const [key, cell] of store.getCells(sheet.id)) {
+        if (!matcher.test(cellSource(cell))) continue;
+        const [r, c] = keyCoords(key);
+        if (!Number.isInteger(r) || !Number.isInteger(c)) continue;
+        results.push({ sheetId: sheet.id, sheetName: sheet.name, r, c, text: cellSource(cell) });
       }
     }
-
-    results.sort((a, b) => a.r !== b.r ? a.r - b.r : a.c - b.c);
+    // searchSheets is already workbook-rotated; sort within each sheet group
+    // by r then c so navigation runs left-to-right, top-to-bottom (Excel order).
+    results.sort((a, b) => {
+      if (a.sheetId !== b.sheetId) return 0; // stable sort keeps sheet-group order
+      return a.r !== b.r ? a.r - b.r : a.c - b.c;
+    });
     return results;
   }
 
-  private matchText(text: string, options: FindOptions): boolean {
-    const target = options.caseSensitive === true ? text : text.toLowerCase();
-    const find = options.caseSensitive === true ? options.findText : options.findText.toLowerCase();
-    if (options.wholeWord === true) {
-      return target === find;
-    }
-    return target.includes(find);
-  }
-
-  private findNextIndex(startFrom: CellAddress): number {
-    let best = -1;
-    let bestDist = Infinity;
+  /** First match strictly after the cursor cell within its sheet, else the first match overall. */
+  private findNextIndex(startFrom: CellAddress, activeSheetId: string): number {
     for (let i = 0; i < this.matches.length; i += 1) {
       const m = this.matches[i];
-      if (m === undefined) continue;
-      const after = m.r > startFrom.r || (m.r === startFrom.r && m.c > startFrom.c);
-      if (after) {
-        const dist = (m.r - startFrom.r) * 10000 + (m.c - startFrom.c);
-        if (dist < bestDist) { bestDist = dist; best = i; }
-      }
+      if (m === undefined || m.sheetId !== activeSheetId) continue;
+      if (m.r > startFrom.r || (m.r === startFrom.r && m.c > startFrom.c)) return i;
     }
-    return best >= 0 ? best : 0;
+    return 0;
+  }
+
+  private snapshot(): FindResult {
+    const match = this.matches[this.currentIndex];
+    return {
+      matches: this.matches,
+      current: this.currentIndex,
+      currentCell: match !== undefined ? match : null,
+    };
   }
 }

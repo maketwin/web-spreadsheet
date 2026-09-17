@@ -84,6 +84,8 @@ export class CanvasRenderer {
   private pinchAccum = 0;
   private rafId: number | null = null;
   private highlightMatches: readonly CellAddress[] = [];
+  /** Index into highlightMatches of the current find match (orange outline). */
+  private highlightCurrent = -1;
   private editing = false;
   private cachedTheme: CanvasTheme | null = null;
   private canvasCssW = 0;
@@ -265,7 +267,7 @@ export class CanvasRenderer {
     this.blitValid = false;
     this.invalidateAll();
   }
-  public setHighlightMatches(cells: readonly CellAddress[]): void { this.highlightMatches = cells; this.invalidateAll(); }
+  public setHighlightMatches(cells: readonly CellAddress[], current = -1): void { this.highlightMatches = cells; this.highlightCurrent = current; this.invalidateAll(); }
 
   private bindEvents(): void {
     if (!this.opts.canvas.hasAttribute('tabindex')) this.opts.canvas.tabIndex = 0;
@@ -1286,14 +1288,27 @@ export class CanvasRenderer {
     this.paintHighlights(ctx, theme);
   }
 
-  /** Paint find-match highlight cells with light yellow background. */
+  /** Paint find-match highlights: light yellow cells, orange outline on the current match.
+   * Clipped to the visible range — off-screen matches cost nothing. */
   private paintHighlights(ctx: CanvasRenderingContext2D, _theme: CanvasTheme): void {
     if (this.highlightMatches.length === 0) return;
+    const vis = this.scroller.getVisibleRange();
     ctx.save();
-    for (const cell of this.highlightMatches) {
+    for (let i = 0; i < this.highlightMatches.length; i += 1) {
+      const cell = this.highlightMatches[i];
+      if (cell === undefined) continue;
+      if (cell.r < vis.startRow || cell.r >= vis.endRow || cell.c < vis.startCol || cell.c >= vis.endCol) continue;
       const { x, y } = this.cellVP(cell.r, cell.c);
+      const w = this.scroller.getColWidth(cell.c);
+      const h = this.scroller.getRowHeight(cell.r);
       ctx.fillStyle = 'rgba(255,255,0,0.3)';
-      ctx.fillRect(x + 1, y + 1, this.scroller.getColWidth(cell.c) - 2, this.scroller.getRowHeight(cell.r) - 2);
+      ctx.fillRect(x + 1, y + 1, w - 2, h - 2);
+      if (i === this.highlightCurrent) {
+        // Excel colors the active find hit orange so it stands out from the rest.
+        ctx.strokeStyle = '#e8862c';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x + 1, y + 1, w - 2, h - 2);
+      }
     }
     ctx.restore();
   }
@@ -1537,6 +1552,9 @@ export class CanvasRenderer {
       this.scroller.setRowHeight(e.r, hidden ? 0 : h !== undefined ? h * z : this.defaultRowHeight());
     }
     if (e.type === 'col') { const w = e.meta?.width; this.scroller.setColWidth(e.c, w !== undefined ? w * z : this.defaultColWidth()); }
+    // Find highlights belong to their sheet; switching sheets must not paint
+    // stale coordinates onto the new one.
+    if (e.type === 'sheet' && e.action === 'activate') { this.highlightMatches = []; this.highlightCurrent = -1; }
     this.invalidateAll();
   }
 }

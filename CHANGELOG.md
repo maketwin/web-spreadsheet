@@ -4,6 +4,19 @@
 
 ### New Features (Excel parity batch)
 
+- **Find & Replace, rebuilt** — The dialog (Ctrl+F / Ctrl+H) gains match
+  options (case-sensitive, match entire cell, regex with `$1` group
+  references and `InvalidFindPatternError` reporting), a sheet/workbook
+  scope selector (workbook search walks sheets from the active one), a
+  clickable find-all result list with sheet-tagged addresses, and
+  previous/next navigation. The canvas highlights every hit in yellow with
+  an orange outline on the current match, clipped to the viewport, cleared
+  on dialog close and on sheet switches. Replace All now counts
+  occurrences (not cells, Excel-style), reports both counts, writes per
+  sheet as single undoable commands (dense blocks = one undo step), and
+  cross-sheet undo/redo restore to their original sheets
+  (`SetRangeValues` records its execution-time sheet). Live 250 ms
+  re-scan on query/option change keeps the current match selected.
 - **Printing, rebuilt** — `文件 → 打印...` and `Ctrl/Cmd+P` open a real print
   preview instead of dumping the viewport through `window.print()`. The sheet
   is paginated from its used range (paper A4/Letter/A3, portrait/landscape,

@@ -66,6 +66,15 @@
       .ant-modal-root { display: none !important; }
     }
 
+    /* Find & replace result list */
+    .ss-find-list { max-height: 220px; overflow: auto; border: 1px solid var(--ss-border); border-radius: 4px; padding: 2px 0; background: var(--ss-bg); }
+    .ss-find-row { display: flex; gap: 10px; align-items: center; width: 100%; padding: 3px 10px; border: 0; background: transparent; color: var(--ss-text); font: 12px "Segoe UI", "Microsoft YaHei", sans-serif; text-align: left; cursor: pointer; }
+    .ss-find-row:hover { background: var(--ss-header-bg); }
+    .ss-find-row--current { background: var(--ss-selected); outline: 1px solid var(--ss-accent); }
+    .ss-find-addr { flex: 0 0 110px; color: var(--ss-accent); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ss-find-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ss-find-more { padding: 4px 10px; font-size: 12px; color: var(--ss-text-light); }
+
     /* Print preview dialog */
     .ss-print-setting { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; font-size: 12px; color: var(--ss-text); }
     .ss-print-setting > label { color: var(--ss-text-light); }

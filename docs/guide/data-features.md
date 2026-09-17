@@ -115,7 +115,9 @@ const find = new FindReplaceService();
 
 find.find(store, { findText: '产品', caseSensitive: false });
 find.findNext();                            // 循环跳到下一个匹配
-find.replaceAll(store, { findText: '产品', replaceText: '商品' }); // 返回替换数量
+find.findPrevious();                        // 上一个
+find.replaceAll(store, { findText: '产品', replaceText: '商品' });
+// → { replacements: 出现次数, cells: 受影响单元格数 }（Excel 按出现次数计）
 ```
 
 | 选项 | 说明 |
@@ -123,9 +125,15 @@ find.replaceAll(store, { findText: '产品', replaceText: '商品' }); // 返回
 | `findText` | 查找内容 |
 | `replaceText` | 替换内容 |
 | `caseSensitive` | 区分大小写（默认否） |
-| `wholeWord` | 全字匹配（默认否，否则为包含匹配） |
+| `matchEntireCell` | 整格匹配：单元格须完全等于查找内容（默认否，否则为包含匹配） |
+| `useRegex` | 正则模式：`findText` 作为正则源，替换支持 `$1` 分组引用；无效正则抛 `InvalidFindPatternError`（默认否） |
+| `scope` | `'sheet'`（默认，当前工作表）或 `'workbook'`（从活动表开始按工作簿顺序遍历所有表） |
 
-匹配结果按行列排序；「下一个」从当前光标位置找距离最近的匹配。UI 快捷键：`Ctrl/Cmd + F` 查找、`Ctrl/Cmd + H` 替换。
+- 匹配基于公式源文本（Excel "Look in: Formulas"）；替换公式内的引用后会自动重算。
+- 全部替换按表分组写回：紧凑匹配块是单条命令（一次撤销即可恢复），跨表替换后撤销会恢复到原表（`SetRangeValues` 记录执行时所在表）。
+- 匹配按工作簿轮转顺序（活动表优先）+ 行列排序；「下一个」从当前光标位置向后找。
+
+UI：`Ctrl/Cmd + F` 查找、`Ctrl/Cmd + H` 替换；对话框支持大小写/整格/正则/范围选项、上一个/下一个、结果列表点击跳转（跨表自动激活）、全部替换计数提示；画布高亮所有命中格（淡黄）并用橙色描边标记当前项，关闭对话框自动清除。
 
 ## 图表
 

@@ -18,7 +18,7 @@ import { FilterService } from '../../filter/FilterService';
 import { SetAutoFilterCommand } from '../../commands/impl/SetAutoFilter';
 import { SetAutoFilterCriteriaCommand } from '../../commands/impl/SetAutoFilterCriteria';
 import { SortRangeCommand } from '../../commands/impl/SortRange';
-import { FindReplaceService } from '../../find/FindReplaceService';
+import { FindReplaceService, type FindMatch } from '../../find/FindReplaceService';
 import { protectSheet, unprotectSheet, verifyPassword } from '../../protection/SheetProtection';
 import { TOTAL_COLS, TOTAL_ROWS } from '../../renderer/CanvasRenderer';
 import { Range, type RangeAddress } from '../../selection/Range';
@@ -40,14 +40,13 @@ import { ShortcutsDialog } from './dialogs/ShortcutsDialog';
 import { ZoomDialog, type ZoomValues } from './dialogs/ZoomDialog';
 import { shortcutLabel } from './shortcutLabel';
 import type { DialogName, MenuActions, MenuContext, ViewState } from './types';
-import type { CellAddress } from '../../renderer/coordinate';
 import { HistoryPanel } from '../HistoryPanel';
 import { PrintPreview } from '../PrintPreview';
 
 export interface MenuBarProps extends MenuContext {
   readonly view?: Partial<ViewState>;
-  readonly onFindNavigate?: (cell: CellAddress) => void;
-  readonly onFindHighlight?: (cells: readonly CellAddress[]) => void;
+  readonly onFindNavigate?: (match: FindMatch) => void;
+  readonly onFindHighlight?: (matches: readonly FindMatch[], current: number) => void;
   readonly openDialogKey?: DialogName | null;
 }
 
@@ -503,7 +502,7 @@ function importText(text: string, ctx: MenuContext): void {
 function Dialogs({ dialog, setDialog, props, view, findService: svc }: { readonly dialog: DialogName | null; readonly setDialog: (name: DialogName | null) => void; readonly props: MenuBarProps; readonly view: ViewState; readonly findService: FindReplaceService }): ReactElement {
   const close = (): void => setDialog(null);
   return <>
-    <FindReplaceDialog open={dialog === 'find' || dialog === 'replace'} replaceMode={dialog === 'replace'} onCancel={close} store={props.store} cmdManager={props.cmdManager} selected={props.selected} service={svc} onNavigate={(cell) => props.onFindNavigate?.(cell)} onHighlight={(cells) => props.onFindHighlight?.(cells)} />
+    <FindReplaceDialog open={dialog === 'find' || dialog === 'replace'} replaceMode={dialog === 'replace'} onCancel={close} store={props.store} cmdManager={props.cmdManager} selected={props.selected} service={svc} onNavigate={(match) => props.onFindNavigate?.(match)} onHighlight={(matches, current) => props.onFindHighlight?.(matches, current)} />
     <InsertRowDialog open={dialog === 'insertRow'} onCancel={close} onSubmit={(v) => submitRow(v, props, close)} />
     <InsertColDialog open={dialog === 'insertCol'} onCancel={close} onSubmit={(v) => submitCol(v, props, close)} />
     <ZoomDialog open={dialog === 'zoom'} zoom={view.zoom} onCancel={close} onSubmit={(v) => submitZoom(v, view, close)} />
