@@ -1,11 +1,12 @@
 import * as XLSX from 'xlsx';
 import { unzipSync } from 'fflate';
 import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
-import type { Cell, Style } from '../types';
+import type { Cell, Style, RichTextRun } from '../types';
 import type { SerializedStore } from '../store/Store';
 import type { SerializedSheetData } from '../store/SheetData';
 import type { ChartSpec } from '../charts/types';
 import { importChartsForSheet } from './chartXmlImport';
+import { parseSharedStrings, sheetStringCells, type SharedStringEntry } from './sharedStrings';
 
 /**
  * xlsx import (SheetJS based) producing a SerializedStore that
@@ -68,12 +69,14 @@ export function importXlsx(buffer: ArrayBuffer): SerializedStore {
   const tables = readStyleTables(wb);
   const files = readZipEntries(buffer);
   const sheetPaths = resolveSheetPaths(files);
+  const sst = parseSharedStrings(files.get('xl/sharedStrings.xml') ?? '');
 
   const sheets = wb.SheetNames.map((name, index) => {
     const ws = wb.Sheets[name];
+    const sheetXml = files.get(sheetPaths.get(name) ?? '') ?? '';
     const data = ws === undefined
       ? emptySheetData()
-      : convertSheet(ws, tables, sheetStyleIndexes(files.get(sheetPaths.get(name) ?? '') ?? ''));
+      : convertSheet(ws, tables, sheetStyleIndexes(sheetXml), sheetStringCells(sheetXml), sst);
     // Floating chart objects: geometry from the drawing part, type/range/title from the chart part.
     const sheetPath = sheetPaths.get(name);
     if (sheetPath !== undefined) (data.charts as ChartSpec[]).push(...importChartsForSheet(files, sheetPath));
@@ -156,7 +159,7 @@ function decodeXmlEntities(s: string): string {
   return s.replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&quot;', '"').replaceAll('&apos;', "'").replaceAll('&amp;', '&');
 }
 
-function convertSheet(ws: XLSX.WorkSheet, tables: StyleTables, styleIdx: Map<string, number>): SerializedSheetData {
+function convertSheet(ws: XLSX.WorkSheet, tables: StyleTables, styleIdx: Map<string, number>, stringCells: Map<string, { shared?: number; runs?: readonly RichTextRun[] }>, sst: readonly SharedStringEntry[]): SerializedSheetData {
   const data = emptySheetData();
   const cells = data.cells as Array<[string, Cell]>;
   const styles = data.styles as Array<[string, Style]>;
@@ -201,6 +204,17 @@ function convertSheet(ws: XLSX.WorkSheet, tables: StyleTables, styleIdx: Map<str
     if (!inGrid(r, c)) continue;
     const raw = ws[key] as XLSX.CellObject;
     const cell = convertCell(raw);
+    // Rich runs: SheetJS only exposes the flattened string, so text is taken
+    // from our own parse when runs exist. Formula cells never carry them.
+    const sc = stringCells.get(key);
+    if (sc !== undefined && cell.formula === undefined) {
+      const runs = sc.runs ?? (sc.shared !== undefined ? sst[sc.shared]?.runs : undefined);
+      if (runs !== undefined) {
+        cell.richText = [...runs];
+        cell.text = runs.map((run) => run.text).join('');
+        if (typeof cell.value === 'string') cell.value = cell.text;
+      }
+    }
     if (raw.t === 'n') {
       const nf = numberFormatOf(raw.z);
       cell.type = nf !== undefined && isDateFormat(nf) ? 'date' : 'number';
@@ -216,6 +230,21 @@ function convertSheet(ws: XLSX.WorkSheet, tables: StyleTables, styleIdx: Map<str
     const { r, c } = XLSX.utils.decode_cell(addr);
     if (!inGrid(r, c)) continue;
     const cell: Cell = { text: '', styleId: internStyle(style) };
+    cells.push([`${r},${c}`, cell]);
+  }
+  // SheetJS can drop shared-string cells entirely (observed for sst index 0);
+  // our raw t="s"/inlineStr parse is canonical, so backfill missing cells.
+  for (const [addr, sc] of stringCells) {
+    if (ws[addr] !== undefined) continue;
+    const entry = sc.runs !== undefined
+      ? { text: sc.runs.map((run) => run.text).join(''), runs: sc.runs }
+      : sc.shared !== undefined ? sst[sc.shared] : undefined;
+    if (entry === undefined) continue;
+    const { r, c } = XLSX.utils.decode_cell(addr);
+    if (!inGrid(r, c)) continue;
+    const cell: Cell = { text: entry.text };
+    if (entry.runs !== undefined) cell.richText = [...entry.runs];
+    if (cell.text !== '') cell.value = cell.text;
     cells.push([`${r},${c}`, cell]);
   }
   if (skippedOutOfGrid > 0) console.warn(`xlsx import: skipped ${skippedOutOfGrid} cells outside the ${TOTAL_ROWS}×${TOTAL_COLS} grid`);
