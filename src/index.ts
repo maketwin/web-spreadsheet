@@ -56,9 +56,11 @@ export type { ConditionalOverlay, ConditionalRule } from './conditional/Conditio
 export { SetConditionalFormatCommand } from './commands/impl/SetConditionalFormat';
 export { CreateChartCommand } from './commands/impl/CreateChart';
 export { RemoveChartCommand } from './commands/impl/RemoveChart';
+export { SetChartAnchorCommand } from './commands/impl/SetChartAnchor';
 export { SetRowsHiddenCommand, SetColsHiddenCommand } from './commands/impl/SetHidden';
-export type { ChartSpec, ChartType } from './charts/types';
-export { ChartPanel } from './charts/ChartPanel';
+export type { ChartSpec, ChartType, ChartAnchor, ChartAnchorEdge } from './charts/types';
+export { FloatingChart } from './charts/FloatingChart';
+export type { FloatingChartProps } from './charts/FloatingChart';
 export { exportCsv, exportCsvBlob, csvQuote } from './io/CsvExporter';
 export { parseNameBoxInput } from './selection/nameBox';
 export { skipHiddenCells } from './selection/visibleStep';

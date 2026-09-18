@@ -1,6 +1,6 @@
 {
   "name": "web-spreadsheet",
-  "version": "1.5.0",
+  "version": "2.0.0",
   "description": "A modern TypeScript spreadsheet SDK with 4-layer architecture",
   "type": "module",
   "main": "./dist/web-spreadsheet.umd.js",
@@ -70,6 +70,7 @@
     "antd": "^5.27.0",
     "chart.js": "4",
     "dexie": "^4.4.4",
+    "fflate": "^0.8.3",
     "xlsx": "^0.18.5"
   },
   "peerDependencies": {

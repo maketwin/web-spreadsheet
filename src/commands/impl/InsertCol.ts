@@ -3,6 +3,7 @@ import { TOTAL_COLS } from '../../renderer/CanvasRenderer';
 import { captureSheet, parseKey, restoreSheet, type SheetSnapshot } from './sheetSnapshot';
 import { replaceMerges, shiftMergesForInsert } from '../../util/merge';
 import { shiftSheetFormulas } from './shiftFormulas';
+import { shiftSheetChartAnchors } from '../../charts/anchorShift';
 
 import type { Store } from '../../store/Store';
 
@@ -31,6 +32,7 @@ export class InsertColCommand extends Command<InsertColArgs> {
     }
     replaceMerges(store, shiftMergesForInsert(store.getMerges(), start, count, 'col'));
     shiftSheetFormulas(store, 'col', start, count);
+    shiftSheetChartAnchors(store, 'insert', 'col', start, count);
   }
 
   public getUndo(): Command {

@@ -137,19 +137,30 @@ UI：`Ctrl/Cmd + F` 查找、`Ctrl/Cmd + H` 替换；对话框支持大小写/�
 
 ## 图表
 
-基于 Chart.js，支持三种类型：`'bar' | 'line' | 'pie'`。
+基于 Chart.js 的 **Excel 式浮动图表对象**，支持三种类型：`'bar' | 'line' | 'pie'`。
 
 ```ts
-import { CreateChartCommand, ChartPanel, type ChartSpec } from 'web-spreadsheet';
+import { CreateChartCommand, type ChartAnchor } from 'web-spreadsheet';
 
-// 创建图表（可撤销）
-ss.cmdManager.execute(new CreateChartCommand(
-  { r1: 0, c1: 0, r2: 5, c2: 2 },
-  { type: 'bar', title: '季度营收' },
-));
+// 创建图表（可撤销）：数据范围为当前选区；
+// anchor 是两单元格锚点（Excel 浮动对象模型：from/to 格子 + 格内像素偏移）
+const anchor: ChartAnchor = {
+  from: { r: 1, c: 6, offX: 0, offY: 0 },
+  to: { r: 13, c: 13, offX: 0, offY: 0 },
+};
+ss.cmdManager.execute(new CreateChartCommand({
+  r1: 0, c1: 0, r2: 5, c2: 2,
+  type: 'bar',
+  title: '季度营收',
+  anchor,
+}));
 ```
 
-数据读取规则：区域**首行为标签**，每行一个数据系列（标签取行首单元格，取 `cell.value` 数字，取不到按 `Number(text)` 兜底），内置 5 色调色板循环。`ChartPanel` 是渲染面板的 React 组件（`{ spec, store, onClose }` props），饼图显示图例、柱状/折线图隐藏。
+数据读取规则：区域**首行为标签**，每行一个数据系列（标签取行首单元格，取 `cell.value` 数字，取不到按 `Number(text)` 兜底），内置 5 色调色板循环。只选中单个单元格时插入会自动扩展到周围的连续数据区（Excel 行为）。
+
+浮动对象行为与 Excel 一致：点选、拖拽移动、8 向手柄缩放、`Delete` 删除、`Ctrl+Z`/`Ctrl+Y` 撤销重做；插入/删除行列时锚点联动平移（move and size with cells）。SDK 侧对应 `SetChartAnchorCommand`（移动/缩放）、`RemoveChartCommand`（删除）；渲染组件为 `FloatingChart`（props：`{ spec, store, renderer, selected, onSelect, onGeometry, onRemove }`），需挂载在网格容器内并由宿主提供 `.ss-chart-layer` / `.ss-chart-object` 定位样式（参考 demo 的 `index.html`）。xlsx 导入/导出均携带 `twoCellAnchor` 位置与图表定义。
+
+> 注：1.x 的 `ChartPanel` 面板组件（右上角面板形态）在 2.0 中由 `FloatingChart` 浮动对象取代。
 
 ## 迷你图
 

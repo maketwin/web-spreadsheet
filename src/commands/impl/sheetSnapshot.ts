@@ -3,6 +3,7 @@ import { TOTAL_COLS, TOTAL_ROWS } from '../../renderer/CanvasRenderer';
 import type { Store } from '../../store/Store';
 import type { AutoFilterState, Cell, ColMeta, RowMeta } from '../../types';
 import type { ConditionalRule } from '../../conditional/ConditionalRule';
+import type { ChartSpec } from '../../charts/types';
 import type { ValidationRule } from '../../validation/types';
 import type { NamedRangeDef } from '../../namedrange/types';
 
@@ -11,6 +12,8 @@ export interface SheetSnapshot {
   readonly rows: ReadonlyArray<readonly [number, RowMeta]>;
   readonly cols: ReadonlyArray<readonly [number, ColMeta]>;
   readonly merges: readonly string[];
+  /** Active sheet's floating chart objects — structural edits shift their anchors, undo restores them. */
+  readonly charts?: ReadonlyArray<ChartSpec>;
   /** Other sheets' cells (sheetId, r, c) — cross-sheet formula rewrites undo here. */
   readonly otherCells?: ReadonlyArray<readonly [string, number, number, Cell]>;
   /** Per-sheet named ranges (sheetId, name, def) — insert/delete rewrites them. */
@@ -49,6 +52,7 @@ export function captureSheet(store: Store): SheetSnapshot {
     rows: collectRows(store),
     cols: collectCols(store),
     merges: store.getMerges(),
+    charts: store.getCharts(),
     otherCells,
     namedRanges,
     conditionalRules,
@@ -69,8 +73,15 @@ export function restoreSheet(store: Store, snapshot: SheetSnapshot): void {
   snapshot.rows.forEach(([r, meta]) => store.setRow(r, meta));
   snapshot.cols.forEach(([c, meta]) => store.setCol(c, meta));
   snapshot.merges.forEach((range) => store.addMerge(range));
+  restoreCharts(store, snapshot.charts ?? []);
   restoreOtherCells(store, snapshot.otherCells ?? []);
   restoreStructures(store, snapshot);
+}
+
+/** Reset the active sheet's floating charts to the snapshot (anchor-shift undo). */
+function restoreCharts(store: Store, charts: ReadonlyArray<ChartSpec>): void {
+  store.getCharts().forEach((chart) => store.removeChart(chart.id));
+  charts.forEach((chart) => store.addChart(chart));
 }
 
 /** Reset named ranges / conditional formats / validation / autofilters to the snapshot. */

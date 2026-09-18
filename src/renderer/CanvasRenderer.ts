@@ -1,4 +1,6 @@
 import { num2alpha } from '../util/alphabet';
+import type { ChartAnchor } from '../charts/types';
+import { anchorToRect, rectToAnchor } from '../charts/geometry';
 import type { SelectionKind } from '../selection/Selection';
 import { Range, type RangeAddress } from '../selection/Range';
 import type { Store } from '../store/Store';
@@ -1513,6 +1515,35 @@ export class CanvasRenderer {
     if (merge !== undefined) return this.rangeRect(parseRange(merge));
     const { x, y } = this.cellVP(r, c);
     return { x, y, w: this.scroller.getColWidth(c), h: this.scroller.getRowHeight(r) };
+  }
+
+  /** Floating chart-object rect for a two-cell anchor (canvas-space px, freeze/scroll/zoom aware). */
+  public chartRect(anchor: ChartAnchor): Rect {
+    return anchorToRect(this.scroller, this.zoom(), this.freeze.getFrozenRows(), this.freeze.getFrozenCols(), anchor);
+  }
+
+  /** Inverse of chartRect: snap a canvas-space rect back to a two-cell anchor. */
+  public anchorFromRect(rect: { x: number; y: number; w: number; h: number }): ChartAnchor {
+    return rectToAnchor(this.scroller, this.zoom(), this.freeze.getFrozenRows(), this.freeze.getFrozenCols(), rect);
+  }
+
+  /** Visible grid client area (canvas space, headers excluded) — used to place/clip floating objects. */
+  public gridClientRect(): Rect {
+    return { x: ROW_HEADER_WIDTH, y: COL_HEADER_HEIGHT, w: this.gridW(), h: this.gridH() };
+  }
+
+  /** Current zoom factor (1 = 100%) — floating-object math is expressed at 100% and scaled. */
+  public zoomFactor(): number {
+    return this.zoom();
+  }
+
+  /** Default (unstyled) cell size at the current zoom — Ctrl+arrow object nudges. */
+  public defaultCellWidth(): number {
+    return this.defaultColWidth();
+  }
+
+  public defaultCellHeight(): number {
+    return this.defaultRowHeight();
   }
 
   public columnAtPoint(clientX: number): number | null {

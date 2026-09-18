@@ -6,7 +6,7 @@ import dts from 'vite-plugin-dts';
 const dirname = fileURLToPath(new URL('.', import.meta.url));
 
 /** Packages resolved at runtime by the consumer instead of bundled. */
-const RUNTIME_EXTERNALS = ['react', 'react-dom', 'antd', '@ant-design/icons', 'chart.js', 'dexie', 'xlsx'];
+const RUNTIME_EXTERNALS = ['react', 'react-dom', 'antd', '@ant-design/icons', 'chart.js', 'dexie', 'xlsx', 'fflate'];
 
 // Function form: build-only settings must not leak into vitest, which reads
 // this config too (a global NODE_ENV define would force production React in
@@ -52,6 +52,7 @@ export default defineConfig(({ command }) => ({
           'chart.js': 'Chart',
           dexie: 'Dexie',
           xlsx: 'XLSX',
+          fflate: 'fflate',
         },
       },
     },

@@ -27,6 +27,7 @@ import { CanvasRenderer, COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEI
 import { FillRangeCommand } from '../commands/impl/FillRange';
 import { CreateChartCommand } from '../commands/impl/CreateChart';
 import { RemoveChartCommand } from '../commands/impl/RemoveChart';
+import { SetChartAnchorCommand } from '../commands/impl/SetChartAnchor';
 import { SetRowsHiddenCommand, SetColsHiddenCommand } from '../commands/impl/SetHidden';
 import { SetSparklineCommand } from '../commands/impl/SetSparkline';
 import { makeMoveRange } from '../commands/commandFactories';
@@ -51,11 +52,12 @@ import { ErrorBoundary } from './ErrorBoundary';
 import { StatusBar } from './StatusBar';
 import { FormulaBar } from './FormulaBar';
 import { MenuBar, allSheetRange } from './menu/MenuBar';
-import { excelSelectAll, edgeJump } from '../selection/currentRegion';
+import { excelSelectAll, edgeJump, currentRegion } from '../selection/currentRegion';
 import { parseNameBoxInput } from '../selection/nameBox';
 import { toggleAutoFilterCommand } from '../filter/toggleFilter';
-import { ChartPanel } from '../charts/ChartPanel';
-import type { ChartType } from '../charts/types';
+import { FloatingChart } from '../charts/FloatingChart';
+import { CHART_DEFAULT_H, CHART_DEFAULT_W, CHART_MIN_H, CHART_MIN_W, type ChartAnchor, type ChartType } from '../charts/types';
+import { normalizeAnchor } from '../charts/geometry';
 import type { SparklineType } from '../sparkline/types';
 import { FilterDropdown } from './FilterDropdown';
 import { startAutoSave } from '../db/autoSave';
@@ -94,6 +96,8 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const [painting, setPainting] = useState(false);
   const [sourceStyle, setSourceStyle] = useState<Style | undefined>(undefined);
   const [filterPopup, setFilterPopup] = useState<FilterPopupState | null>(null);
+  /** Selected floating chart object (Excel: charts are selectable drawing objects). */
+  const [selectedChartId, setSelectedChartId] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
@@ -105,6 +109,8 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     selectedRef.current = next;
     setSelected(next);
     setEditing(null);
+    // Excel: selecting a cell deselects any selected floating object.
+    setSelectedChartId(null);
   }, []);
   const selectRange = useCallback((range: RangeAddress) => selectSelection(rangeSelection(range)), [selectSelection]);
   const onCellClick = useCallback((cell: CellAddress, shift: boolean, ctrl = false) => {
@@ -292,7 +298,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   }, [editing]);
 
   return <ErrorBoundary><div className="ss-root">
-    <MenuBar {...menuBarProps(store, cmdManager, selected, selectRange, () => selectSelection(sheetSelection(allSheetRange())), onClose)} view={{ ...view, setZoom: (zoom) => setView((current) => ({ ...current, zoom })), setShowFormula: (showFormula) => setView((current) => ({ ...current, showFormula })), setShowGrid: (showGrid) => setView((current) => ({ ...current, showGrid })), setFreeze: (frozenRows, frozenCols) => setView((current) => ({ ...current, frozenRows, frozenCols })) }} onFindNavigate={(match) => { if (match.sheetId !== store.getActiveSheetId()) store.activateSheet(match.sheetId); selectSelection(cellSelection(match.r, match.c)); }} onFindHighlight={(matches, current) => setFindHighlights(matches.length === 0 ? null : { matches, current })} openDialogKey={findDialogOpen} onCreateChart={(type, title) => submitCreateChart(type, title, selected, execCmd)} onInsertSparkline={(type, rangeInput) => submitInsertSparkline(type, rangeInput, store, selected, execCmd)} />
+    <MenuBar {...menuBarProps(store, cmdManager, selected, selectRange, () => selectSelection(sheetSelection(allSheetRange())), onClose)} view={{ ...view, setZoom: (zoom) => setView((current) => ({ ...current, zoom })), setShowFormula: (showFormula) => setView((current) => ({ ...current, showFormula })), setShowGrid: (showGrid) => setView((current) => ({ ...current, showGrid })), setFreeze: (frozenRows, frozenCols) => setView((current) => ({ ...current, frozenRows, frozenCols })) }} onFindNavigate={(match) => { if (match.sheetId !== store.getActiveSheetId()) store.activateSheet(match.sheetId); selectSelection(cellSelection(match.r, match.c)); }} onFindHighlight={(matches, current) => setFindHighlights(matches.length === 0 ? null : { matches, current })} openDialogKey={findDialogOpen} onCreateChart={(type, title) => submitCreateChart(type, title, store, selected, execCmd, rendererRef.current, setSelectedChartId)} onInsertSparkline={(type, rangeInput) => submitInsertSparkline(type, rangeInput, store, selected, execCmd)} />
     <InteractionToolbar selected={selected} store={store} cmdManager={cmdManager} view={view} setView={setView} selectAll={() => selectSelection(sheetSelection(allSheetRange()))} painting={painting} onTogglePainter={() => { if (painting) { setPainting(false); setSourceStyle(undefined); } else { const cell = selected?.active; const s = cell === undefined ? undefined : store.getCell(cell.r, cell.c)?.styleId === undefined ? undefined : store.getStyle(store.getCell(cell.r, cell.c)!.styleId!); setSourceStyle(s); setPainting(true); } }} onToggleProtection={() => setProtectOpen(true)} />
     <ProtectionModal open={protectOpen} onClose={() => setProtectOpen(false)} store={store} />
     <FormulaBar selected={selected} value={formulaValue} onChange={setFormulaValue} onCommit={() => commitFormulaValue(selected, formulaValue, store, cmdManager)} onGoTo={(input) => jumpNameBox(store, input, selectRange)} />
@@ -312,9 +318,9 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
         if (handleEndMode(e, selectedRef.current, store, endModeRef, selectSelection, selectRange)) return;
         handleCanvasKeyDown(e, selectedRef.current, store, cmdManager, startEditing, selectSelection, selectRange, setView, setFindDialogOpen, runClipboard, clearClipboardSession, execCmd, view.frozenRows, view.frozenCols, view.zoom, () => setMulti([]), () => multiRef.current);
       }} onDoubleClick={(e) => { const cell = rendererRef.current?.cellAtPoint(e.clientX, e.clientY); if (cell != null) startEditing(cell, undefined, true); }} />
-      {editing !== null && <EditorOverlay refEl={inputRef} editingRefSetter={(cell) => { editingRef.current = cell; setEditing(cell); }} editing={editing} setEditing={setEditing} commit={commitEditing} zoom={view.zoom} store={store} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}</div>
+      {editing !== null && <EditorOverlay refEl={inputRef} editingRefSetter={(cell) => { editingRef.current = cell; setEditing(cell); }} editing={editing} setEditing={setEditing} commit={commitEditing} zoom={view.zoom} store={store} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}
+      <div className="ss-chart-layer">{store.getCharts().map((spec) => <FloatingChart key={spec.id} spec={spec} store={store} renderer={rendererRef.current} selected={selectedChartId === spec.id} onSelect={setSelectedChartId} onGeometry={(id, anchor) => execCmd(new SetChartAnchorCommand({ id, anchor }))} onRemove={(id) => { execCmd(new RemoveChartCommand({ id })); setSelectedChartId((current) => current === id ? null : current); canvasRef.current?.focus(); }} onUndo={() => cmdManager?.undo()} onRedo={() => cmdManager?.redo()} />)}</div></div>
       <PasteSpecialDialog open={pasteSpecialOpen} onOk={(opts) => void applyPasteSpecial(opts)} onCancel={() => setPasteSpecialOpen(false)} />
-      {store.getCharts().length > 0 && <div className="ss-chart-layer">{store.getCharts().map((spec) => <ChartPanel key={spec.id} spec={spec} store={store} onClose={() => execCmd(new RemoveChartCommand({ id: spec.id }))} />)}</div>}
       {filterPopup !== null && <FilterDropdown store={store} cmdManagerExecutor={execCmd} r={filterPopup.r} c={filterPopup.c} x={filterPopup.x} y={filterPopup.y} onClose={() => setFilterPopup(null)} />}
     <StatusBar store={store} selected={selected?.range ?? null} zoom={view.zoom} />
     <BottomBar sheets={sheets} activeSheetId={activeSheetId} onSheetChange={(id) => { setMulti([]); store.activateSheet(id); }} onAddSheet={() => addSheet(store)} onRenameSheet={(id) => renameSheet(store, id)} onDeleteSheet={(id) => deleteSheet(store, id)} />
@@ -869,10 +875,31 @@ function moveArrowTarget(store: Store, current: RangeAddress, target: RangeAddre
   return isSingle ? skipHiddenCells(store, current, merged, dr, dc) : merged;
 }
 
-/** 插入 → 图表: the chart's data range is the current selection. */
-function submitCreateChart(type: ChartType, title: string, selected: Selection | null, execCmd: (cmd: Command) => void): void {
-  const sel = selected?.range ?? Range.single(0, 0).toAddress();
-  execCmd(new CreateChartCommand({ ...sel, type, title: title === '' ? undefined : title }));
+/** 插入 → 图表: data range is the current selection; the object lands centered over the visible grid (Excel), selected. */
+function submitCreateChart(type: ChartType, title: string, store: Store, selected: Selection | null, execCmd: (cmd: Command) => void, renderer: CanvasRenderer | null, selectChart: (id: string) => void): void {
+  let sel = selected?.range ?? Range.single(0, 0).toAddress();
+  // Excel: a single-cell selection charts the surrounding contiguous data region.
+  if (sel.r1 === sel.r2 && sel.c1 === sel.c2) {
+    sel = currentRegion(store, { r: sel.r1, c: sel.c1 }, TOTAL_ROWS, TOTAL_COLS) ?? sel;
+  }
+  const cmd = new CreateChartCommand({
+    ...sel,
+    type,
+    title: title === '' ? undefined : title,
+    anchor: renderer !== null ? anchorCenteredInGrid(renderer) : undefined,
+  });
+  execCmd(cmd);
+  selectChart(cmd.chartId);
+}
+
+/** Excel inserts a new chart centered on the visible grid with the default 15×7.5cm size. */
+function anchorCenteredInGrid(renderer: CanvasRenderer): ChartAnchor {
+  const grid = renderer.gridClientRect();
+  const w = Math.max(CHART_MIN_W, Math.min(CHART_DEFAULT_W, grid.w - 8));
+  const h = Math.max(CHART_MIN_H, Math.min(CHART_DEFAULT_H, grid.h - 8));
+  const x = grid.x + Math.max(0, (grid.w - w) / 2);
+  const y = grid.y + Math.max(0, (grid.h - h) / 2);
+  return normalizeAnchor(renderer.anchorFromRect({ x, y, w, h }), TOTAL_ROWS, TOTAL_COLS);
 }
 
 /** 插入 → 迷你图: anchored at the active cell; returns false (dialog stays open) on a bad range. */

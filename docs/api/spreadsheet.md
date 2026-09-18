@@ -259,7 +259,7 @@ import { setTheme, getTheme, applyStoredTheme, THEMES } from 'web-spreadsheet';
 
 ## 其余导出
 
-- **UI 组件**：`Toolbar`、`BottomBar`、`Editor`、`Menu`、`MenuBar`、`SpreadsheetComponent`、`ErrorBoundary`、`ChartPanel`、`Sparkline`（均附 `*Props` 类型）。
-- **命令类**：`InsertRowCommand`、`InsertColCommand`、`DeleteRowCommand`、`DeleteColCommand`、`SetCellStyleCommand`、`SetRangeStyleCommand`、`SetRangeBorderCommand` + `edgesForPreset`、`SetConditionalFormatCommand`、`SetValidationCommand`、`CreateChartCommand`、`SetSparklineCommand`。
+- **UI 组件**：`Toolbar`、`BottomBar`、`Editor`、`Menu`、`MenuBar`、`SpreadsheetComponent`、`ErrorBoundary`、`FloatingChart`、`Sparkline`（均附 `*Props` 类型）。
+- **命令类**：`InsertRowCommand`、`InsertColCommand`、`DeleteRowCommand`、`DeleteColCommand`、`SetCellStyleCommand`、`SetRangeStyleCommand`、`SetRangeBorderCommand` + `edgesForPreset`、`SetConditionalFormatCommand`、`SetValidationCommand`、`CreateChartCommand`、`SetChartAnchorCommand`、`RemoveChartCommand`、`SetSparklineCommand`。
 - **插件**：`PluginManager`、`PluginAPI`、`CsvImportPlugin`、`Plugin` 类型。
-- **类型**：`Cell`、`CellValue`、`Style`、`RowMeta`、`ColMeta`、`StoreEvent`、`Unsubscribe`、`SerializedStore`、`Theme`、`CellAddress`、`RangeAddress`、`AstNode`、`FormulaValue`、`FunctionSpec`、`ConditionalRule`、`ConditionalOverlay`、`ValidationRule`、`ValidationType`、`ChartSpec`、`ChartType`、`SparklineSpec`、`SparklineType`、`NamedRangeDef`、`SheetProtectionState`、`BorderPreset`、`BorderLine` 等。
+- **类型**：`Cell`、`CellValue`、`Style`、`RowMeta`、`ColMeta`、`StoreEvent`、`Unsubscribe`、`SerializedStore`、`Theme`、`CellAddress`、`RangeAddress`、`AstNode`、`FormulaValue`、`FunctionSpec`、`ConditionalRule`、`ConditionalOverlay`、`ValidationRule`、`ValidationType`、`ChartSpec`、`ChartType`、`ChartAnchor`、`ChartAnchorEdge`、`SparklineSpec`、`SparklineType`、`NamedRangeDef`、`SheetProtectionState`、`BorderPreset`、`BorderLine` 等。

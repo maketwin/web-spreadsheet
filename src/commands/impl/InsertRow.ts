@@ -3,6 +3,7 @@ import { TOTAL_ROWS } from '../../renderer/CanvasRenderer';
 import { captureSheet, parseKey, restoreSheet, type SheetSnapshot } from './sheetSnapshot';
 import { replaceMerges, shiftMergesForInsert } from '../../util/merge';
 import { shiftSheetFormulas } from './shiftFormulas';
+import { shiftSheetChartAnchors } from '../../charts/anchorShift';
 
 import type { Store } from '../../store/Store';
 
@@ -31,6 +32,7 @@ export class InsertRowCommand extends Command<InsertRowArgs> {
     }
     replaceMerges(store, shiftMergesForInsert(store.getMerges(), start, count, 'row'));
     shiftSheetFormulas(store, 'row', start, count);
+    shiftSheetChartAnchors(store, 'insert', 'row', start, count);
   }
 
   public getUndo(): Command {

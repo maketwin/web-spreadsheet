@@ -3,6 +3,7 @@ import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
 import type { Store } from '../store/Store';
 import type { Cell } from '../types';
 import { parseRange } from '../util/cell';
+import { appendChartsToXlsx } from './chartXmlExport';
 
 export function exportXlsxBuffer(store: Store): ArrayBuffer {
   const wb = XLSX.utils.book_new();
@@ -20,7 +21,9 @@ export function exportXlsxBuffer(store: Store): ArrayBuffer {
     XLSX.utils.book_append_sheet(wb, ws, name);
   }
 
-  return XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+  const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
+  // Chart objects ride outside SheetJS: the zip gains drawing/chart parts per sheet.
+  return appendChartsToXlsx(buf, store, store.getSheets().map(({ id }) => id));
 }
 
 export function exportXlsx(store: Store): Blob {

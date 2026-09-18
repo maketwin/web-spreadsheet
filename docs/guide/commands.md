@@ -78,7 +78,8 @@ export interface RangeAddress {
 | `SetAutoFilterCriteriaCommand` | `{ column, criteria?, mode: 'set'\|'clearColumn'\|'clearAll' }` | 筛选条件 |
 | `SetConditionalFormatCommand` | 范围 + `{ rules }` | 条件格式 |
 | `SetValidationCommand` | 范围 + `{ rule }` | 数据验证 |
-| `CreateChartCommand` | 范围 + `{ type, title? }` | 创建图表 |
+| `CreateChartCommand` | 范围 + `{ type, title?, anchor? }` | 创建浮动图表对象（可撤销） |
+| `SetChartAnchorCommand` | `{ id, anchor }` | 移动/缩放浮动图表（可撤销） |
 | `SetSparklineCommand` | 范围 + `{ type, targetRow, targetCol }` | 迷你图 |
 
 ## 撤销栈特性

@@ -1,8 +1,11 @@
 import * as XLSX from 'xlsx';
+import { unzipSync } from 'fflate';
 import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
 import type { Cell, Style } from '../types';
 import type { SerializedStore } from '../store/Store';
 import type { SerializedSheetData } from '../store/SheetData';
+import type { ChartSpec } from '../charts/types';
+import { importChartsForSheet } from './chartXmlImport';
 
 /**
  * xlsx import (SheetJS based) producing a SerializedStore that
@@ -63,7 +66,7 @@ export function importXlsx(buffer: ArrayBuffer): SerializedStore {
     cellDates: false,
   });
   const tables = readStyleTables(wb);
-  const files = readBookFiles(wb);
+  const files = readZipEntries(buffer);
   const sheetPaths = resolveSheetPaths(files);
 
   const sheets = wb.SheetNames.map((name, index) => {
@@ -71,6 +74,9 @@ export function importXlsx(buffer: ArrayBuffer): SerializedStore {
     const data = ws === undefined
       ? emptySheetData()
       : convertSheet(ws, tables, sheetStyleIndexes(files.get(sheetPaths.get(name) ?? '') ?? ''));
+    // Floating chart objects: geometry from the drawing part, type/range/title from the chart part.
+    const sheetPath = sheetPaths.get(name);
+    if (sheetPath !== undefined) (data.charts as ChartSpec[]).push(...importChartsForSheet(files, sheetPath));
     return { id: `sheet-${index + 1}`, name, data };
   });
   if (sheets.length === 0) sheets.push({ id: 'sheet-1', name: 'Sheet1', data: emptySheetData() });
@@ -89,16 +95,19 @@ function readStyleTables(wb: XLSX.WorkBook): StyleTables {
   return { fonts: styles?.Fonts ?? [], fills: styles?.Fills ?? [], xfs: styles?.CellXf ?? [] };
 }
 
-/** bookFiles exposes the raw zip entries as `{ content }` objects (string or bytes). */
-function readBookFiles(wb: XLSX.WorkBook): Map<string, string> {
-  const out = new Map<string, string>();
-  const files = (wb as { files?: Record<string, { content?: unknown } | string> }).files;
-  if (files === undefined) return out;
+/**
+ * Raw zip entries as text, decoded straight from the package bytes. SheetJS's
+ * `bookFiles` hook exposes JSZip-internal entry objects without usable content,
+ * so parts beyond its parser (drawings, charts, rels) are read here instead —
+ * which also makes styled-but-empty cell xml visible to sheetStyleIndexes.
+ */
+function readZipEntries(buffer: ArrayBuffer): Map<string, string> {
+  const entries = unzipSync(new Uint8Array(buffer));
   const decoder = new TextDecoder();
-  for (const [path, entry] of Object.entries(files)) {
-    const content = typeof entry === 'string' ? entry : entry?.content;
-    if (typeof content === 'string') out.set(path, content);
-    else if (content instanceof Uint8Array) out.set(path, decoder.decode(content));
+  const out = new Map<string, string>();
+  for (const [path, data] of Object.entries(entries)) {
+    if (path.endsWith('/')) continue;
+    out.set(path, decoder.decode(data));
   }
   return out;
 }
