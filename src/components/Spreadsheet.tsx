@@ -68,7 +68,7 @@ import { autoFitRowHeight, autofitRowHeights } from '../util/rowAutofit';
 import { fillShortcut } from '../fill/fillShortcut';
 import { cycleDollars, endsWithRef, isPointTrigger, refAtCaret, upsertRef } from '../formula/pointMode';
 import { RichEditor, normalizeEditorRuns, type RichEditorApi } from './RichEditor';
-import { applyRunStyle, charsAllHave, flattenRuns, isRich, runsFromText, type RunStylePatch } from '../util/richText';
+import { applyRunStyle, charsAllHave, flattenRuns, isRich, normalizeRuns, runsFromText, type RunStylePatch } from '../util/richText';
 
 export { snapshotCells, buildSessionPasteValues, tilePlainCells, combineMultiRanges } from '../clipboard/session';
 export type { ClipboardSessionState } from '../clipboard/session';
@@ -103,6 +103,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   /** Selected floating chart object (Excel: charts are selectable drawing objects). */
   const [selectedChartId, setSelectedChartId] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const formulaInputRef = useRef<HTMLInputElement>(null);
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
   const editingRef = useRef<EditingCell | null>(editing);
@@ -283,20 +284,53 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   /**
    * Excel: run-level style keys with a cell editor open format the selected
    * characters of the draft (turning the cell rich) instead of the cells.
-   * Bold/italic/underline toggle against the selection: only when EVERY
-   * selected character already carries the attribute does it turn off.
-   * Non-run keys (fill, alignment, number format…) fall through to whole cells.
+   * The same applies with a character selection in the FORMULA BAR — there the
+   * cell's runs are edited directly (no edit session). Bold/italic/underline
+   * toggle against the selection: only when EVERY selected character already
+   * carries the attribute does it turn off. Non-run keys (fill, alignment,
+   * number format…) fall through to whole cells.
    */
   const applyRunStyleToEditor = useCallback((style: Partial<Style>): boolean => {
-    const ed = editingRef.current;
-    if (ed === null) return false;
-    const patch: RunStylePatch = {};
-    let hasRunKey = false;
-    for (const key of ['bold', 'italic', 'underline', 'fontSize', 'fontFamily', 'color'] as const) {
-      const value = (style as Record<string, unknown>)[key];
-      if (value !== undefined) { (patch as Record<string, unknown>)[key] = value; hasRunKey = true; }
+    const buildPatch = (): { patch: RunStylePatch; ok: boolean } => {
+      const patch: RunStylePatch = {};
+      let hasRunKey = false;
+      for (const key of ['bold', 'italic', 'underline', 'fontSize', 'fontFamily', 'color'] as const) {
+        const value = (style as Record<string, unknown>)[key];
+        if (value !== undefined) { (patch as Record<string, unknown>)[key] = value; hasRunKey = true; }
+      }
+      return { patch, ok: hasRunKey };
+    };
+    // No cell editor open: a character selection in the formula bar edits the
+    // anchor cell's runs directly (Excel formula-bar behavior).
+    if (editingRef.current === null) {
+      const { patch, ok } = buildPatch();
+      if (!ok) return false;
+      const input = formulaInputRef.current;
+      if (input === null) return false;
+      const start = input.selectionStart ?? 0;
+      const end = input.selectionEnd ?? 0;
+      const active = selectedRef.current?.active ?? (selectedRef.current !== null ? { r: selectedRef.current.range.r1, c: selectedRef.current.range.c1 } : null);
+      if (active === null || end <= start) return false;
+      const cell = store.getCell(active.r, active.c);
+      // Excel: only text constants carry per-character formatting.
+      if (cell === undefined || cell.formula !== undefined || typeof cell.value === 'number' || typeof cell.value === 'boolean') return false;
+      if (end > cell.text.length) return false;
+      const runs = isRich(cell.richText) ? [...cell.richText] : (runsFromText(cell.text) ?? [{ text: cell.text }]);
+      const cellStyle = cell.styleId !== undefined ? store.getStyle(cell.styleId) : undefined;
+      const mutablePatch = patch as Record<string, unknown>;
+      for (const key of ['bold', 'italic', 'underline'] as const) {
+        if (patch[key] === true && charsAllHave(runs, start, end, key, cellStyle)) {
+          mutablePatch[key] = cellStyle?.[key] === true ? false : undefined;
+        }
+      }
+      const nextRuns = applyRunStyle(runs, start, end, patch);
+      const normalized = normalizeRuns(nextRuns);
+      setCellText(store, cmdManager, active, flattenRuns(nextRuns), normalized ?? undefined);
+      return true;
     }
-    if (!hasRunKey) return false;
+    const patch0 = buildPatch();
+    if (!patch0.ok) return false;
+    const patch = patch0.patch;
     // Resolve the draft's runs + selection (rich editor already open, or the plain textarea).
     let runs: RichTextRun[];
     let sel: { start: number; end: number } | null;
@@ -310,6 +344,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       runs = runsFromText(el.value) ?? [{ text: el.value }];
     }
     if (sel === null || sel.end <= sel.start) return false;
+    const ed = editingRef.current;
     const cellStyle = ed !== null && store.getCell(ed.r, ed.c)?.styleId !== undefined ? store.getStyle(store.getCell(ed.r, ed.c)!.styleId!) : undefined;
     const mutablePatch = patch as Record<string, unknown>;
     for (const key of ['bold', 'italic', 'underline'] as const) {
@@ -323,7 +358,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     if (richApiRef.current !== null) return richApiRef.current.applyRunStyle(patch);
     // Plain textarea with selected characters: upgrade the draft to rich runs.
     const nextRuns = applyRunStyle(runs, sel.start, sel.end, patch);
-    const nextEd: EditingCell = { ...ed, richDraft: nextRuns, value: flattenRuns(nextRuns), richSel: { start: sel.start, end: sel.end } };
+    const nextEd: EditingCell = { ...ed!, richDraft: nextRuns, value: flattenRuns(nextRuns), richSel: { start: sel.start, end: sel.end } };
     editingRef.current = nextEd;
     setEditing(nextEd);
     return true;
@@ -359,7 +394,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     <MenuBar {...menuBarProps(store, cmdManager, selected, selectRange, () => selectSelection(sheetSelection(allSheetRange())), onClose, applyRunStyleToEditor)} view={{ ...view, setZoom: (zoom) => setView((current) => ({ ...current, zoom })), setShowFormula: (showFormula) => setView((current) => ({ ...current, showFormula })), setShowGrid: (showGrid) => setView((current) => ({ ...current, showGrid })), setFreeze: (frozenRows, frozenCols) => setView((current) => ({ ...current, frozenRows, frozenCols })) }} onFindNavigate={(match) => { if (match.sheetId !== store.getActiveSheetId()) store.activateSheet(match.sheetId); selectSelection(cellSelection(match.r, match.c)); }} onFindHighlight={(matches, current) => setFindHighlights(matches.length === 0 ? null : { matches, current })} openDialogKey={findDialogOpen} onCreateChart={(type, title) => submitCreateChart(type, title, store, selected, execCmd, rendererRef.current, setSelectedChartId)} onInsertSparkline={(type, rangeInput) => submitInsertSparkline(type, rangeInput, store, selected, execCmd)} />
     <InteractionToolbar selected={selected} store={store} cmdManager={cmdManager} view={view} setView={setView} selectAll={() => selectSelection(sheetSelection(allSheetRange()))} painting={painting} onTogglePainter={() => { if (painting) { setPainting(false); setSourceStyle(undefined); } else { const cell = selected?.active; const s = cell === undefined ? undefined : store.getCell(cell.r, cell.c)?.styleId === undefined ? undefined : store.getStyle(store.getCell(cell.r, cell.c)!.styleId!); setSourceStyle(s); setPainting(true); } }} onToggleProtection={() => setProtectOpen(true)} />
     <ProtectionModal open={protectOpen} onClose={() => setProtectOpen(false)} store={store} />
-    <FormulaBar selected={selected} value={formulaValue} onChange={setFormulaValue} onCommit={() => commitFormulaValue(selected, formulaValue, store, cmdManager)} onGoTo={(input) => { jumpNameBox(store, input, selectRange); canvasRef.current?.focus(); }} />
+    <FormulaBar selected={selected} value={formulaValue} onChange={setFormulaValue} onCommit={() => commitFormulaValue(selected, formulaValue, store, cmdManager)} onGoTo={(input) => { jumpNameBox(store, input, selectRange); canvasRef.current?.focus(); }} inputRef={formulaInputRef} onCharStyleKey={applyCharStyleKey} />
     <div className="ss-canvas-wrap"><canvas ref={canvasRef} className="ss-canvas" tabIndex={0} aria-label="Spreadsheet canvas, use arrow keys to navigate" onKeyDown={(e) => {
         if ((e.ctrlKey || e.metaKey) && e.altKey && e.key.toLowerCase() === 'v') {
           // Excel: Ctrl+Alt+V opens Paste Special.

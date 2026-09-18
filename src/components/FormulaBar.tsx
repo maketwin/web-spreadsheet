@@ -1,4 +1,4 @@
-import type { FC } from 'react';
+import type { FC, MutableRefObject } from 'react';
 import { useEffect, useState } from 'react';
 import type { Selection } from '../selection/Selection';
 import { selectionLabel } from '../selection/Selection';
@@ -10,9 +10,13 @@ export interface FormulaBarProps {
   readonly onCommit: () => void;
   /** Excel name box: jump to an A1 reference, range or defined name. */
   readonly onGoTo?: (input: string) => void;
+  /** Ref to the formula input so char-level formatting can read its selection. */
+  readonly inputRef?: MutableRefObject<HTMLInputElement | null>;
+  /** Excel: Ctrl/Cmd+B/I/U with characters selected in the formula bar formats those characters. */
+  readonly onCharStyleKey?: (key: 'bold' | 'italic' | 'underline') => void;
 }
 
-export const FormulaBar: FC<FormulaBarProps> = ({ selected, value, onChange, onCommit, onGoTo }) => {
+export const FormulaBar: FC<FormulaBarProps> = ({ selected, value, onChange, onCommit, onGoTo, inputRef, onCharStyleKey }) => {
   const label = selectionLabel(selected);
   const [nameInput, setNameInput] = useState(label);
   const [editingName, setEditingName] = useState(false);
@@ -35,6 +39,7 @@ export const FormulaBar: FC<FormulaBarProps> = ({ selected, value, onChange, onC
       <span aria-hidden />
       <span className="ss-formula-fx" title="Insert function" aria-hidden>ƒx</span>
       <input
+        ref={inputRef}
         className="ss-formula-input"
         aria-label="Formula bar"
         value={value}
@@ -42,6 +47,24 @@ export const FormulaBar: FC<FormulaBarProps> = ({ selected, value, onChange, onC
         onKeyDown={(event) => {
           if (event.key === 'Enter') onCommit();
           if (event.key === 'Escape') (event.target as HTMLInputElement).blur();
+          // Excel: Ctrl/Cmd+B/I/U with a selection in the formula bar formats those characters.
+          if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+            const key = event.key.toLowerCase();
+            if (key === 'b' || key === 'i' || key === 'u') {
+              event.preventDefault();
+              onCharStyleKey?.(key === 'b' ? 'bold' : key === 'i' ? 'italic' : 'underline');
+            }
+          }
+        }}
+        onBlur={(event) => {
+          // Leaving the formula bar for the grid drops the char selection; toolbar
+          // focus (selects/popovers) keeps it so the pending format can land.
+          const next = event.relatedTarget as HTMLElement | null;
+          if (next === null || next.closest('.ss-interaction-toolbar, .ss-menu-bar, .ant-dropdown, .ant-popover') === null) {
+            const input = event.currentTarget;
+            const pos = input.selectionEnd ?? input.value.length;
+            input.setSelectionRange(pos, pos);
+          }
         }}
       />
     </div>
