@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+### New Features (Excel parity batch 2)
+
+- **Charts & sparklines wired into the UI** — 插入 → 图表... opens the chart
+  dialog (柱状/折线/饼) and creates a floating `ChartPanel` over the grid
+  (data range = current selection); the panel's × deletes the chart as an
+  undoable `RemoveChartCommand`. 插入 → 迷你图... anchors a sparkline at the
+  active cell from a typed A1 range — the canvas renderer now paints
+  line/bar/win-loss sparklines directly inside cells (new
+  `sparkline/values.ts` series reader, blank/text cells skipped). The orphaned
+  `ChartStubDialog` placeholder is gone.
+- **CSV export** — 文件 → 导出 CSV writes the active sheet's used range as
+  RFC 4180 CSV (CRLF rows, quoted fields, displayed values with number formats
+  applied, so formulas and formatted numbers export as shown) with a UTF-8 BOM for Excel CJK round-trips; download name
+  follows the sheet name. New module `io/CsvExporter.ts`.
+- **Hide/unhide rows & columns** — Row/column header context menus gain
+  隐藏 / 取消隐藏 (multi-select aware). Hidden rows/cols collapse to zero via
+  new undoable `SetRowsHiddenCommand` / `SetColsHiddenCommand` (meta `hide`
+  flag, previous metas restored on undo); the renderer collapses hidden
+  columns exactly like filtered rows and skips their headers. 取消隐藏 is
+  Excel-scoped: it restores the hidden rows/columns covered by the header
+  selection (select across the collapsed gap, then unhide). Arrow-key and
+  shift+arrow navigation skips hidden rows/columns like Excel
+  (`selection/visibleStep.ts`).
+- **Ctrl+Shift+L toggles AutoFilter** — Excel's 数据 → 筛选 shortcut; the
+  toggle logic is shared with the data menu through `filter/toggleFilter.ts`.
+  Also listed in the shortcuts dialog.
+- **Editable name box** — The formula bar's cell label is now an input:
+  type `A1`, `B2:D5` (either endpoint order), whole columns (`A`, `A:C`),
+  whole rows (`3`, `3:5`), `Sheet2!A1` or a defined name and press Enter to
+  jump (selection + sheet switch). New parser `selection/nameBox.ts` with
+  grid clamping; Escape cancels.
+
+### Technical Details
+
+- New tests: CsvExporter (7), SetHidden (6), RemoveChart (3), nameBox (6),
+  toggleFilter (2), sparkline/values (6); name-box assertions updated for the
+  editable input
+- Renderer: hidden-column collapse in `syncSizesFromStore`/`onStoreEvent`,
+  header skip, cell-paint skip, and a `paintSparklines` pass per quadrant
+- 828 tests passing; `tsc --noEmit` and eslint clean; GUI-verified end to end
+  (chart insert/delete/undo, sparkline, hide/unhide rows+cols, filter toggle,
+  name box jump, CSV export)
+
 ### New Features (Excel parity batch)
 
 - **Find & Replace, rebuilt** — The dialog (Ctrl+F / Ctrl+H) gains match

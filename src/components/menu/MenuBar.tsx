@@ -4,6 +4,8 @@ import type { MenuProps } from 'antd';
 import { useMemo, useRef, useState, useEffect, type FC, type ReactElement, type ReactNode } from 'react';
 import { ClipboardService } from '../../clipboard/ClipboardService';
 import { autofitRowHeights } from '../../util/rowAutofit';
+import type { ChartType } from '../../charts/types';
+import type { SparklineType } from '../../sparkline/types';
 import { DeleteColCommand } from '../../commands/impl/DeleteCol';
 import { DeleteRowCommand } from '../../commands/impl/DeleteRow';
 import { InsertColCommand } from '../../commands/impl/InsertCol';
@@ -28,15 +30,18 @@ import type { Cell, Style } from '../../types';
 import { mergeSelection } from '../mergeActions';
 import { mergesIntersecting } from '../../util/merge';
 import { saveWorkbook as saveToDB, DEFAULT_ID } from '../../db/WorkbookDB';
+import { exportCsvBlob } from '../../io/CsvExporter';
 import { exportXlsx } from '../../io/XlsxExporter';
 import { importXlsx } from '../../io/XlsxImporter';
 import { AboutDialog } from './dialogs/AboutDialog';
+import { ChartDialog } from './dialogs/ChartDialog';
 import { DataValidationDialog, type ValidationConfig } from './dialogs/DataValidationDialog';
 import { FindReplaceDialog } from './dialogs/FindReplaceDialog';
 import { InsertColDialog, type InsertColValues } from './dialogs/InsertColDialog';
 import { InsertRowDialog, type InsertRowValues } from './dialogs/InsertRowDialog';
 import { NumberFormatDialog, type NumberFormatValues } from './dialogs/NumberFormatDialog';
 import { ShortcutsDialog } from './dialogs/ShortcutsDialog';
+import { SparklineDialog } from './dialogs/SparklineDialog';
 import { ZoomDialog, type ZoomValues } from './dialogs/ZoomDialog';
 import { shortcutLabel } from './shortcutLabel';
 import type { DialogName, MenuActions, MenuContext, ViewState } from './types';
@@ -48,6 +53,10 @@ export interface MenuBarProps extends MenuContext {
   readonly onFindNavigate?: (match: FindMatch) => void;
   readonly onFindHighlight?: (matches: readonly FindMatch[], current: number) => void;
   readonly openDialogKey?: DialogName | null;
+  /** 插入 → 图表：owner executes CreateChartCommand against its command manager. */
+  readonly onCreateChart?: (type: ChartType, title: string) => void;
+  /** 插入 → 迷你图：return false to keep the dialog open (invalid range). */
+  readonly onInsertSparkline?: (type: SparklineType, rangeInput: string) => boolean;
 }
 
 export const MenuBar: FC<MenuBarProps> = (props) => {
@@ -109,6 +118,7 @@ function fileItems(): NonNullable<MenuProps['items']> {
     item('file:import', '导入 CSV/TSV'),
     item('file:importXlsx', '导入 xlsx'),
     item('file:export', '导出 JSON'),
+    item('file:exportCsv', '导出 CSV'),
     item('file:exportXlsx', '导出 xlsx'),
     divider('file:divider:2'),
     item('file:print', '打印...'),
@@ -158,6 +168,9 @@ function viewItems(view: ViewState): NonNullable<MenuProps['items']> {
 
 function insertItems(): NonNullable<MenuProps['items']> {
   return [
+    item('insert:chart', '图表...'),
+    item('insert:sparkline', '迷你图...'),
+    divider('insert:divider:1'),
     item('insert:row', '插入行...'),
     item('insert:col', '插入列...'),
     item('insert:deleteRow', '删除行'),
@@ -282,6 +295,7 @@ function runFileAction(key: string, ctx: MenuContext, openDialog: (name: DialogN
   if (key === 'file:importXlsx') xlsxInput.current?.click();
   if (key === 'file:save') saveWorkbook(ctx.store);
   if (key === 'file:saveAs' || key === 'file:export') downloadWorkbook(ctx.store);
+  if (key === 'file:exportCsv') downloadCsv(ctx.store);
   if (key === 'file:exportXlsx') downloadXlsx(ctx.store);
   if (key === 'file:print') openDialog('printPreview');
   if (key === 'file:close') ctx.closeDemo?.();
@@ -301,6 +315,8 @@ function runEditAction(key: string, ctx: MenuContext, openDialog: (name: DialogN
 }
 
 function runInsertAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void): void {
+  if (key === 'insert:chart') openDialog('chart');
+  if (key === 'insert:sparkline') openDialog('sparkline');
   if (key === 'insert:row') openDialog('insertRow');
   if (key === 'insert:col') openDialog('insertCol');
   if (key === 'insert:deleteRow') execute(ctx, new DeleteRowCommand({ r: ctx.selected?.r1 ?? 0, count: selectedRows(ctx.selected) }));
@@ -458,6 +474,22 @@ function downloadXlsx(store: Store): void {
   message.success('已导出 xlsx');
 }
 
+/** Active sheet as CSV (BOM'd UTF-8, displayed values). */
+function downloadCsv(store: Store): void {
+  const blob = exportCsvBlob(store);
+  const url = URL.createObjectURL(blob);
+  const name = activeSheetFileName(store, 'csv');
+  const a = document.createElement('a');
+  a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url);
+  message.success(`已导出 ${name}`);
+}
+
+function activeSheetFileName(store: Store, ext: string): string {
+  const sheet = store.getSheets().find((s) => s.id === store.getActiveSheetId());
+  const base = (sheet?.name ?? 'sheet').replace(/[\\/:*?"<>|]/g, '_');
+  return `${base}.${ext}`;
+}
+
 function openLocalFile(event: React.ChangeEvent<HTMLInputElement>, ctx: MenuContext): void {
   const file = event.currentTarget.files?.[0];
   if (file === undefined) return;
@@ -510,6 +542,8 @@ function Dialogs({ dialog, setDialog, props, view, findService: svc }: { readonl
     <AboutDialog open={dialog === 'about'} onCancel={close} />
     <ShortcutsDialog open={dialog === 'shortcuts'} onCancel={close} />
     <DataValidationDialog open={dialog === 'dataValidation'} onCancel={close} onSubmit={(type: ValidationType, config: ValidationConfig) => submitValidation(type, config, props, close)} />
+    <ChartDialog open={dialog === 'chart'} onCancel={close} onSubmit={(type, title) => { props.onCreateChart?.(type, title); close(); }} />
+    <SparklineDialog open={dialog === 'sparkline'} onCancel={close} onSubmit={(config) => { if (props.onInsertSparkline?.(config.type, config.range) !== false) close(); }} />
     <ProtectSheetDialog open={dialog === 'protectSheet'} store={props.store} onCancel={close} />
     <UnprotectSheetDialog open={dialog === 'unprotectSheet'} store={props.store} onCancel={close} />
     <HistoryPanel open={dialog === 'history'} onCancel={close} cmdManager={props.cmdManager} />

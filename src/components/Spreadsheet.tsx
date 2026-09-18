@@ -19,11 +19,16 @@ import { EventBus } from '../events/EventBus';
 import { FormulaEngine } from '../formula/FormulaEngine';
 import { isSingleMergeSelection, mergeSelection } from './mergeActions';
 import { isExactlyOneMerge, moveDirection, resolveArrowTarget, resolveEditAnchor, snapClickSelection, snapRangeSelection } from '../selection/mergeSnap';
+import { sameRange, skipHiddenCells } from '../selection/visibleStep';
 import { KeyboardHandler, type MenuShortcutCommand } from '../keys/KeyboardHandler';
 import type { FindMatch } from '../find/FindReplaceService';
 import { PluginManager, type Plugin } from '../plugin/PluginManager';
 import { CanvasRenderer, COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS, type CellAddress } from '../renderer/CanvasRenderer';
 import { FillRangeCommand } from '../commands/impl/FillRange';
+import { CreateChartCommand } from '../commands/impl/CreateChart';
+import { RemoveChartCommand } from '../commands/impl/RemoveChart';
+import { SetRowsHiddenCommand, SetColsHiddenCommand } from '../commands/impl/SetHidden';
+import { SetSparklineCommand } from '../commands/impl/SetSparkline';
 import { makeMoveRange } from '../commands/commandFactories';
 import { SetColWidth } from '../commands/impl/SetColWidth';
 import { SetRowHeight } from '../commands/impl/SetRowHeight';
@@ -47,6 +52,11 @@ import { StatusBar } from './StatusBar';
 import { FormulaBar } from './FormulaBar';
 import { MenuBar, allSheetRange } from './menu/MenuBar';
 import { excelSelectAll, edgeJump } from '../selection/currentRegion';
+import { parseNameBoxInput } from '../selection/nameBox';
+import { toggleAutoFilterCommand } from '../filter/toggleFilter';
+import { ChartPanel } from '../charts/ChartPanel';
+import type { ChartType } from '../charts/types';
+import type { SparklineType } from '../sparkline/types';
 import { FilterDropdown } from './FilterDropdown';
 import { startAutoSave } from '../db/autoSave';
 import { loadWorkbook, DEFAULT_ID, saveWorkbook as saveToDB } from '../db/WorkbookDB';
@@ -282,10 +292,10 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   }, [editing]);
 
   return <ErrorBoundary><div className="ss-root">
-    <MenuBar {...menuBarProps(store, cmdManager, selected, selectRange, () => selectSelection(sheetSelection(allSheetRange())), onClose)} view={{ ...view, setZoom: (zoom) => setView((current) => ({ ...current, zoom })), setShowFormula: (showFormula) => setView((current) => ({ ...current, showFormula })), setShowGrid: (showGrid) => setView((current) => ({ ...current, showGrid })), setFreeze: (frozenRows, frozenCols) => setView((current) => ({ ...current, frozenRows, frozenCols })) }} onFindNavigate={(match) => { if (match.sheetId !== store.getActiveSheetId()) store.activateSheet(match.sheetId); selectSelection(cellSelection(match.r, match.c)); }} onFindHighlight={(matches, current) => setFindHighlights(matches.length === 0 ? null : { matches, current })} openDialogKey={findDialogOpen} />
+    <MenuBar {...menuBarProps(store, cmdManager, selected, selectRange, () => selectSelection(sheetSelection(allSheetRange())), onClose)} view={{ ...view, setZoom: (zoom) => setView((current) => ({ ...current, zoom })), setShowFormula: (showFormula) => setView((current) => ({ ...current, showFormula })), setShowGrid: (showGrid) => setView((current) => ({ ...current, showGrid })), setFreeze: (frozenRows, frozenCols) => setView((current) => ({ ...current, frozenRows, frozenCols })) }} onFindNavigate={(match) => { if (match.sheetId !== store.getActiveSheetId()) store.activateSheet(match.sheetId); selectSelection(cellSelection(match.r, match.c)); }} onFindHighlight={(matches, current) => setFindHighlights(matches.length === 0 ? null : { matches, current })} openDialogKey={findDialogOpen} onCreateChart={(type, title) => submitCreateChart(type, title, selected, execCmd)} onInsertSparkline={(type, rangeInput) => submitInsertSparkline(type, rangeInput, store, selected, execCmd)} />
     <InteractionToolbar selected={selected} store={store} cmdManager={cmdManager} view={view} setView={setView} selectAll={() => selectSelection(sheetSelection(allSheetRange()))} painting={painting} onTogglePainter={() => { if (painting) { setPainting(false); setSourceStyle(undefined); } else { const cell = selected?.active; const s = cell === undefined ? undefined : store.getCell(cell.r, cell.c)?.styleId === undefined ? undefined : store.getStyle(store.getCell(cell.r, cell.c)!.styleId!); setSourceStyle(s); setPainting(true); } }} onToggleProtection={() => setProtectOpen(true)} />
     <ProtectionModal open={protectOpen} onClose={() => setProtectOpen(false)} store={store} />
-    <FormulaBar selected={selected} value={formulaValue} onChange={setFormulaValue} onCommit={() => commitFormulaValue(selected, formulaValue, store, cmdManager)} />
+    <FormulaBar selected={selected} value={formulaValue} onChange={setFormulaValue} onCommit={() => commitFormulaValue(selected, formulaValue, store, cmdManager)} onGoTo={(input) => jumpNameBox(store, input, selectRange)} />
     <div className="ss-canvas-wrap"><canvas ref={canvasRef} className="ss-canvas" tabIndex={0} aria-label="Spreadsheet canvas, use arrow keys to navigate" onKeyDown={(e) => {
         if ((e.ctrlKey || e.metaKey) && e.altKey && e.key.toLowerCase() === 'v') {
           // Excel: Ctrl+Alt+V opens Paste Special.
@@ -304,6 +314,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       }} onDoubleClick={(e) => { const cell = rendererRef.current?.cellAtPoint(e.clientX, e.clientY); if (cell != null) startEditing(cell, undefined, true); }} />
       {editing !== null && <EditorOverlay refEl={inputRef} editingRefSetter={(cell) => { editingRef.current = cell; setEditing(cell); }} editing={editing} setEditing={setEditing} commit={commitEditing} zoom={view.zoom} store={store} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}</div>
       <PasteSpecialDialog open={pasteSpecialOpen} onOk={(opts) => void applyPasteSpecial(opts)} onCancel={() => setPasteSpecialOpen(false)} />
+      {store.getCharts().length > 0 && <div className="ss-chart-layer">{store.getCharts().map((spec) => <ChartPanel key={spec.id} spec={spec} store={store} onClose={() => execCmd(new RemoveChartCommand({ id: spec.id }))} />)}</div>}
       {filterPopup !== null && <FilterDropdown store={store} cmdManagerExecutor={execCmd} r={filterPopup.r} c={filterPopup.c} x={filterPopup.x} y={filterPopup.y} onClose={() => setFilterPopup(null)} />}
     <StatusBar store={store} selected={selected?.range ?? null} zoom={view.zoom} />
     <BottomBar sheets={sheets} activeSheetId={activeSheetId} onSheetChange={(id) => { setMulti([]); store.activateSheet(id); }} onAddSheet={() => addSheet(store)} onRenameSheet={(id) => renameSheet(store, id)} onDeleteSheet={(id) => deleteSheet(store, id)} />
@@ -322,9 +333,11 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       onInsertRow={(r, position, count) => execCmd(new InsertRowCommand({ r, count, position }))}
       onDeleteRow={(r, count) => execCmd(new DeleteRowCommand({ r, count }))}
       onSetRowHeight={(r, height) => execCmd(new SetRowHeight({ r, height }))}
+      onSetRowsHidden={(r, count, hidden) => unhideOrHideRows(store, execCmd, r, count, hidden)}
       onInsertCol={(c, position, count) => execCmd(new InsertColCommand({ c, count, position }))}
       onDeleteCol={(c, count) => execCmd(new DeleteColCommand({ c, count }))}
       onSetColWidth={(c, width) => execCmd(new SetColWidth({ c, width }))}
+      onSetColsHidden={(c, count, hidden) => unhideOrHideCols(store, execCmd, c, count, hidden)}
     />}
   </div></ErrorBoundary>;
 };
@@ -582,12 +595,17 @@ function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selec
     // Excel: Enter/Tab walk the active cell through a multi-cell selection.
     selectSelection(rangeSelection(range, selected.anchor, cycleActive(range, selected.active, event.key, event.shiftKey)));
   }
-  else if (action.type === 'move' && action.range !== undefined && event.shiftKey) { clearMulti?.(); selectSelection(snapRangeSelection(store, extendSelection(selected, { r: action.range.r1, c: action.range.c1 }))); }
+  else if (action.type === 'move' && action.range !== undefined && event.shiftKey) {
+    // Excel: shift+arrow extension also skips hidden rows/columns.
+    const { dr, dc } = moveDirection(range, action.range);
+    const visible = skipHiddenCells(store, Range.single(selected.active.r, selected.active.c).toAddress(), action.range, dr, dc);
+    clearMulti?.();
+    selectSelection(snapRangeSelection(store, extendSelection(selected, { r: visible.r1, c: visible.c1 })));
+  }
   else if (action.type === 'move' && action.range !== undefined) {
     clearMulti?.();
-    // Excel: a merged cell is one navigation stop — stepping in selects it whole, stepping out jumps past it.
     const { dr, dc } = moveDirection(range, action.range);
-    selectRange(resolveArrowTarget(store, range, action.range, dr, dc));
+    selectRange(moveArrowTarget(store, range, action.range, dr, dc));
   }
   else if (action.type === 'moveEdge') {
     // Excel Ctrl+arrow: jump to the data-region edge; Shift extends the selection to it.
@@ -639,7 +657,7 @@ function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selec
   else if (action.type === 'cancel') clearClipboardSession();
   else if (action.type === 'type' && action.text !== undefined) { startEditing({ r: range.r1, c: range.c1 }, action.text); }
   else if (action.type === 'menu' && action.command === 'selectAll') selectSelection(excelSelectAll(store, selected, TOTAL_ROWS, TOTAL_COLS));
-  else if (action.type === 'menu' && action.command !== undefined) handleMenuShortcut(action.command, store, cmdManager, range, selectRange, setView, setFindDialog);
+  else if (action.type === 'menu' && action.command !== undefined) handleMenuShortcut(action.command, store, cmdManager, range, selectRange, setView, setFindDialog, execCmd);
   else if (action.type === 'copy' || action.type === 'cut' || action.type === 'paste') runClipboard(action.type, range);
 }
 
@@ -823,8 +841,8 @@ function switchSheet(store: Store, delta: 1 | -1): void {
   if (next !== undefined) store.activateSheet(next.id);
 }
 
-function handleMenuShortcut(command: MenuShortcutCommand, store: Store, cmdManager: CommandManager | undefined, selected: RangeAddress, selectRange: (range: RangeAddress) => void, setView: Dispatch<SetStateAction<ViewState>>, setFindDialog: (name: DialogName | null) => void): void {
-  const map: Record<MenuShortcutCommand, () => void> = { save: () => saveToLocal(store), find: () => setFindDialog('find'), replace: () => setFindDialog('replace'), selectAll: () => selectRange(allSheetRange()), bold: () => applyShortcutStyle(store, cmdManager, selected, { bold: true }), italic: () => applyShortcutStyle(store, cmdManager, selected, { italic: true }), underline: () => applyShortcutStyle(store, cmdManager, selected, { underline: true }), zoom100: () => setView((current) => ({ ...current, zoom: 100 })), zoomIn: () => setView((current) => ({ ...current, zoom: Math.min(200, current.zoom + 10) })), zoomOut: () => setView((current) => ({ ...current, zoom: Math.max(50, current.zoom - 10) })), undo: () => cmdManager?.undo(), redo: () => cmdManager?.redo(), formatCells: () => setFindDialog('numberFormat'), nextSheet: () => switchSheet(store, 1), prevSheet: () => switchSheet(store, -1) };
+function handleMenuShortcut(command: MenuShortcutCommand, store: Store, cmdManager: CommandManager | undefined, selected: RangeAddress, selectRange: (range: RangeAddress) => void, setView: Dispatch<SetStateAction<ViewState>>, setFindDialog: (name: DialogName | null) => void, execCmd: (cmd: Command) => void): void {
+  const map: Record<MenuShortcutCommand, () => void> = { save: () => saveToLocal(store), find: () => setFindDialog('find'), replace: () => setFindDialog('replace'), selectAll: () => selectRange(allSheetRange()), bold: () => applyShortcutStyle(store, cmdManager, selected, { bold: true }), italic: () => applyShortcutStyle(store, cmdManager, selected, { italic: true }), underline: () => applyShortcutStyle(store, cmdManager, selected, { underline: true }), zoom100: () => setView((current) => ({ ...current, zoom: 100 })), zoomIn: () => setView((current) => ({ ...current, zoom: Math.min(200, current.zoom + 10) })), zoomOut: () => setView((current) => ({ ...current, zoom: Math.max(50, current.zoom - 10) })), undo: () => cmdManager?.undo(), redo: () => cmdManager?.redo(), formatCells: () => setFindDialog('numberFormat'), nextSheet: () => switchSheet(store, 1), prevSheet: () => switchSheet(store, -1), toggleFilter: () => { const cmd = toggleAutoFilterCommand(store, selected); if (cmd !== null) execCmd(cmd); } };
   map[command]();
 }
 function applyShortcutStyle(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress, style: Partial<Style>): void { const cmd = new SetRangeStyleCommand({ ...range, style }); if (cmdManager === undefined) cmd.execute(store); else cmdManager.execute(cmd); }
@@ -834,6 +852,75 @@ function dispatchThemeChanged(): void { window.dispatchEvent(new CustomEvent('ss
 function commitFormulaValue(selected: Selection | null, value: string, store: Store, cmdManager: CommandManager | undefined): void {
   if (selected === null) return;
   setCellText(store, cmdManager, { r: selected.range.r1, c: selected.range.c1 }, value);
+}
+
+/**
+ * Excel arrow-key landing: hidden rows/columns are skipped in the step
+ * direction (selection stays put when the rest of the grid is hidden), and a
+ * merged cell remains one navigation stop — including when the step-out lands
+ * on a hidden cell.
+ */
+function moveArrowTarget(store: Store, current: RangeAddress, target: RangeAddress, dr: number, dc: number): RangeAddress {
+  const visible = skipHiddenCells(store, current, target, dr, dc);
+  if (sameRange(visible, current)) return current; // nothing visible ahead — Excel stays put
+  const merged = resolveArrowTarget(store, current, visible, dr, dc);
+  if (sameRange(merged, visible)) return merged;
+  const isSingle = merged.r1 === merged.r2 && merged.c1 === merged.c2;
+  return isSingle ? skipHiddenCells(store, current, merged, dr, dc) : merged;
+}
+
+/** 插入 → 图表: the chart's data range is the current selection. */
+function submitCreateChart(type: ChartType, title: string, selected: Selection | null, execCmd: (cmd: Command) => void): void {
+  const sel = selected?.range ?? Range.single(0, 0).toAddress();
+  execCmd(new CreateChartCommand({ ...sel, type, title: title === '' ? undefined : title }));
+}
+
+/** 插入 → 迷你图: anchored at the active cell; returns false (dialog stays open) on a bad range. */
+function submitInsertSparkline(type: SparklineType, rangeInput: string, store: Store, selected: Selection | null, execCmd: (cmd: Command) => void): boolean {
+  const target = parseNameBoxInput(store, rangeInput);
+  if (target === null) { message.error('数据范围无效，请输入如 A1:E1 的引用'); return false; }
+  const anchor = selected?.active ?? { r: target.range.r1, c: target.range.c1 };
+  execCmd(new SetSparklineCommand({ ...target.range, type, targetRow: anchor.r, targetCol: anchor.c }));
+  return true;
+}
+
+/** Excel name box: jump to an A1 ref / range / defined name, switching sheets when prefixed. */
+function jumpNameBox(store: Store, input: string, selectRange: (range: RangeAddress) => void): void {
+  const target = parseNameBoxInput(store, input);
+  if (target === null) { message.error('引用或名称无效，示例：A1、B2:D5、Sheet2!A1'); return; }
+  if (target.sheetId !== null && target.sheetId !== store.getActiveSheetId()) store.activateSheet(target.sheetId);
+  selectRange(target.range);
+}
+
+/**
+ * 隐藏行: hide the clicked span. 取消隐藏 (Excel): restores the hidden rows
+ * covered by the header selection — to unhide, select across the collapsed
+ * gap (or a wider span) and choose 取消隐藏, exactly like Excel.
+ */
+function unhideOrHideRows(store: Store, execCmd: (cmd: Command) => void, r: number, count: number, hidden: boolean): void {
+  if (hidden) {
+    execCmd(new SetRowsHiddenCommand({ r1: r, r2: r + count - 1, hidden: true }));
+    return;
+  }
+  // Excel: 取消隐藏只作用于选区覆盖的隐藏行 — the header selection's address
+  // span already includes the collapsed gap, so restore hidden rows inside it.
+  let any = false;
+  for (let i = r; i < r + count; i += 1) if (store.getRow(i)?.hide === true) { any = true; break; }
+  if (!any) { message.info('选区内没有隐藏的行'); return; }
+  execCmd(new SetRowsHiddenCommand({ r1: r, r2: r + count - 1, hidden: false }));
+}
+
+/** 隐藏列 / 取消隐藏列: same selection-scoped unhide semantics as rows (Excel). */
+function unhideOrHideCols(store: Store, execCmd: (cmd: Command) => void, c: number, count: number, hidden: boolean): void {
+  if (hidden) {
+    execCmd(new SetColsHiddenCommand({ c1: c, c2: c + count - 1, hidden: true }));
+    return;
+  }
+  // Excel: 取消隐藏只作用于选区覆盖的隐藏列（同行语义）。
+  let any = false;
+  for (let i = c; i < c + count; i += 1) if (store.getCol(i)?.hide === true) { any = true; break; }
+  if (!any) { message.info('选区内没有隐藏的列'); return; }
+  execCmd(new SetColsHiddenCommand({ c1: c, c2: c + count - 1, hidden: false }));
 }
 
 

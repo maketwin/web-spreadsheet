@@ -31,6 +31,8 @@ ss.mount();
 - Cell editing with IME (Chinese input) support, find & replace, freeze panes
 - Find & replace: case/whole-cell/regex matching, sheet or workbook scope, find-all list with cross-sheet jumps, single-undo replace-all, yellow highlights with an orange current-match outline
 - Row/column drag-resize, double-click auto-fit, merged cells, borders
+- Hide/unhide rows and columns from the header context menus (one-step unhide-all)
+- Editable name box: jump to `A1`, ranges, `Sheet2!A1` or defined names
 - Accessibility: ARIA roles across the UI, keyboard navigation, `focus-visible` outlines, dark mode
 
 **Excel-parity fill handle**
@@ -49,14 +51,16 @@ ss.mount();
 - Undo restores formula results too (batched deferred recalc)
 
 **Data features**
-- AutoFilter with criteria dropdowns and range sorting
+- AutoFilter with criteria dropdowns and range sorting (Ctrl+Shift+L toggles)
 - Data validation, conditional formatting (data bars, color scales, formula rules)
-- Named ranges, sheet protection (hashed password), sparklines, charts (Chart.js)
+- Named ranges, sheet protection (hashed password)
+- Charts (Chart.js, 插入 → 图表) and in-cell sparklines (line/bar/win-loss, 插入 → 迷你图)
 - Custom number format strings — Excel syntax: `#,##0.00`, `0.00E+00`, `yyyy-mm-dd`, `h:mm AM/PM`, `正;负;零;文本` sections, with xlsx round-trip
 
 **I/O & persistence**
 - Real xlsx import/export (SheetJS) including number formats
-- CSV/TSV and JSON import, auto-save to IndexedDB with startup restore
+- CSV/TSV and JSON import, CSV export (BOM'd UTF-8, displayed values), JSON/xlsx export
+- Auto-save to IndexedDB with startup restore
 - Paginated printing: print preview with paper/orientation/margins/scale settings, merged-cell-aware page breaks, 192-dpi offscreen page rendering (`Ctrl+P`)
 
 **Extensibility**

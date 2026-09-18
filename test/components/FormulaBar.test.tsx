@@ -8,7 +8,7 @@ describe('FormulaBar', () => {
     const selected = cellSelection(2, 1); // B3
     render(<FormulaBar selected={selected} value="hello" onChange={() => {}} onCommit={() => {}} />);
 
-    expect(screen.getByLabelText('Selected cell')).toHaveTextContent('B3');
+    expect(screen.getByLabelText('Selected cell')).toHaveValue('B3');
     expect(screen.getByLabelText('Formula bar')).toHaveValue('hello');
   });
 

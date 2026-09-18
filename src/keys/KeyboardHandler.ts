@@ -19,13 +19,13 @@ export interface KeyboardAction {
   readonly fillDir?: 'down' | 'right';
 }
 
-export type MenuShortcutCommand = 'save' | 'find' | 'replace' | 'selectAll' | 'bold' | 'italic' | 'underline' | 'zoom100' | 'zoomIn' | 'zoomOut' | 'undo' | 'redo' | 'formatCells' | 'nextSheet' | 'prevSheet';
+export type MenuShortcutCommand = 'save' | 'find' | 'replace' | 'selectAll' | 'bold' | 'italic' | 'underline' | 'zoom100' | 'zoomIn' | 'zoomOut' | 'undo' | 'redo' | 'formatCells' | 'nextSheet' | 'prevSheet' | 'toggleFilter';
 
 export class KeyboardHandler {
   public static next(key: string, range: RangeAddress, shiftKey = false, metaKey = false, ctrlKey = false): KeyboardAction | null {
     // Excel: F4 repeats the last action on the current selection.
     if (key === 'F4' && !metaKey && !ctrlKey) return { type: 'repeat' };
-    if (metaKey || ctrlKey) return shortcutAction(key);
+    if (metaKey || ctrlKey) return shortcutAction(key, shiftKey);
     // Excel: Shift+Space selects the entire row of the active cell.
     if (key === ' ' && shiftKey) return { type: 'selectRow' };
     if (key === 'F2') return { type: 'edit' };
@@ -53,8 +53,8 @@ export class KeyboardHandler {
   }
 }
 
-function shortcutAction(key: string): KeyboardAction | null {
-  // Excel: Ctrl+arrows jump to the data-region edge (resolved against the store by the caller).
+function shortcutAction(key: string, shiftKey = false): KeyboardAction | null {
+  // Excel: Ctrl+arrow jumps to the data-region edge (resolved against the store by the caller).
   if (key === 'ArrowUp') return { type: 'moveEdge', dr: -1, dc: 0 };
   if (key === 'ArrowDown') return { type: 'moveEdge', dr: 1, dc: 0 };
   if (key === 'ArrowLeft') return { type: 'moveEdge', dr: 0, dc: -1 };
@@ -68,6 +68,8 @@ function shortcutAction(key: string): KeyboardAction | null {
   // Excel: Ctrl+Enter fills the whole selection with the active cell's content.
   if (key === 'Enter') return { type: 'fillSelection' };
   const normalized = key.toLowerCase();
+  // Excel: Ctrl+Shift+L toggles AutoFilter on the selection.
+  if (normalized === 'l' && shiftKey) return { type: 'menu', command: 'toggleFilter' };
   if (normalized === 'd') return { type: 'fill', fillDir: 'down' };
   if (normalized === 'r') return { type: 'fill', fillDir: 'right' };
   if (normalized === 'c') return { type: 'copy' };

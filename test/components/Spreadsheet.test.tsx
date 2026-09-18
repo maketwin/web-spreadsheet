@@ -186,7 +186,7 @@ describe('Spreadsheet', () => {
     await act(async () => undefined);
     fireEvent.keyDown(canvas, { key: 'Delete' });
 
-    expect(screen.getByLabelText('Selected cell')).toHaveTextContent('A:A');
+    expect(screen.getByLabelText('Selected cell')).toHaveValue('A:A');
     expect(store.getCell(0, 0)?.text).toBe('');
   });
 
@@ -219,7 +219,7 @@ describe('Spreadsheet', () => {
     fireEvent.mouseUp(window);
     await act(async () => undefined);
 
-    expect(screen.getByLabelText('Selected cell')).toHaveTextContent('A:C');
+    expect(screen.getByLabelText('Selected cell')).toHaveValue('A:C');
   });
 
   it('selects the full sheet from the top-left header corner', async () => {
@@ -231,7 +231,7 @@ describe('Spreadsheet', () => {
     fireEvent.mouseDown(canvas, { clientX: 5, clientY: 5 });
     await act(async () => undefined);
 
-    expect(screen.getByLabelText('Selected cell')).toHaveTextContent('A1:Z1000');
+    expect(screen.getByLabelText('Selected cell')).toHaveValue('A1:Z1000');
   });
 
   it('drags across cells and shows the selected rectangular range', async () => {
@@ -248,7 +248,7 @@ describe('Spreadsheet', () => {
     fireEvent.keyDown(canvas, { key: 'ArrowDown', shiftKey: true });
     await act(async () => undefined);
 
-    expect(screen.getByLabelText('Selected cell')).toHaveTextContent('A1:B2');
+    expect(screen.getByLabelText('Selected cell')).toHaveValue('A1:B2');
   });
 
   it('keeps the mouse-down cell as the anchor during reverse dragging', async () => {
@@ -263,7 +263,7 @@ describe('Spreadsheet', () => {
     fireEvent.keyDown(canvas, { key: 'ArrowRight', shiftKey: true });
     await act(async () => undefined);
 
-    expect(screen.getByLabelText('Selected cell')).toHaveTextContent('B1:C3');
+    expect(screen.getByLabelText('Selected cell')).toHaveValue('B1:C3');
   });
 
 

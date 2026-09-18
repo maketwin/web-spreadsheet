@@ -31,7 +31,8 @@
 
     /* Formula bar like Excel */
     .ss-formula-bar { display: grid; grid-template-columns: 64px 1px 28px 1fr; gap: 0; align-items: stretch; min-height: 24px; padding: 0; background: #ffffff; border-bottom: 1px solid var(--ss-border); }
-    .ss-formula-name { display: flex; align-items: center; justify-content: center; height: 24px; margin: 0; font: 12px "Segoe UI", sans-serif; color: var(--ss-text); background: #ffffff; border: 0; border-right: 1px solid var(--ss-border); border-radius: 0; }
+    .ss-formula-name { display: flex; align-items: center; justify-content: center; height: 24px; width: 100%; margin: 0; font: 12px "Segoe UI", sans-serif; color: var(--ss-text); background: #ffffff; border: 0; border-right: 1px solid var(--ss-border); border-radius: 0; text-align: center; outline: none; box-sizing: border-box; }
+    .ss-formula-name:focus { box-shadow: inset 0 0 0 1px var(--ss-accent); }
     .ss-formula-fx { display: flex; align-items: center; justify-content: center; height: 24px; font: italic 700 12px "Segoe UI", serif; color: #217346; border-right: 1px solid var(--ss-border); background: #f8f8f8; }
     .ss-formula-input { width: 100%; height: 24px; padding: 0 6px; color: var(--ss-text); background: #ffffff; border: 0; border-radius: 0; outline: none; box-sizing: border-box; font: 12px "Segoe UI", "Microsoft YaHei", sans-serif; }
     .ss-formula-input:focus { border-color: transparent; box-shadow: none; }
@@ -54,6 +55,13 @@
     .ss-status-save { color: #dff5e5; }
 
     .ss-canvas-wrap { position: relative; flex: 1; min-height: 0; overflow: hidden; background: #ffffff; }
+    /* Floating chart panels over the grid (Excel chart objects). */
+    .ss-chart-layer { position: absolute; top: 28px; right: 12px; z-index: 3; display: flex; flex-direction: column; gap: 8px; max-width: min(360px, 60%); pointer-events: none; }
+    .ss-chart-layer > * { pointer-events: auto; }
+    .ss-chart-panel { background: #ffffff; border: 1px solid var(--ss-border); border-radius: 4px; box-shadow: 0 4px 12px rgba(0,0,0,.15); padding: 8px; }
+    .ss-chart-panel-header { display: flex; align-items: center; justify-content: space-between; font: 600 12px "Segoe UI", "Microsoft YaHei", sans-serif; color: var(--ss-text); margin-bottom: 6px; }
+    .ss-chart-close { border: 0; background: transparent; color: var(--ss-text); cursor: pointer; font-size: 14px; line-height: 1; padding: 2px 4px; }
+    .ss-chart-close:hover { background: #e6e6e6; border-radius: 3px; }
     .ss-canvas { width: 100%; height: 100%; display: block; outline: none; }
     .ss-editor-overlay { position: absolute; box-sizing: border-box; padding: 0 3px; border: 0; background: var(--ss-bg); color: var(--ss-text); font: 11px Calibri, "Segoe UI", "Microsoft YaHei", sans-serif; outline: none; z-index: 2; }
     .ss-editor-overlay.ss-editor-overlay--wrap { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }

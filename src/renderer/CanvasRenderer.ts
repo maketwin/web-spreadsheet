@@ -15,6 +15,8 @@ import { parseRange } from '../util/cell';
 import { coveredBySameMerge } from '../util/merge';
 import { formatValue } from '../format/NumberFormatter';
 import { ConditionalService } from '../conditional/ConditionalService';
+import { sparklineValues } from '../sparkline/values';
+import type { SparklineSpec } from '../sparkline/types';
 import { WRAP_LINE_HEIGHT, wrapTextLines } from '../util/wrapText';
 import { TextMetricsCache } from './cache/TextMetricsCache';
 
@@ -62,6 +64,9 @@ const SELECTION_BORDER_HIT_PX = 4;
 const AUTO_FILTER_BUTTON_WIDTH = 16;
 /** Excel colors the row numbers surviving a filter in blue (not the theme accent). */
 const FILTERED_ROW_NUMBER_COLOR = '#0057C2';
+/** Sparkline series colors, matching the React Sparkline component. */
+const SPARKLINE_COLOR = '#4A90D9';
+const SPARKLINE_LOSS_COLOR = '#D94A4A';
 
 /** Logical border edges for the current paint pass (deduped in edge-space). */
 
@@ -504,6 +509,7 @@ export class CanvasRenderer {
     this.collectVisibleBorders(this.borderVis(vis));
     for (const q of quads) { this.paintGridLines(q, theme); this.flushBorders(q.clip); }
     this.paintCellTexts(quads, this.borderVis(vis), theme);
+    this.paintSparklines(quads);
     this.paintFreezeSeparators(theme);
     this.ctx.restore();
   }
@@ -571,6 +577,7 @@ export class CanvasRenderer {
       const frozenColXs: number[] = [];
       for (let c = 0; c < fc; c += 1) {
         const w = this.scroller.getColWidth(c);
+        if (this.opts.store.getCol(c)?.hide === true) continue;
         const x = this.cellVP(0, c).x;
         const level = this.colHeaderLevel(c);
         this.paintHeaderHighlight(level, x + 0.5, 0.5, w - 1, COL_HEADER_HEIGHT - 1, theme);
@@ -591,6 +598,7 @@ export class CanvasRenderer {
     colXs.push(x);
     for (let c = Math.max(fc, vis.startCol); c < vis.endCol; c += 1) {
       const w = this.scroller.getColWidth(c);
+      if (this.opts.store.getCol(c)?.hide === true) { x += w; continue; }
       const level = this.colHeaderLevel(c);
       this.paintHeaderHighlight(level, x + 0.5, 0.5, w - 1, COL_HEADER_HEIGHT - 1, theme);
       this.ctx.fillStyle = level === 'solid' ? theme.bg : headerText;
@@ -757,6 +765,7 @@ export class CanvasRenderer {
           if (rowMeta?.hide === true) continue;
           for (let c = q.c0; c < q.c1; c += 1) {
             if (skip.has(`${r},${c}`)) continue;
+            if (this.opts.store.getCol(c)?.hide === true) continue;
             const merge = this.opts.store.getMergeAt(r, c);
             if (merge !== undefined) {
               const mr = parseRange(merge);
@@ -784,6 +793,7 @@ export class CanvasRenderer {
           if (rowMeta?.hide === true) continue;
           for (let c = q.c0; c < q.c1; c += 1) {
             if (skip.has(`${r},${c}`)) continue;
+            if (this.opts.store.getCol(c)?.hide === true) continue;
             const merge = this.opts.store.getMergeAt(r, c);
             if (merge !== undefined) {
               const mr = parseRange(merge);
@@ -806,6 +816,76 @@ export class CanvasRenderer {
         }
       });
     }
+  }
+
+  /** Excel sparklines: mini line/bar/win-loss charts drawn inside their anchor cell. */
+  private paintSparklines(quads: PaintQuad[]): void {
+    const sparklines = this.opts.store.getSparklines();
+    if (sparklines.length === 0) return;
+    for (const spec of sparklines) {
+      if (this.opts.store.getRow(spec.row)?.hide === true) continue;
+      if (this.opts.store.getCol(spec.col)?.hide === true) continue;
+      for (const q of quads) {
+        if (spec.row < q.r0 || spec.row >= q.r1 || spec.col < q.c0 || spec.col >= q.c1) continue;
+        this.withClip(q.clip, () => this.paintSparkline(spec));
+      }
+    }
+  }
+
+  private paintSparkline(spec: SparklineSpec): void {
+    const data = sparklineValues(this.opts.store, spec.range);
+    if (data.length === 0) return;
+    const { x, y } = this.cellVP(spec.row, spec.col);
+    const w = this.scroller.getColWidth(spec.col);
+    const h = this.scroller.getRowHeight(spec.row);
+    const pad = 3;
+    const iw = Math.max(w - pad * 2, 0);
+    const ih = Math.max(h - pad * 2, 0);
+    if (iw < 2 || ih < 2) return;
+    const cx = x + pad;
+    const cy = y + pad;
+    if (spec.type === 'line') {
+      const min = Math.min(...data);
+      const max = Math.max(...data);
+      const span = max - min || 1;
+      const step = iw / Math.max(data.length - 1, 1);
+      this.ctx.strokeStyle = SPARKLINE_COLOR;
+      this.ctx.lineWidth = 1.5;
+      this.ctx.beginPath();
+      data.forEach((v, i) => {
+        const px = cx + i * step;
+        const py = cy + ih - ((v - min) / span) * ih;
+        if (i === 0) this.ctx.moveTo(px, py); else this.ctx.lineTo(px, py);
+      });
+      this.ctx.stroke();
+      return;
+    }
+    const gap = 1;
+    const barW = Math.max(iw / data.length - gap, 1);
+    if (spec.type === 'winloss') {
+      // Excel 盈亏图: magnitudes are ignored — every win is an equal block above
+      // the midline, every loss an equal (red) block below it; zeros are gaps.
+      const half = ih / 2;
+      data.forEach((v, i) => {
+        if (v === 0) return;
+        const bx = cx + i * (barW + gap);
+        this.ctx.fillStyle = v > 0 ? SPARKLINE_COLOR : SPARKLINE_LOSS_COLOR;
+        this.ctx.fillRect(bx, v > 0 ? cy : cy + half, barW, half);
+      });
+      return;
+    }
+    // Bar (Excel 柱形迷你图): bars start at the zero line — positives grow up,
+    // negatives hang below it.
+    const min = Math.min(0, ...data);
+    const max = Math.max(...data, 0);
+    const span = max - min || 1;
+    const zeroY = cy + ((max - 0) / span) * ih;
+    data.forEach((v, i) => {
+      const bx = cx + i * (barW + gap);
+      const bh = Math.max((Math.abs(v) / span) * ih, v === 0 ? 0 : 1);
+      this.ctx.fillStyle = SPARKLINE_COLOR;
+      this.ctx.fillRect(bx, v >= 0 ? zeroY - bh : zeroY, barW, bh);
+    });
   }
 
   /** Run `paint` clipped to a viewport rect (quadrant separation). */
@@ -1541,7 +1621,12 @@ export class CanvasRenderer {
       if (meta?.hide === true) this.scroller.setRowHeight(r, 0);
       else if (meta?.height !== undefined) this.scroller.setRowHeight(r, meta.height * z);
     }
-    for (let c = 0; c < TOTAL_COLS; c += 1) { const w = this.opts.store.getCol(c)?.width; if (w !== undefined) this.scroller.setColWidth(c, w * z); }
+    for (let c = 0; c < TOTAL_COLS; c += 1) {
+      const meta = this.opts.store.getCol(c);
+      // Hidden columns collapse to zero width, mirroring hidden rows.
+      if (meta?.hide === true) this.scroller.setColWidth(c, 0);
+      else if (meta?.width !== undefined) this.scroller.setColWidth(c, meta.width * z);
+    }
   }
 
   private onStoreEvent(e: StoreEvent): void {
@@ -1551,7 +1636,11 @@ export class CanvasRenderer {
       const h = e.meta?.height;
       this.scroller.setRowHeight(e.r, hidden ? 0 : h !== undefined ? h * z : this.defaultRowHeight());
     }
-    if (e.type === 'col') { const w = e.meta?.width; this.scroller.setColWidth(e.c, w !== undefined ? w * z : this.defaultColWidth()); }
+    if (e.type === 'col') {
+      const hidden = e.meta?.hide === true;
+      const w = e.meta?.width;
+      this.scroller.setColWidth(e.c, hidden ? 0 : w !== undefined ? w * z : this.defaultColWidth());
+    }
     // Find highlights belong to their sheet; switching sheets must not paint
     // stale coordinates onto the new one.
     if (e.type === 'sheet' && e.action === 'activate') { this.highlightMatches = []; this.highlightCurrent = -1; }

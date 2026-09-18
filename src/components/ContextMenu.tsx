@@ -12,9 +12,11 @@ export interface ContextMenuProps {
   readonly onInsertRow?: (r: number, position: 'above' | 'below', count: number) => void;
   readonly onDeleteRow?: (r: number, count: number) => void;
   readonly onSetRowHeight?: (r: number, height: number) => void;
+  readonly onSetRowsHidden?: (r: number, count: number, hidden: boolean) => void;
   readonly onInsertCol?: (c: number, position: 'left' | 'right', count: number) => void;
   readonly onDeleteCol?: (c: number, count: number) => void;
   readonly onSetColWidth?: (c: number, width: number) => void;
+  readonly onSetColsHidden?: (c: number, count: number, hidden: boolean) => void;
   readonly onCut?: () => void;
   readonly onCopy?: () => void;
   readonly onPaste?: () => void;
@@ -27,7 +29,7 @@ type MenuEntry =
   | { readonly kind: 'divider'; readonly key: string };
 
 export const HeaderContextMenu: FC<ContextMenuProps> = ({
-  x, y, type, index, count = 1, onInsertRow, onDeleteRow, onSetRowHeight, onInsertCol, onDeleteCol, onSetColWidth, onCut, onCopy, onPaste, onClear, onClose,
+  x, y, type, index, count = 1, onInsertRow, onDeleteRow, onSetRowHeight, onSetRowsHidden, onInsertCol, onDeleteCol, onSetColWidth, onSetColsHidden, onCut, onCopy, onPaste, onClear, onClose,
 }) => {
   const n = Math.max(1, count);
   const insertLabel = type === 'row'
@@ -44,6 +46,8 @@ export const HeaderContextMenu: FC<ContextMenuProps> = ({
         { kind: 'divider', key: 'd0' },
         { kind: 'item', key: 'insertAbove', label: insertLabel },
         { kind: 'item', key: 'deleteRow', label: deleteLabel },
+        { kind: 'item', key: 'hideRow', label: n > 1 ? `隐藏 ${n} 行` : '隐藏' },
+        { kind: 'item', key: 'unhideRow', label: '取消隐藏' },
         { kind: 'item', key: 'clear', label: '清除内容' },
         { kind: 'divider', key: 'd1' },
         { kind: 'item', key: 'setHeight', label: '行高...' },
@@ -55,6 +59,8 @@ export const HeaderContextMenu: FC<ContextMenuProps> = ({
         { kind: 'divider', key: 'd0' },
         { kind: 'item', key: 'insertLeft', label: insertLabel },
         { kind: 'item', key: 'deleteCol', label: deleteLabel },
+        { kind: 'item', key: 'hideCol', label: n > 1 ? `隐藏 ${n} 列` : '隐藏' },
+        { kind: 'item', key: 'unhideCol', label: '取消隐藏' },
         { kind: 'item', key: 'clear', label: '清除内容' },
         { kind: 'divider', key: 'd1' },
         { kind: 'item', key: 'setWidth', label: '列宽...' },
@@ -73,9 +79,13 @@ export const HeaderContextMenu: FC<ContextMenuProps> = ({
         if (key === 'clear') onClear?.();
         if (key === 'insertAbove' && type === 'row') onInsertRow?.(index, 'above', n);
         if (key === 'deleteRow' && type === 'row') onDeleteRow?.(index, n);
+        if (key === 'hideRow' && type === 'row') onSetRowsHidden?.(index, n, true);
+        if (key === 'unhideRow' && type === 'row') onSetRowsHidden?.(index, n, false);
         if (key === 'setHeight' && type === 'row') showRowHeightDialog(index, onSetRowHeight);
         if (key === 'insertLeft' && type === 'column') onInsertCol?.(index, 'left', n);
         if (key === 'deleteCol' && type === 'column') onDeleteCol?.(index, n);
+        if (key === 'hideCol' && type === 'column') onSetColsHidden?.(index, n, true);
+        if (key === 'unhideCol' && type === 'column') onSetColsHidden?.(index, n, false);
         if (key === 'setWidth' && type === 'column') showColWidthDialog(index, onSetColWidth);
         onClose();
       }}
