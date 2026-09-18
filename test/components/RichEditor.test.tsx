@@ -90,4 +90,18 @@ describe('RichEditor', () => {
     expect(api().applyRunStyle({ bold: true })).toBe(false);
     expect(api().getRuns()).toEqual([{ text: 'abc' }]);
   });
+
+  it('Ctrl+B toggles bold on the selection and stays in the editor', () => {
+    const { api, root } = mountEditor([{ text: 'abcd' }]);
+    selectFlat(root, 1, 3);
+    root.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, bubbles: true, cancelable: true }));
+    expect(api().getRuns()).toEqual([
+      { text: 'a' },
+      { text: 'bc', style: { bold: true } },
+      { text: 'd' },
+    ]);
+    // same keystroke again turns it off (Excel toggle semantics)
+    root.dispatchEvent(new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, bubbles: true, cancelable: true }));
+    expect(api().getRuns()).toEqual([{ text: 'abcd' }]);
+  });
 });

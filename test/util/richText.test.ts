@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyRunStyle,
+  charsAllHave,
   deleteRangeRuns,
   effectiveRunStyle,
   flattenRuns,
@@ -191,6 +192,24 @@ describe('sameRunStyle', () => {
     expect(sameRunStyle(undefined, {})).toBe(true);
     expect(sameRunStyle(RED, { color: '#FF0000' })).toBe(true);
     expect(sameRunStyle(RED, BLUE)).toBe(false);
+  });
+});
+
+describe('charsAllHave (toggle semantics)', () => {
+  it('is true only when every selected character carries the attribute', () => {
+    const runs = [{ text: 'aa', style: { bold: true } }, { text: 'bb' }];
+    expect(charsAllHave(runs, 0, 2, 'bold')).toBe(true);
+    expect(charsAllHave(runs, 1, 3, 'bold')).toBe(false);
+    expect(charsAllHave(runs, 2, 4, 'bold')).toBe(false);
+  });
+
+  it('is false for an empty selection', () => {
+    expect(charsAllHave([{ text: 'a', style: { bold: true } }], 1, 1, 'bold')).toBe(false);
+  });
+
+  it('counts explicit false as not having the attribute', () => {
+    const runs = [{ text: 'ab', style: { bold: false } }];
+    expect(charsAllHave(runs, 0, 2, 'bold')).toBe(false);
   });
 });
 

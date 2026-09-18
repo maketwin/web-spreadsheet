@@ -68,7 +68,7 @@ import { autoFitRowHeight, autofitRowHeights } from '../util/rowAutofit';
 import { fillShortcut } from '../fill/fillShortcut';
 import { cycleDollars, endsWithRef, isPointTrigger, refAtCaret, upsertRef } from '../formula/pointMode';
 import { RichEditor, normalizeEditorRuns, type RichEditorApi } from './RichEditor';
-import { applyRunStyle, flattenRuns, isRich, runsFromText, type RunStylePatch } from '../util/richText';
+import { applyRunStyle, charsAllHave, flattenRuns, isRich, runsFromText, type RunStylePatch } from '../util/richText';
 
 export { snapshotCells, buildSessionPasteValues, tilePlainCells, combineMultiRanges } from '../clipboard/session';
 export type { ClipboardSessionState } from '../clipboard/session';
@@ -76,7 +76,7 @@ export type CellInput = CellDataInput;
 export interface SheetInput { readonly id?: string; readonly name: string; readonly data?: readonly (readonly CellInput[])[] }
 export interface SpreadsheetOptions { readonly data?: readonly (readonly CellInput[])[]; readonly sheets?: readonly SheetInput[]; readonly theme?: Theme | false }
 export interface SpreadsheetProps { readonly store: Store; readonly cmdManager?: CommandManager; readonly formulaEngine?: FormulaEngine; readonly theme?: Theme | false | undefined; readonly onClose?: () => void }
-interface EditingCell extends CellAddress { readonly value: string; /** Excel: F2/double-click = edit mode (arrows move the caret); typing = enter mode (arrows commit). */ readonly editMode?: boolean; /** Excel point mode: the cell the formula's trailing reference currently points at. */ readonly point?: CellAddress; /** Mid-edit upgrade: run-level formatting was applied to a selection (forces the rich editor). */ readonly richDraft?: RichTextRun[] }
+interface EditingCell extends CellAddress { readonly value: string; /** Excel: F2/double-click = edit mode (arrows move the caret); typing = enter mode (arrows commit). */ readonly editMode?: boolean; /** Excel point mode: the cell the formula's trailing reference currently points at. */ readonly point?: CellAddress; /** Mid-edit upgrade: run-level formatting was applied to a selection (forces the rich editor). */ readonly richDraft?: RichTextRun[]; /** Selection to restore in the rich editor after the upgrade. */ readonly richSel?: { readonly start: number; readonly end: number } }
 interface ViewState { readonly zoom: number; readonly showFormula: boolean; readonly showGrid: boolean; readonly frozenRows: number; readonly frozenCols: number }
 interface FilterPopupState { readonly r: number; readonly c: number; readonly x: number; readonly y: number }
 /** Module-level hook the active instance registers so applyShortcutStyle can offer run-level styling to the open cell editor. */
@@ -283,6 +283,8 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   /**
    * Excel: run-level style keys with a cell editor open format the selected
    * characters of the draft (turning the cell rich) instead of the cells.
+   * Bold/italic/underline toggle against the selection: only when EVERY
+   * selected character already carries the attribute does it turn off.
    * Non-run keys (fill, alignment, number format…) fall through to whole cells.
    */
   const applyRunStyleToEditor = useCallback((style: Partial<Style>): boolean => {
@@ -295,21 +297,40 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       if (value !== undefined) { (patch as Record<string, unknown>)[key] = value; hasRunKey = true; }
     }
     if (!hasRunKey) return false;
-    // Rich editor already open: patch its selection (needs an actual selection).
+    // Resolve the draft's runs + selection (rich editor already open, or the plain textarea).
+    let runs: RichTextRun[];
+    let sel: { start: number; end: number } | null;
+    if (richApiRef.current !== null) {
+      runs = richApiRef.current.getRuns();
+      sel = richApiRef.current.getSelection();
+    } else {
+      const el = inputRef.current;
+      if (el === null) return false;
+      sel = { start: el.selectionStart ?? 0, end: el.selectionEnd ?? 0 };
+      runs = runsFromText(el.value) ?? [{ text: el.value }];
+    }
+    if (sel === null || sel.end <= sel.start) return false;
+    const cellStyle = ed !== null && store.getCell(ed.r, ed.c)?.styleId !== undefined ? store.getStyle(store.getCell(ed.r, ed.c)!.styleId!) : undefined;
+    const mutablePatch = patch as Record<string, unknown>;
+    for (const key of ['bold', 'italic', 'underline'] as const) {
+      if (patch[key] === true && charsAllHave(runs, sel.start, sel.end, key, cellStyle)) {
+        // Excel toggle: clear the override, unless the cell style itself carries
+        // the attribute — then an explicit false is needed to win over inherit.
+        mutablePatch[key] = cellStyle?.[key] === true ? false : undefined;
+      }
+    }
+    // Rich editor already open: patch its selection.
     if (richApiRef.current !== null) return richApiRef.current.applyRunStyle(patch);
     // Plain textarea with selected characters: upgrade the draft to rich runs.
-    const el = inputRef.current;
-    if (el === null) return false;
-    const start = el.selectionStart ?? 0;
-    const end = el.selectionEnd ?? 0;
-    if (end <= start) return false;
-    const runs = applyRunStyle(runsFromText(el.value) ?? [{ text: el.value }], start, end, patch);
-    const nextEd: EditingCell = { ...ed, richDraft: runs, value: flattenRuns(runs) };
+    const nextRuns = applyRunStyle(runs, sel.start, sel.end, patch);
+    const nextEd: EditingCell = { ...ed, richDraft: nextRuns, value: flattenRuns(nextRuns), richSel: { start: sel.start, end: sel.end } };
     editingRef.current = nextEd;
     setEditing(nextEd);
     return true;
   }, []);
   editorRunStyleIntercept.current = applyRunStyleToEditor;
+  /** Editor-mode Ctrl+B/I/U entry point (same toggle semantics as the buttons). */
+  const applyCharStyleKey = useCallback((key: 'bold' | 'italic' | 'underline'): void => { void applyRunStyleToEditor({ [key]: true }); }, [applyRunStyleToEditor]);
 
   useTheme(theme);
   useFormulaSync(store, formulaEngine);
@@ -355,7 +376,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
         if (handleEndMode(e, selectedRef.current, store, endModeRef, selectSelection, selectRange)) return;
         handleCanvasKeyDown(e, selectedRef.current, store, cmdManager, startEditing, selectSelection, selectRange, setView, setFindDialogOpen, runClipboard, clearClipboardSession, execCmd, view.frozenRows, view.frozenCols, view.zoom, () => setMulti([]), () => multiRef.current);
       }} onDoubleClick={(e) => { const cell = rendererRef.current?.cellAtPoint(e.clientX, e.clientY); if (cell != null) startEditing(cell, undefined, true); }} />
-      {editing !== null && <EditorOverlay refEl={inputRef} editingRefSetter={(cell) => { editingRef.current = cell; setEditing(cell); }} editing={editing} setEditing={setEditing} commit={commitEditing} zoom={view.zoom} store={store} richApiRef={richApiRef} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}
+      {editing !== null && <EditorOverlay refEl={inputRef} editingRefSetter={(cell) => { editingRef.current = cell; setEditing(cell); }} editing={editing} setEditing={setEditing} commit={commitEditing} zoom={view.zoom} store={store} richApiRef={richApiRef} onCharStyleKey={applyCharStyleKey} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}
       <div className="ss-chart-layer">{store.getCharts().map((spec) => <FloatingChart key={spec.id} spec={spec} store={store} renderer={rendererRef.current} selected={selectedChartId === spec.id} onSelect={setSelectedChartId} onGeometry={(id, anchor) => execCmd(new SetChartAnchorCommand({ id, anchor }))} onRemove={(id) => { execCmd(new RemoveChartCommand({ id })); setSelectedChartId((current) => current === id ? null : current); canvasRef.current?.focus(); }} onUndo={() => cmdManager?.undo()} onRedo={() => cmdManager?.redo()} />)}</div></div>
       <PasteSpecialDialog open={pasteSpecialOpen} onOk={(opts) => void applyPasteSpecial(opts)} onCancel={() => setPasteSpecialOpen(false)} />
       {filterPopup !== null && <FilterDropdown store={store} cmdManagerExecutor={execCmd} r={filterPopup.r} c={filterPopup.c} x={filterPopup.x} y={filterPopup.y} onClose={() => setFilterPopup(null)} />}
@@ -421,8 +442,8 @@ export class Spreadsheet {
   }
 }
 
-interface EditorOverlayProps { readonly refEl: RefObject<HTMLTextAreaElement>; readonly editingRefSetter: (cell: EditingCell) => void; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly commit: (value: string, moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection?: boolean, runs?: RichTextRun[]) => void; readonly zoom: number; readonly store: Store; readonly cellRect?: { x: number; y: number; w: number; h: number }; readonly richApiRef: MutableRefObject<RichEditorApi | null> }
-const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editing, setEditing, commit, zoom, store, cellRect, richApiRef }) => {
+interface EditorOverlayProps { readonly refEl: RefObject<HTMLTextAreaElement>; readonly editingRefSetter: (cell: EditingCell) => void; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly commit: (value: string, moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection?: boolean, runs?: RichTextRun[]) => void; readonly zoom: number; readonly store: Store; readonly cellRect?: { x: number; y: number; w: number; h: number }; readonly richApiRef: MutableRefObject<RichEditorApi | null>; readonly onCharStyleKey?: (key: 'bold' | 'italic' | 'underline') => void }
+const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editing, setEditing, commit, zoom, store, cellRect, richApiRef, onCharStyleKey }) => {
   const composing = useRef(false);
   const cellStyle = store.getCell(editing.r, editing.c)?.styleId !== undefined
     ? store.getStyle(store.getCell(editing.r, editing.c)!.styleId!)
@@ -441,6 +462,8 @@ const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editin
     return <RichEditor
       initialRuns={initialRuns}
       css={editorStyle(store, editing, zoom, cellRect, cellStyle, editing.value)}
+      cellStyle={cellStyle}
+      initialSelection={editing.richSel}
       editMode={editing.editMode === true}
       registerApi={(api) => { richApiRef.current = api; }}
       commit={commitRich}
@@ -474,6 +497,17 @@ const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editin
     }}
     onKeyDown={(e) => {
       if (composing.current) return;
+      // Excel: Ctrl/Cmd+B/I/U while editing formats the selected characters
+      // (upgrading the draft to rich runs) instead of doing nothing.
+      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+        const key = e.key.toLowerCase();
+        if (key === 'b' || key === 'i' || key === 'u') {
+          e.preventDefault();
+          const attr = key === 'b' ? 'bold' : key === 'i' ? 'italic' : 'underline';
+          onCharStyleKey?.(attr);
+          return;
+        }
+      }
       // Excel F4: cycle $ anchors on the reference at the caret (A1 → $A$1 → A$1 → $A1).
       if (e.key === 'F4') {
         const el = refEl.current;

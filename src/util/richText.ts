@@ -85,6 +85,30 @@ export function effectiveRunStyle(cellStyle: Style | undefined, run: RichTextRun
   };
 }
 
+/**
+ * Whether EVERY character of flat range [start, end) effectively carries the
+ * run attribute — run overrides first, then the cell style (Excel toggle
+ * semantics: only when the whole selection has it does the next
+ * click/shortcut turn it off).
+ */
+export function charsAllHave(runs: readonly RichTextRun[], start: number, end: number, key: 'bold' | 'italic' | 'underline', cellStyle?: Style | undefined): boolean {
+  let pos = 0;
+  let checked = 0;
+  let all = true;
+  for (const run of runs) {
+    const runEnd = pos + run.text.length;
+    const overlapLo = Math.max(pos, start);
+    const overlapHi = Math.min(runEnd, end);
+    if (overlapLo < overlapHi) {
+      checked += overlapHi - overlapLo;
+      if (!((run.style?.[key] ?? cellStyle?.[key] === true) === true)) all = false;
+    }
+    pos = runEnd;
+    if (pos >= end && checked > 0) break;
+  }
+  return checked > 0 && all;
+}
+
 function styleAtOffset(runs: readonly RichTextRun[], offset: number): RunStyle | undefined {
   if (runs.length === 0) return undefined;
   return runStyleAt(runs, Math.max(0, Math.min(offset, flattenRuns(runs).length - 1)));

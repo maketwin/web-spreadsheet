@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react';
-import type { RichTextRun, RunStyle } from '../types';
-import { applyRunStyle as applyRunModel, insertAtRuns, mergeRuns, normalizeRuns, type RunStylePatch } from '../util/richText';
+import type { RichTextRun, RunStyle, Style } from '../types';
+import { applyRunStyle as applyRunModel, charsAllHave, insertAtRuns, mergeRuns, normalizeRuns, type RunStylePatch } from '../util/richText';
 import { runSpanStyle, runStyleFromElement } from '../util/runStyleCss';
 
 const TEXT_NODE = 3;
@@ -19,6 +19,8 @@ const ELEMENT_NODE = 1;
 export interface RichEditorApi {
   /** Current runs rebuilt from the DOM (post-IME, post-typing). */
   getRuns(): RichTextRun[];
+  /** Editor selection as flat offsets; null when the selection is elsewhere. */
+  getSelection(): { readonly start: number; readonly end: number } | null;
   /** Apply a style patch to the editor's text selection; false when no selection. */
   applyRunStyle(patch: RunStylePatch): boolean;
   hasSelection(): boolean;
@@ -27,6 +29,10 @@ export interface RichEditorApi {
 export interface RichEditorProps {
   readonly initialRuns: readonly RichTextRun[];
   readonly css: CSSProperties;
+  /** Whole-cell style: bold/italic/underline toggles resolve against it. */
+  readonly cellStyle?: Style | undefined;
+  /** Flat selection to restore after mount (mid-edit textarea upgrade keeps the user's selection). */
+  readonly initialSelection?: { readonly start: number; readonly end: number } | undefined;
   readonly editMode?: boolean;
   readonly registerApi: (api: RichEditorApi | null) => void;
   readonly commit: (moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection?: boolean) => void;
@@ -38,7 +44,7 @@ export interface RichEditorProps {
   readonly ariaLabel?: string;
 }
 
-export function RichEditor({ initialRuns, css, editMode, registerApi, commit, cancel, onValueChange, onBlur, ariaLabel }: RichEditorProps): JSX.Element {
+export function RichEditor({ initialRuns, css, cellStyle, initialSelection, editMode, registerApi, commit, cancel, onValueChange, onBlur, ariaLabel }: RichEditorProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const composingRef = useRef(false);
   const runsRef = useRef<RichTextRun[]>([...initialRuns]);
@@ -48,9 +54,11 @@ export function RichEditor({ initialRuns, css, editMode, registerApi, commit, ca
     if (root === null) return undefined;
     renderRuns(root, runsRef.current);
     root.focus();
-    collapseTo(root, 'end');
+    if (initialSelection !== undefined) setFlatSelection(root, initialSelection.start, initialSelection.end);
+    else collapseTo(root, 'end');
     const api: RichEditorApi = {
       getRuns: () => (root === null ? [] : runsRef.current),
+      getSelection: () => flatSelectionOf(root),
       applyRunStyle: (patch) => applyPatchToSelection(root, patch, runsRef),
       hasSelection: () => {
         const sel = flatSelectionOf(root);
@@ -74,6 +82,29 @@ export function RichEditor({ initialRuns, css, editMode, registerApi, commit, ca
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
     // IME owns the keyboard while composing (Enter confirms the candidate).
     if (composingRef.current) return;
+    // Excel: Ctrl/Cmd+B/I/U with characters selected toggles the attribute on
+    // the selection and stays in the editor.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+      const key = e.key.toLowerCase();
+      if (key === 'b' || key === 'i' || key === 'u') {
+        const attr = key === 'b' ? 'bold' : key === 'i' ? 'italic' : 'underline';
+        const root = rootRef.current;
+        const sel = root === null ? null : flatSelectionOf(root);
+        if (root !== null && sel !== null && sel.end > sel.start) {
+          e.preventDefault();
+          // Excel toggle: off clears the run override, unless the cell style is
+          // bold itself — then an explicit false is needed to win over inherit.
+          const turnOff = charsAllHave(runsRef.current, sel.start, sel.end, attr, cellStyle);
+          const patchValue = turnOff ? (cellStyle?.[attr] === true ? false : undefined) : true;
+          const next = applyRunModel(runsRef.current, sel.start, sel.end, { [attr]: patchValue });
+          runsRef.current = next;
+          renderRuns(root, next);
+          setFlatSelection(root, sel.start, sel.end);
+          onValueChange?.(next.map((run) => run.text).join(''));
+        }
+        return;
+      }
+    }
     const arrowDeltas: Record<string, { dr: number; dc: number }> = { ArrowUp: { dr: -1, dc: 0 }, ArrowDown: { dr: 1, dc: 0 }, ArrowLeft: { dr: 0, dc: -1 }, ArrowRight: { dr: 0, dc: 1 } };
     const arrow = arrowDeltas[e.key];
     if (e.key === 'Escape') { e.preventDefault(); cancel(); return; }
