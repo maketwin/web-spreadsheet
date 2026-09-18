@@ -29,6 +29,7 @@ export default defineConfig({
             { text: '命令与撤销', link: '/guide/commands' },
             { text: '智能填充', link: '/guide/fill' },
             { text: '格式化', link: '/guide/formatting' },
+            { text: '富文本', link: '/guide/rich-text' },
             { text: '数据功能', link: '/guide/data-features' },
           ],
         },

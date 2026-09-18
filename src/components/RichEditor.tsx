@@ -59,7 +59,6 @@ export function RichEditor({ initialRuns, css, editMode, registerApi, commit, ca
     };
     registerApi(api);
     return () => registerApi(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const insertNewline = (): void => {
