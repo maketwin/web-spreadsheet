@@ -13,9 +13,11 @@ import { collectCellBorderEdges, edgesToPaintSegs, strokeBorderSegs, type Logica
 import { COL_WIDTH, ROW_HEIGHT } from '../renderer/coordinate';
 import { TextMetricsCache } from '../renderer/cache/TextMetricsCache';
 import type { Store } from '../store/Store';
-import type { Style } from '../types';
+import type { Style, RichTextRun } from '../types';
 import { parseRange } from '../util/cell';
+import { isRich } from '../util/richText';
 import { WRAP_LINE_HEIGHT, wrapTextLines } from '../util/wrapText';
+import { drawRichLines, layoutRichText, richContentHeight } from '../renderer/richTextLayout';
 import type { PageLayout } from './PrintPaginator';
 import { PRINT_DPI_SCALE, contentPx, type PrintSettings } from './types';
 
@@ -276,6 +278,12 @@ export class PrintPainter {
     const valign = style?.valign ?? 'middle';
     const wrapping = style?.wrap === true;
 
+    // Rich runs (text constants only): shared layout, zoom scale 1.
+    if (cell.formula === undefined && formatted?.formatted !== true && isRich(cell.richText)) {
+      this.paintRichText(ctx, r, c, x, y, cw, rh, style, cell.richText, align, valign, wrapping, page, cols);
+      return;
+    }
+
     ctx.save();
     const clipY = y + 1;
     const clipH = Math.max(0, rh - 2);
@@ -322,6 +330,43 @@ export class PrintPainter {
         ctx.stroke();
       }
     }
+    ctx.restore();
+  }
+
+  /** Print twin of the grid's paintRichText: per-run fonts/colors through the shared layout. */
+  private paintRichText(ctx: CanvasRenderingContext2D, r: number, c: number, x: number, y: number, cw: number, rh: number, style: Style | undefined, runs: readonly RichTextRun[], align: 'left' | 'center' | 'right', valign: 'top' | 'middle' | 'bottom', wrapping: boolean, page: PageLayout, cols: AxisGeometry): void {
+    ctx.save();
+    const clipY = y + 1;
+    const clipH = Math.max(0, rh - 2);
+    let clipX = x + 1;
+    let clipW = Math.max(0, cw - 2);
+    if (!wrapping) {
+      const span = this.overflowSpan(r, c, x, cw, align, page, cols);
+      clipX = span.left;
+      clipW = Math.max(0, span.right - span.left);
+    }
+    ctx.beginPath();
+    ctx.rect(clipX, clipY, clipW, clipH);
+    ctx.clip();
+
+    const lines = layoutRichText({
+      runs,
+      cellStyle: style,
+      fontFamilyFallback: PRINT_FONT_STACK,
+      colorFallback: PRINT_TEXT,
+      measure: (font, text) => this.textMetrics.measure(ctx, font, text),
+      maxWidth: Math.max(4, cw - 6),
+      wrap: wrapping,
+      fontSizeScale: 1,
+      fontSizeFloor: 8,
+    });
+    const contentHeight = richContentHeight(lines);
+    const contentTop = valign === 'top'
+      ? y + 2
+      : valign === 'middle'
+        ? y + rh / 2 - contentHeight / 2
+        : y + rh - 2 - contentHeight;
+    drawRichLines(ctx, lines, x, cw, contentTop, align);
     ctx.restore();
   }
 

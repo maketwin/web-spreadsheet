@@ -12,7 +12,7 @@ import { doubleClickFillTarget } from '../fill/dblclickFill';
 import { FreezeManager } from '../freeze/FreezeManager';
 import { ResizeHandler } from './ResizeHandler';
 import { VirtualScroller, type VisibleRange } from './VirtualScroller';
-import type { StoreEvent, Style } from '../types';
+import type { StoreEvent, Style, RichTextRun } from '../types';
 import { parseRange } from '../util/cell';
 import { coveredBySameMerge } from '../util/merge';
 import { formatValue } from '../format/NumberFormatter';
@@ -20,6 +20,8 @@ import { ConditionalService } from '../conditional/ConditionalService';
 import { sparklineValues } from '../sparkline/values';
 import type { SparklineSpec } from '../sparkline/types';
 import { WRAP_LINE_HEIGHT, wrapTextLines } from '../util/wrapText';
+import { isRich } from '../util/richText';
+import { drawRichLines, layoutRichText, richContentHeight } from './richTextLayout';
 import { TextMetricsCache } from './cache/TextMetricsCache';
 
 export { TOTAL_ROWS, TOTAL_COLS, ROW_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, COL_HEADER_HEIGHT, canvasPointToCell, canvasPointToHeader, canvasPointToColumn, canvasPointToRow, type CellAddress };
@@ -1096,6 +1098,12 @@ export class CanvasRenderer {
     const valign = style?.valign ?? 'middle';
     const wrapping = style?.wrap === true;
 
+    // Rich text runs render through the shared layout (formula view stays plain).
+    if (cell.formula === undefined && rawText === cell.text && isRich(cell.richText)) {
+      this.paintRichText(r, c, x, y, cw, rh, theme, style, cell.richText, align, valign, wrapping);
+      return;
+    }
+
     this.ctx.save();
     // Vertical clip always to the row band; horizontal expands across empty neighbors when wrap is off (Excel overflow).
     const clipY = y + 1;
@@ -1141,6 +1149,44 @@ export class CanvasRenderer {
         this.ctx.stroke();
       }
     }
+    this.ctx.restore();
+  }
+
+  /** Rich-run paint: same clip/overflow/valign conventions as paintTextWith, per-run fonts/colors. */
+  private paintRichText(r: number, c: number, x: number, y: number, cw: number, rh: number, theme: CanvasTheme, style: Style | undefined, runs: readonly RichTextRun[], align: 'left' | 'center' | 'right', valign: 'top' | 'middle' | 'bottom', wrapping: boolean): void {
+    this.ctx.save();
+    const clipY = y + 1;
+    const clipH = Math.max(0, rh - 2);
+    let clipX = x + 1;
+    let clipW = Math.max(0, cw - 2);
+    if (!wrapping) {
+      const span = this.textOverflowSpan(r, c, x, cw, align);
+      clipX = span.left;
+      clipW = Math.max(0, span.right - span.left);
+    }
+    this.ctx.beginPath();
+    this.ctx.rect(clipX, clipY, clipW, clipH);
+    this.ctx.clip();
+
+    const zoom = this.zoom();
+    const lines = layoutRichText({
+      runs,
+      cellStyle: style,
+      fontFamilyFallback: theme.fontFamily,
+      colorFallback: theme.text,
+      measure: (font, text) => this.textMetrics.measure(this.ctx, font, text),
+      maxWidth: Math.max(4, cw - 6),
+      wrap: wrapping,
+      fontSizeScale: zoom,
+      fontSizeFloor: 8,
+    });
+    const contentHeight = richContentHeight(lines);
+    const contentTop = valign === 'top'
+      ? y + 2
+      : valign === 'middle'
+        ? y + rh / 2 - contentHeight / 2
+        : y + rh - 2 - contentHeight;
+    drawRichLines(this.ctx, lines, x, cw, contentTop, align);
     this.ctx.restore();
   }
 

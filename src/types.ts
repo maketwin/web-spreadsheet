@@ -1,11 +1,41 @@
 export type CellValue = string | number | boolean | Date | null;
 
+/**
+ * Character-level attributes Excel lets you apply to part of a cell's text
+ * (the OOXML `<rPr>` scope — no character-level fill exists in xlsx). Every
+ * field overrides the same field of the cell's whole-cell Style; absent
+ * fields inherit it.
+ */
+export interface RunStyle {
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strike?: boolean;
+  fontSize?: number;
+  fontFamily?: string;
+  color?: string;
+  vertAlign?: 'subscript' | 'superscript';
+}
+
+/** One formatted slice of a rich-text cell. */
+export interface RichTextRun {
+  text: string;
+  style?: RunStyle;
+}
+
 export interface Cell {
   text: string;
   value?: CellValue;
   formula?: string;
   styleId?: string;
   type?: 'text' | 'number' | 'date' | 'boolean';
+  /**
+   * Rich text runs for a text-constant cell. When present, `text` is exactly
+   * the concatenation of the run texts (kept in sync by the write paths in
+   * util/cell.ts and util/richText.ts). Plain cells leave this undefined —
+   * a single unstyled run is never stored.
+   */
+  richText?: RichTextRun[];
 }
 
 export interface RowMeta {

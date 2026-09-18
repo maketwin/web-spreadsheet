@@ -3,6 +3,8 @@ import { Command } from '../commands/Command';
 import type { Store } from '../store/Store';
 import type { RangeAddress } from '../selection/Range';
 import type { RowMeta } from '../types';
+import { effectiveRunStyle, flattenRuns, isRich } from './richText';
+import { layoutRichText } from '../renderer/richTextLayout';
 import { excelRowHeightPx, wrapTextLinesCanvas } from './wrapText';
 
 function clampVal(v: number, min: number, max: number): number {
@@ -17,11 +19,43 @@ function lineCountForCell(
 ): { fontSize: number; lineCount: number; hasText: boolean } {
   const cell = store.getCell(r, c);
   const style = cell?.styleId === undefined ? undefined : store.getStyle(cell.styleId);
-  const fontSize = style?.fontSize ?? 11;
   const text = cell?.text ?? '';
-  if (text.length === 0) return { fontSize, lineCount: 1, hasText: false };
+  if (text.length === 0) return { fontSize: style?.fontSize ?? 11, lineCount: 1, hasText: false };
 
   const fontFamily = style?.fontFamily ?? 'Calibri, "Segoe UI", "Microsoft YaHei", sans-serif';
+
+  // Rich runs: line height follows the largest run font; wrap counts through the shared layout.
+  if (cell !== undefined && isRich(cell.richText)) {
+    const runs = cell.richText;
+    const maxFontSize = runs.reduce((max, run) => Math.max(max, effectiveRunStyle(style, run).fontSize), 1);
+    const colW = store.getCol(c)?.width ?? COL_WIDTH;
+    let lineCount = 1;
+    if (style?.wrap === true && ctx !== null) {
+      const lines = layoutRichText({
+        runs,
+        cellStyle: style,
+        fontFamilyFallback: fontFamily,
+        colorFallback: '#000000',
+        measure: (font, sample) => {
+          ctx.font = font;
+          return ctx.measureText(sample).width;
+        },
+        maxWidth: Math.max(4, colW - 6),
+        wrap: true,
+        fontSizeScale: 1,
+        fontSizeFloor: 1,
+      });
+      lineCount = Math.max(1, lines.length);
+    } else if (style?.wrap === true) {
+      const flat = flattenRuns(runs);
+      const charsPerLine = Math.max(1, Math.floor((colW - 6) / (maxFontSize * 0.55)));
+      const hard = flat.replace(/\r\n/g, '\n').split('\n');
+      lineCount = hard.reduce((sum, part) => sum + Math.max(1, Math.ceil(Math.max(1, part.length) / charsPerLine)), 0);
+    }
+    return { fontSize: maxFontSize, lineCount, hasText: true };
+  }
+
+  const fontSize = style?.fontSize ?? 11;
   const font = `${style?.italic === true ? 'italic ' : ''}${style?.bold === true ? 'bold ' : ''}${fontSize}px ${fontFamily}`;
   const colW = store.getCol(c)?.width ?? COL_WIDTH;
   let lineCount = 1;
