@@ -1,7 +1,8 @@
 import { cellFromText } from '../util/cell';
 import type { RangeAddress } from '../selection/Range';
 import type { Store } from '../store/Store';
-import type { Cell } from '../types';
+import type { Cell, RichTextRun, RunStyle } from '../types';
+import { isRich, normalizeRuns } from '../util/richText';
 
 export interface ClipboardPayload {
   readonly text: string;
@@ -11,8 +12,10 @@ export interface ClipboardPayload {
 export class ClipboardService {
   public static createPayload(store: Store, range: RangeAddress): ClipboardPayload | null {
     if (range.r2 < range.r1 || range.c2 < range.c1) return null;
-    const matrix = readCellTexts(store, range);
-    return { text: toTsv(matrix), html: toHtml(matrix) };
+    const cells = readCellMatrix(store, range);
+    const text = toTsv(cells.map((row) => row.map((cell) => cell?.text ?? '')));
+    const html = toHtml(cells);
+    return { text, html };
   }
 
   public static async copy(store: Store, range: RangeAddress, clipboard: Clipboard = navigator.clipboard): Promise<boolean> {
@@ -42,7 +45,7 @@ export class ClipboardService {
   public static parseHtml(html: string): Cell[][] {
     if (typeof DOMParser === 'undefined') return [];
     const doc = new DOMParser().parseFromString(html, 'text/html');
-    return [...doc.querySelectorAll('tr')].map((row) => [...row.querySelectorAll('th,td')].map((cell) => cellFromText(undefined, cell.textContent ?? '')));
+    return [...doc.querySelectorAll('tr')].map((row) => [...row.querySelectorAll('th,td')].map((cell) => cellFromHtml(cell)));
   }
 
   public static parsePaste(text: string, html?: string): Cell[][] {
@@ -51,11 +54,11 @@ export class ClipboardService {
   }
 }
 
-function readCellTexts(store: Store, range: RangeAddress): string[][] {
-  const rows: string[][] = [];
+function readCellMatrix(store: Store, range: RangeAddress): ReadonlyArray<ReadonlyArray<Cell | undefined>> {
+  const rows: Array<Array<Cell | undefined>> = [];
   for (let r = range.r1; r <= range.r2; r += 1) {
-    const row: string[] = [];
-    for (let c = range.c1; c <= range.c2; c += 1) row.push(store.getCell(r, c)?.text ?? '');
+    const row: Array<Cell | undefined> = [];
+    for (let c = range.c1; c <= range.c2; c += 1) row.push(store.getCell(r, c));
     rows.push(row);
   }
   return rows;
@@ -68,9 +71,110 @@ function toTsv(rows: readonly (readonly string[])[]): string {
   return rows.map((row) => row.map(quote).join('\t')).join('\n');
 }
 
-function toHtml(rows: readonly (readonly string[])[]): string {
-  const body = rows.map((row) => `<tr>${row.map((value) => `<td>${escapeHtml(value)}</td>`).join('')}</tr>`).join('');
+function toHtml(cells: ReadonlyArray<ReadonlyArray<Cell | undefined>>): string {
+  const body = cells.map((row) => `<tr>${row.map((cell) => tdHtml(cell)).join('')}</tr>`).join('');
   return `<table>${body}</table>`;
+}
+
+/** Rich runs become styled spans (Excel-compatible clipboard HTML); plain cells stay bare. */
+function tdHtml(cell: Cell | undefined): string {
+  const text = cell?.text ?? '';
+  if (cell === undefined || !isRich(cell.richText)) return `<td>${escapeHtml(text)}</td>`;
+  const spans = cell.richText.map((run) => `<span${styleAttr(runSpanStyle(run))}>${escapeHtml(run.text)}</span>`).join('');
+  return `<td>${spans}</td>`;
+}
+
+function runSpanStyle(run: RichTextRun): string {
+  const s = run.style;
+  if (s === undefined) return '';
+  const parts: string[] = [];
+  if (s.bold === true) parts.push('font-weight:700');
+  if (s.italic === true) parts.push('font-style:italic');
+  const deco = [s.underline === true ? 'underline' : '', s.strike === true ? 'line-through' : ''].filter(Boolean).join(' ');
+  if (deco !== '') parts.push(`text-decoration:${deco}`);
+  if (s.fontSize !== undefined) parts.push(`font-size:${s.fontSize}pt`);
+  if (s.fontFamily !== undefined) parts.push(`font-family:'${s.fontFamily.replace(/'/g, '')}'`);
+  if (s.color !== undefined) parts.push(`color:${s.color}`);
+  if (s.vertAlign === 'subscript') parts.push('vertical-align:sub');
+  if (s.vertAlign === 'superscript') parts.push('vertical-align:super');
+  return parts.join(';');
+}
+
+function styleAttr(style: string): string {
+  return style === '' ? '' : ` style="${escapeHtml(style)}"`;
+}
+
+/** One `<td>` → cell; run-level styles from nested spans/tags become richText. */
+function cellFromHtml(td: Element): Cell {
+  const runs: RichTextRun[] = [];
+  collectRuns(td, {}, runs);
+  const text = runs.map((run) => run.text).join('');
+  const cell = cellFromText(undefined, text);
+  const normalized = normalizeRuns(runs);
+  if (normalized !== undefined) cell.richText = normalized;
+  return cell;
+}
+
+const TEXT_NODE = 3;
+const ELEMENT_NODE = 1;
+
+function collectRuns(node: Node, inherited: RunStyle, out: RichTextRun[]): void {
+  for (const child of node.childNodes) {
+    if (child.nodeType === TEXT_NODE) {
+      const text = child.textContent ?? '';
+      if (text !== '') out.push(Object.keys(inherited).length > 0 ? { text, style: { ...inherited } } : { text });
+      continue;
+    }
+    if (child.nodeType === ELEMENT_NODE) {
+      const el = child as HTMLElement;
+      if (el.tagName.toLowerCase() === 'br') { out.push({ text: '\n' }); continue; }
+      collectRuns(el, { ...inherited, ...runStyleFromElement(el) }, out);
+    }
+  }
+}
+
+/** Inline CSS + semantic tags (`b`, `sub`, …) → RunStyle, the way Excel's clipboard HTML spells them. */
+function runStyleFromElement(el: HTMLElement): RunStyle {
+  const style: RunStyle = {};
+  const tag = el.tagName.toLowerCase();
+  if (tag === 'b' || tag === 'strong') style.bold = true;
+  if (tag === 'i' || tag === 'em') style.italic = true;
+  if (tag === 'u') style.underline = true;
+  if (tag === 's' || tag === 'strike' || tag === 'del') style.strike = true;
+  if (tag === 'sub') style.vertAlign = 'subscript';
+  if (tag === 'sup') style.vertAlign = 'superscript';
+  const css = el.style;
+  if (css.fontWeight === 'bold' || css.fontWeight === '700' || css.fontWeight === '800' || css.fontWeight === '900') style.bold = true;
+  if (css.fontStyle === 'italic') style.italic = true;
+  const deco = css.textDecoration;
+  if (deco.includes('underline')) style.underline = true;
+  if (deco.includes('line-through')) style.strike = true;
+  const size = css.fontSize;
+  if (size !== undefined && size !== '') {
+    const pt = Number(size.replace(/pt.*$/, ''));
+    if (Number.isFinite(pt) && pt > 0) style.fontSize = Math.round(pt);
+  }
+  const family = css.fontFamily;
+  if (family !== undefined && family !== '') style.fontFamily = family.split(',')[0]!.trim().replace(/^['"]|['"]$/g, '');
+  const color = css.color;
+  if (color !== undefined && color !== '') {
+    const parsed = parseCssColor(color);
+    if (parsed !== undefined) style.color = parsed;
+  }
+  if (css.verticalAlign === 'sub') style.vertAlign = 'subscript';
+  if (css.verticalAlign === 'super') style.vertAlign = 'superscript';
+  return style;
+}
+
+/** `rgb(r, g, b)` / named-transparent fallbacks aside, pass hex through. */
+function parseCssColor(css: string): string | undefined {
+  const rgb = css.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  if (rgb !== null) {
+    const [, r, g, b] = rgb;
+    return `#${[r, g, b].map((part) => Number(part).toString(16).padStart(2, '0').toUpperCase()).join('')}`;
+  }
+  if (/^#[0-9A-Fa-f]{6}$/.test(css)) return css.toUpperCase();
+  return undefined;
 }
 
 async function writeClipboard(clipboard: Clipboard, payload: ClipboardPayload): Promise<void> {

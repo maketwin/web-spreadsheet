@@ -206,3 +206,78 @@ describe('FindReplaceService', () => {
     expect(svc.getCurrentIndex()).toBe(2);
   });
 });
+
+describe('FindReplaceService on rich text cells', () => {
+  const RED = { color: '#FF0000' };
+  const BLUE = { color: '#0000FF', bold: true };
+
+  function richStore(): Store {
+    const store = new Store();
+    // "red|blue|red" — three runs, two hits of "red"
+    store.setCell(0, 0, {
+      text: 'redbluered',
+      richText: [{ text: 'red', style: RED }, { text: 'blue', style: BLUE }, { text: 'red', style: RED }],
+    });
+    store.setCell(0, 1, { text: 'plain red here' });
+    return store;
+  }
+
+  it('replaceAll splices runs so untouched slices keep their style', () => {
+    const store = richStore();
+    const cmdManager = new CommandManager(store);
+    const { replacements, cells } = new FindReplaceService().replaceAll(store, { findText: 'red', replaceText: '绿' }, cmdManager);
+    expect(replacements).toBe(3);
+    expect(cells).toBe(2);
+
+    const rich = store.getCell(0, 0)!;
+    expect(rich.text).toBe('绿blue绿');
+    expect(rich.richText).toEqual([
+      { text: '绿', style: RED },
+      { text: 'blue', style: BLUE },
+      { text: '绿', style: RED },
+    ]);
+
+    const plain = store.getCell(0, 1)!;
+    expect(plain.text).toBe('plain 绿 here');
+    expect(plain.richText).toBeUndefined();
+
+    // single undo restores the pre-replace cell wholesale
+    cmdManager.undo();
+    expect(store.getCell(0, 0)!.richText).toHaveLength(3);
+  });
+
+  it('replacement collapsing all formatting degrades to a plain cell', () => {
+    const store = new Store();
+    store.setCell(0, 0, { text: 'ab', richText: [{ text: 'a', style: RED }, { text: 'b' }] });
+    // deleting the styled slice leaves plain "b"
+    new FindReplaceService().replaceAll(store, { findText: 'a', replaceText: '' });
+    const cell = store.getCell(0, 0)!;
+    expect(cell.text).toBe('b');
+    expect(cell.richText).toBeUndefined();
+  });
+
+  it('regex replacement with $1 keeps surrounding run styles', () => {
+    const store = new Store();
+    store.setCell(0, 0, { text: 'ab12cd', richText: [{ text: 'ab', style: RED }, { text: '12', style: BLUE }, { text: 'cd' }] });
+    new FindReplaceService().replaceAll(store, { findText: '(\\d)(\\d)', replaceText: '$2$1', useRegex: true });
+    const cell = store.getCell(0, 0)!;
+    expect(cell.text).toBe('ab21cd');
+    expect(cell.richText).toEqual([{ text: 'ab', style: RED }, { text: '21', style: BLUE }, { text: 'cd' }]);
+  });
+
+  it('replaceCurrent preserves styles of untouched slices', () => {
+    const store = richStore();
+    const svc = new FindReplaceService();
+    svc.find(store, { findText: 'blue', replaceText: '黑' });
+    const { replaced } = svc.replaceCurrent(store, { findText: 'blue', replaceText: '黑' });
+    expect(replaced).toBe(true);
+    const cell = store.getCell(0, 0)!;
+    expect(cell.text).toBe('red黑red');
+    // the replacement inherits the style of the first hit character
+    expect(cell.richText).toEqual([
+      { text: 'red', style: RED },
+      { text: '黑', style: BLUE },
+      { text: 'red', style: RED },
+    ]);
+  });
+});

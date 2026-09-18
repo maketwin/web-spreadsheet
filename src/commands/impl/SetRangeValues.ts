@@ -68,19 +68,32 @@ function nextCell(oldCell: Cell | undefined, newValue: CellPatch): Cell {
     (patch as Record<string, unknown>)[key] = v;
   });
   const clears = (key: keyof Cell): boolean => key in newValue && newValue[key] === undefined;
+  const setRichText = (base: Cell): void => {
+    // Rich runs ride only with an explicit patch (paste of a copied rich cell)
+    // or an untouched text; a text rewrite without runs flattens the cell.
+    if ('richText' in newValue) {
+      if (newValue.richText === undefined) delete base.richText;
+      else base.richText = newValue.richText;
+    } else if (newValue.text !== undefined && newValue.text !== oldCell?.text) {
+      delete base.richText;
+    }
+  };
   if (newValue.text !== undefined && newValue.formula === undefined && newValue.value === undefined) {
     const base: Cell = { ...oldCell, ...patch, text };
     if (clears('formula')) delete base.formula;
     if (clears('value')) delete base.value;
     if (clears('styleId')) delete base.styleId;
     if (clears('type')) delete base.type;
-    return cellFromText(base, text);
+    const next = cellFromText(base, text);
+    setRichText(next);
+    return next;
   }
   const merged: Cell = { ...oldCell, ...patch, text };
   if (clears('formula')) delete merged.formula;
   if (clears('value')) delete merged.value;
   if (clears('styleId')) delete merged.styleId;
   if (clears('type')) delete merged.type;
+  setRichText(merged);
   return merged;
 }
 

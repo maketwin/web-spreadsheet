@@ -4,6 +4,8 @@ import type { CommandManager } from '../commands/CommandManager';
 import type { CellPatch } from '../commands/impl/SetRangeValues';
 import { executeRange } from '../util/rangeValues';
 import { formulaText } from '../util/cell';
+import { flattenRuns, isRich, replaceInRuns } from '../util/richText';
+import type { RichTextRun } from '../types';
 
 /** Search scope: active sheet only, or every sheet starting from the active one (Excel "Within"). */
 export type FindScope = 'sheet' | 'workbook';
@@ -55,12 +57,17 @@ interface CompiledMatcher {
   readonly countIn: (text: string) => number;
   /** Replace every occurrence inside one cell text. */
   readonly replaceIn: (text: string) => string;
+  /** Every occurrence as a flat-text range; `replacement` is pre-expanded ($1 etc.) per hit. */
+  readonly rangesIn: (text: string) => ReadonlyArray<{ readonly start: number; readonly end: number; readonly replacement: string }>;
 }
+
+/** A matcher result over a cell with no hits. */
+const NO_RANGES: ReadonlyArray<{ readonly start: number; readonly end: number; readonly replacement: string }> = [];
 
 function compileMatcher(options: FindOptions): CompiledMatcher {
   const find = options.findText;
   if (find.length === 0) {
-    return { test: () => false, countIn: () => 0, replaceIn: (t) => t };
+    return { test: () => false, countIn: () => 0, replaceIn: (t) => t, rangesIn: () => NO_RANGES };
   }
   if (options.useRegex === true) {
     let pattern: RegExp;
@@ -71,22 +78,23 @@ function compileMatcher(options: FindOptions): CompiledMatcher {
     }
     // Fresh instance per call — a shared /g regex carries lastIndex state.
     const global = (): RegExp => new RegExp(pattern.source, pattern.flags);
-    const scan = (text: string): number => {
+    const replacement = options.replaceText ?? '';
+    const rangesIn = (text: string): ReadonlyArray<{ readonly start: number; readonly end: number; readonly replacement: string }> => {
       const re = global();
-      let n = 0;
+      const ranges: Array<{ start: number; end: number; replacement: string }> = [];
       let m = re.exec(text);
       while (m !== null) {
-        n += 1;
         if (m[0].length === 0) re.lastIndex += 1; // zero-width match: advance
+        else ranges.push({ start: m.index, end: m.index + m[0].length, replacement: expandReplacement(m[0], pattern, replacement) });
         m = re.exec(text);
       }
-      return n;
+      return ranges;
     };
-    const replacement = options.replaceText ?? '';
     return {
-      test: (text) => scan(text) > 0,
-      countIn: scan,
+      test: (text) => rangesIn(text).length > 0,
+      countIn: (text) => rangesIn(text).length,
       replaceIn: (text) => text.replace(global(), replacement),
+      rangesIn,
     };
   }
   if (options.matchEntireCell === true) {
@@ -97,6 +105,7 @@ function compileMatcher(options: FindOptions): CompiledMatcher {
       test: equals,
       countIn: (text) => (equals(text) ? 1 : 0),
       replaceIn: (text) => (equals(text) ? replacement : text),
+      rangesIn: (text) => (equals(text) ? [{ start: 0, end: text.length, replacement }] : NO_RANGES),
     };
   }
   // Substring contains; case-insensitive via lowercased indexOf.
@@ -104,17 +113,18 @@ function compileMatcher(options: FindOptions): CompiledMatcher {
   const lower = (text: string): string => (options.caseSensitive === true ? text : text.toLowerCase());
   const indexOf = (text: string, from: number): number => lower(text).indexOf(needle, from);
   const replacement = options.replaceText ?? '';
+  const rangesIn = (text: string): ReadonlyArray<{ readonly start: number; readonly end: number; readonly replacement: string }> => {
+    const ranges: Array<{ start: number; end: number; replacement: string }> = [];
+    let i = indexOf(text, 0);
+    while (i >= 0) {
+      ranges.push({ start: i, end: i + needle.length, replacement });
+      i = indexOf(text, i + needle.length);
+    }
+    return ranges;
+  };
   return {
     test: (text) => indexOf(text, 0) >= 0,
-    countIn: (text) => {
-      let n = 0;
-      let i = indexOf(text, 0);
-      while (i >= 0) {
-        n += 1;
-        i = indexOf(text, i + needle.length);
-      }
-      return n;
-    },
+    countIn: (text) => rangesIn(text).length,
     replaceIn: (text) => {
       let out = '';
       let cursor = 0;
@@ -125,11 +135,18 @@ function compileMatcher(options: FindOptions): CompiledMatcher {
         cursor = idx + needle.length;
       }
     },
+    rangesIn,
   };
 }
 
-/** Sheets to search, workbook order rotated so the active sheet comes first (Excel starts there). */
-function searchSheets(store: Store, scope: FindScope): readonly SheetInfo[] {
+/** Expand `$1`/`$&`-style references against one match (String.replace semantics). */
+function expandReplacement(matchText: string, pattern: RegExp, replacement: string): string {
+  if (!/\$/.test(replacement)) return replacement;
+  const single = new RegExp(pattern.source, pattern.flags.replace('g', ''));
+  return matchText.replace(single, replacement);
+}
+
+/** Sheets to search, workbook order rotated so the active sheet comes first (Excel starts there). */function searchSheets(store: Store, scope: FindScope): readonly SheetInfo[] {
   const sheets = store.getSheets();
   if (scope === 'sheet') {
     const active = sheets.find((s) => s.id === store.getActiveSheetId());
@@ -149,6 +166,27 @@ function keyCoords(key: string): readonly [number, number] {
 /** Searchable source text of a cell: formula source first, then plain text (Excel "Look in: Formulas"). */
 function cellSource(cell: { text: string; formula?: string }): string {
   return formulaText(cell) ?? cell.text;
+}
+
+/**
+ * Patch replacing the given flat-text ranges in one cell. Rich text cells
+ * splice at the run level so untouched slices keep their formatting; the
+ * replacement inherits the style of the first hit character (Excel behavior).
+ */
+function replacePatch(cell: { text: string; formula?: string; richText?: readonly RichTextRun[] }, ranges: ReadonlyArray<{ readonly start: number; readonly end: number; readonly replacement: string }>): CellPatch {
+  if (cell.formula === undefined && isRich(cell.richText)) {
+    const nextRuns = replaceInRuns(cell.richText, ranges);
+    const nextText = flattenRuns(nextRuns);
+    return isRich(nextRuns) ? { text: nextText, richText: nextRuns } : { text: nextText };
+  }
+  let next = '';
+  let cursor = 0;
+  for (const range of [...ranges].sort((a, b) => a.start - b.start)) {
+    next += cell.text.slice(cursor, range.start) + range.replacement;
+    cursor = range.end;
+  }
+  next += cell.text.slice(cursor);
+  return { text: next };
 }
 
 interface CellWrite {
@@ -220,15 +258,13 @@ export class FindReplaceService {
     for (const sheet of searchSheets(store, options.scope ?? 'sheet')) {
       for (const [key, cell] of store.getCells(sheet.id)) {
         const source = cellSource(cell);
-        const hits = matcher.countIn(source);
-        if (hits <= 0) continue;
-        const next = matcher.replaceIn(source);
-        if (next === source) continue;
+        const ranges = matcher.rangesIn(source);
+        if (ranges.length <= 0) continue;
         const [r, c] = keyCoords(key);
         if (!Number.isInteger(r) || !Number.isInteger(c)) continue;
-        replacements += hits;
+        replacements += ranges.length;
         cells += 1;
-        writes.push({ sheetId: sheet.id, r, c, patch: { text: next } });
+        writes.push({ sheetId: sheet.id, r, c, patch: replacePatch(cell, ranges) });
       }
     }
     if (writes.length > 0) this.applyWrites(store, cmdManager, writes);
@@ -299,10 +335,11 @@ export class FindReplaceService {
   private replacementPatch(store: Store, match: FindMatch, options: FindOptions): CellPatch | undefined {
     if (options.replaceText === undefined) return undefined;
     const cell = store.getCell(match.r, match.c, match.sheetId);
-    const source = cell !== undefined ? cellSource(cell) : '';
-    const next = compileMatcher(options).replaceIn(source);
-    if (next === source) return undefined;
-    return { text: next };
+    if (cell === undefined) return undefined;
+    const matcher = compileMatcher(options);
+    const ranges = matcher.rangesIn(cellSource(cell));
+    if (ranges.length === 0) return undefined;
+    return replacePatch(cell, ranges);
   }
 
   private searchAll(store: Store, options: FindOptions): FindMatch[] {

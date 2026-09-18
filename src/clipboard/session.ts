@@ -102,7 +102,7 @@ export function buildSessionPasteValues(session: ClipboardSessionState, r: numbe
     const line: CellPatch[] = [];
     for (let j = 0; j < cols; j += 1) {
       const cell = session.cells[i % srcRows]?.[j % srcCols];
-      if (cell === undefined) { line.push({ text: '', formula: undefined, value: undefined, styleId: undefined, type: undefined }); continue; }
+      if (cell === undefined) { line.push({ text: '', formula: undefined, value: undefined, styleId: undefined, type: undefined, richText: undefined }); continue; }
       // Formula shift is measured from this tile's source cell, so tiled copies
       // each get their own relative references (Excel).
       const dr = r + i - (session.range.r1 + (i % srcRows));
@@ -115,6 +115,7 @@ export function buildSessionPasteValues(session: ClipboardSessionState, r: numbe
         value: cell.value,
         styleId: cell.styleId,
         type: cell.type,
+        richText: cell.richText,
       });
     }
     out.push(line);

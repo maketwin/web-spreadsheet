@@ -4,6 +4,7 @@ import { mergeToString, parseMerge, rangeContains, rangesIntersect } from '../..
 import type { Store } from '../../store/Store';
 import type { RangeAddress } from '../../selection/Range';
 import type { Cell } from '../../types';
+import { isRich } from '../../util/richText';
 
 export interface FillRangeArgs {
   /**
@@ -145,6 +146,8 @@ function rebuildCell(src: Cell, text: string): Cell {
   }
   if (src.styleId !== undefined) out.styleId = src.styleId;
   if (src.type !== undefined) out.type = src.type;
+  // A straight copy repeats the rich formatting; derived (series) text is plain.
+  if (src.text === text && isRich(src.richText)) out.richText = src.richText;
   return out;
 }
 
