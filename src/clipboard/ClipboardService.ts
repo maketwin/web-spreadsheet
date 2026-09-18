@@ -3,6 +3,7 @@ import type { RangeAddress } from '../selection/Range';
 import type { Store } from '../store/Store';
 import type { Cell, RichTextRun, RunStyle } from '../types';
 import { isRich, normalizeRuns } from '../util/richText';
+import { runSpanStyle, runStyleFromElement } from '../util/runStyleCss';
 
 export interface ClipboardPayload {
   readonly text: string;
@@ -80,24 +81,8 @@ function toHtml(cells: ReadonlyArray<ReadonlyArray<Cell | undefined>>): string {
 function tdHtml(cell: Cell | undefined): string {
   const text = cell?.text ?? '';
   if (cell === undefined || !isRich(cell.richText)) return `<td>${escapeHtml(text)}</td>`;
-  const spans = cell.richText.map((run) => `<span${styleAttr(runSpanStyle(run))}>${escapeHtml(run.text)}</span>`).join('');
+  const spans = cell.richText.map((run) => `<span${styleAttr(runSpanStyle(run.style ?? {}))}>${escapeHtml(run.text)}</span>`).join('');
   return `<td>${spans}</td>`;
-}
-
-function runSpanStyle(run: RichTextRun): string {
-  const s = run.style;
-  if (s === undefined) return '';
-  const parts: string[] = [];
-  if (s.bold === true) parts.push('font-weight:700');
-  if (s.italic === true) parts.push('font-style:italic');
-  const deco = [s.underline === true ? 'underline' : '', s.strike === true ? 'line-through' : ''].filter(Boolean).join(' ');
-  if (deco !== '') parts.push(`text-decoration:${deco}`);
-  if (s.fontSize !== undefined) parts.push(`font-size:${s.fontSize}pt`);
-  if (s.fontFamily !== undefined) parts.push(`font-family:'${s.fontFamily.replace(/'/g, '')}'`);
-  if (s.color !== undefined) parts.push(`color:${s.color}`);
-  if (s.vertAlign === 'subscript') parts.push('vertical-align:sub');
-  if (s.vertAlign === 'superscript') parts.push('vertical-align:super');
-  return parts.join(';');
 }
 
 function styleAttr(style: string): string {
@@ -131,50 +116,6 @@ function collectRuns(node: Node, inherited: RunStyle, out: RichTextRun[]): void 
       collectRuns(el, { ...inherited, ...runStyleFromElement(el) }, out);
     }
   }
-}
-
-/** Inline CSS + semantic tags (`b`, `sub`, …) → RunStyle, the way Excel's clipboard HTML spells them. */
-function runStyleFromElement(el: HTMLElement): RunStyle {
-  const style: RunStyle = {};
-  const tag = el.tagName.toLowerCase();
-  if (tag === 'b' || tag === 'strong') style.bold = true;
-  if (tag === 'i' || tag === 'em') style.italic = true;
-  if (tag === 'u') style.underline = true;
-  if (tag === 's' || tag === 'strike' || tag === 'del') style.strike = true;
-  if (tag === 'sub') style.vertAlign = 'subscript';
-  if (tag === 'sup') style.vertAlign = 'superscript';
-  const css = el.style;
-  if (css.fontWeight === 'bold' || css.fontWeight === '700' || css.fontWeight === '800' || css.fontWeight === '900') style.bold = true;
-  if (css.fontStyle === 'italic') style.italic = true;
-  const deco = css.textDecoration;
-  if (deco.includes('underline')) style.underline = true;
-  if (deco.includes('line-through')) style.strike = true;
-  const size = css.fontSize;
-  if (size !== undefined && size !== '') {
-    const pt = Number(size.replace(/pt.*$/, ''));
-    if (Number.isFinite(pt) && pt > 0) style.fontSize = Math.round(pt);
-  }
-  const family = css.fontFamily;
-  if (family !== undefined && family !== '') style.fontFamily = family.split(',')[0]!.trim().replace(/^['"]|['"]$/g, '');
-  const color = css.color;
-  if (color !== undefined && color !== '') {
-    const parsed = parseCssColor(color);
-    if (parsed !== undefined) style.color = parsed;
-  }
-  if (css.verticalAlign === 'sub') style.vertAlign = 'subscript';
-  if (css.verticalAlign === 'super') style.vertAlign = 'superscript';
-  return style;
-}
-
-/** `rgb(r, g, b)` / named-transparent fallbacks aside, pass hex through. */
-function parseCssColor(css: string): string | undefined {
-  const rgb = css.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
-  if (rgb !== null) {
-    const [, r, g, b] = rgb;
-    return `#${[r, g, b].map((part) => Number(part).toString(16).padStart(2, '0').toUpperCase()).join('')}`;
-  }
-  if (/^#[0-9A-Fa-f]{6}$/.test(css)) return css.toUpperCase();
-  return undefined;
 }
 
 async function writeClipboard(clipboard: Clipboard, payload: ClipboardPayload): Promise<void> {

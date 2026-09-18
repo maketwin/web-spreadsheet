@@ -10,7 +10,7 @@ export interface SetCellTextArgs {
   readonly text: string;
   /** Rich runs for a text-constant cell; `text` must equal their concatenation.
    * Omitted (the default everywhere except the rich editor commit) flattens the cell. */
-  readonly richText?: RichTextRun[];
+  readonly richText?: RichTextRun[] | undefined;
 }
 
 export class SetCellText extends Command<SetCellTextArgs> {

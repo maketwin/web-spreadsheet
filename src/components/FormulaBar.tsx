@@ -27,7 +27,7 @@ export const FormulaBar: FC<FormulaBarProps> = ({ selected, value, onChange, onC
         onFocus={(event) => { setEditingName(true); setNameInput(label); requestAnimationFrame(() => event.target.select()); }}
         onChange={(event) => setNameInput(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key === 'Enter') { event.preventDefault(); onGoTo?.(nameInput); event.currentTarget.blur(); }
+          if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); onGoTo?.(nameInput); }
           if (event.key === 'Escape') { setEditingName(false); event.currentTarget.blur(); }
         }}
         onBlur={() => setEditingName(false)}

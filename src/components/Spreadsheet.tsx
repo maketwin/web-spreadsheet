@@ -2,7 +2,7 @@ import { Button, ColorPicker, Divider, Dropdown, Form, Input, Modal, Select, Spa
 import { DownOutlined, AlignCenterOutlined, AlignLeftOutlined, AlignRightOutlined, BgColorsOutlined, BoldOutlined, BorderBottomOutlined, BorderInnerOutlined, BorderLeftOutlined, BorderOuterOutlined, BorderRightOutlined, BorderTopOutlined, ClearOutlined, ColumnHeightOutlined, FontColorsOutlined, FormatPainterOutlined, ItalicOutlined, LockOutlined, SelectOutlined, UnderlineOutlined, ZoomInOutlined, ZoomOutOutlined, TableOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, MergeCellsOutlined } from '@ant-design/icons';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type Dispatch, type FC, type KeyboardEvent as ReactKeyboardEvent, type RefObject, type SetStateAction } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type Dispatch, type FC, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type RefObject, type SetStateAction } from 'react';
 import { applyMatrix, clearRange, clearRangeCmd, CompositeCommand } from '../util/rangeValues';
 import { fillSelectionPatches } from '../fill/fillSelection';
 import { repeatOnRange } from '../commands/repeat';
@@ -62,11 +62,13 @@ import type { SparklineType } from '../sparkline/types';
 import { FilterDropdown } from './FilterDropdown';
 import { startAutoSave } from '../db/autoSave';
 import { loadWorkbook, DEFAULT_ID, saveWorkbook as saveToDB } from '../db/WorkbookDB';
-import type { Cell, Style } from '../types';
+import type { Cell, Style, RichTextRun } from '../types';
 import { WRAP_LINE_HEIGHT, wrappedContentHeight } from '../util/wrapText';
 import { autoFitRowHeight, autofitRowHeights } from '../util/rowAutofit';
 import { fillShortcut } from '../fill/fillShortcut';
 import { cycleDollars, endsWithRef, isPointTrigger, refAtCaret, upsertRef } from '../formula/pointMode';
+import { RichEditor, normalizeEditorRuns, type RichEditorApi } from './RichEditor';
+import { applyRunStyle, flattenRuns, isRich, runsFromText, type RunStylePatch } from '../util/richText';
 
 export { snapshotCells, buildSessionPasteValues, tilePlainCells, combineMultiRanges } from '../clipboard/session';
 export type { ClipboardSessionState } from '../clipboard/session';
@@ -74,9 +76,11 @@ export type CellInput = CellDataInput;
 export interface SheetInput { readonly id?: string; readonly name: string; readonly data?: readonly (readonly CellInput[])[] }
 export interface SpreadsheetOptions { readonly data?: readonly (readonly CellInput[])[]; readonly sheets?: readonly SheetInput[]; readonly theme?: Theme | false }
 export interface SpreadsheetProps { readonly store: Store; readonly cmdManager?: CommandManager; readonly formulaEngine?: FormulaEngine; readonly theme?: Theme | false | undefined; readonly onClose?: () => void }
-interface EditingCell extends CellAddress { readonly value: string; /** Excel: F2/double-click = edit mode (arrows move the caret); typing = enter mode (arrows commit). */ readonly editMode?: boolean; /** Excel point mode: the cell the formula's trailing reference currently points at. */ readonly point?: CellAddress }
+interface EditingCell extends CellAddress { readonly value: string; /** Excel: F2/double-click = edit mode (arrows move the caret); typing = enter mode (arrows commit). */ readonly editMode?: boolean; /** Excel point mode: the cell the formula's trailing reference currently points at. */ readonly point?: CellAddress; /** Mid-edit upgrade: run-level formatting was applied to a selection (forces the rich editor). */ readonly richDraft?: RichTextRun[] }
 interface ViewState { readonly zoom: number; readonly showFormula: boolean; readonly showGrid: boolean; readonly frozenRows: number; readonly frozenCols: number }
 interface FilterPopupState { readonly r: number; readonly c: number; readonly x: number; readonly y: number }
+/** Module-level hook the active instance registers so applyShortcutStyle can offer run-level styling to the open cell editor. */
+const editorRunStyleIntercept: { current: ((style: Partial<Style>) => boolean) | null } = { current: null };
 type SpreadsheetContextMenu =
   | { readonly kind: 'cell'; readonly x: number; readonly y: number }
   | { readonly kind: 'row'; readonly index: number; readonly count: number; readonly x: number; readonly y: number }
@@ -103,6 +107,8 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   selectedRef.current = selected;
   const editingRef = useRef<EditingCell | null>(editing);
   editingRef.current = editing;
+  /** The rich editor registers itself while mounted (rich cells / rich drafts only). */
+  const richApiRef = useRef<RichEditorApi | null>(null);
   const { multiRef, rendererApiRef, setMulti } = useMultiSelection();
 
   const selectSelection = useCallback((next: Selection) => {
@@ -236,7 +242,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     setSelected(next);
     setEditing({ ...anchor, value: editValue, editMode });
   };
-  const commitEditing = (value: string, moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection = false): void => {
+  const commitEditing = (value: string, moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection = false, runs?: RichTextRun[]): void => {
     const ed = editingRef.current;
     // Guarded by the ref so a blur right after a click-commit never double-writes.
     editingRef.current = null;
@@ -253,7 +259,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       if (fillAll && selRange !== undefined) {
         applyMatrix(store, cmdManager, selRange.r1, selRange.c1, fillSelectionPatches(selRange, ed, value));
       } else {
-        setCellText(store, cmdManager, ed, value);
+        setCellText(store, cmdManager, ed, value, runs);
       }
       // Excel: Alt+Enter auto-enables Wrap Text and grows the row
       if (value.includes('\n')) {
@@ -273,6 +279,37 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     setEditing(null);
   };
   commitEditingRef.current = (value: string) => commitEditing(value);
+
+  /**
+   * Excel: run-level style keys with a cell editor open format the selected
+   * characters of the draft (turning the cell rich) instead of the cells.
+   * Non-run keys (fill, alignment, number format…) fall through to whole cells.
+   */
+  const applyRunStyleToEditor = useCallback((style: Partial<Style>): boolean => {
+    const ed = editingRef.current;
+    if (ed === null) return false;
+    const patch: RunStylePatch = {};
+    let hasRunKey = false;
+    for (const key of ['bold', 'italic', 'underline', 'fontSize', 'fontFamily', 'color'] as const) {
+      const value = (style as Record<string, unknown>)[key];
+      if (value !== undefined) { (patch as Record<string, unknown>)[key] = value; hasRunKey = true; }
+    }
+    if (!hasRunKey) return false;
+    // Rich editor already open: patch its selection (needs an actual selection).
+    if (richApiRef.current !== null) return richApiRef.current.applyRunStyle(patch);
+    // Plain textarea with selected characters: upgrade the draft to rich runs.
+    const el = inputRef.current;
+    if (el === null) return false;
+    const start = el.selectionStart ?? 0;
+    const end = el.selectionEnd ?? 0;
+    if (end <= start) return false;
+    const runs = applyRunStyle(runsFromText(el.value) ?? [{ text: el.value }], start, end, patch);
+    const nextEd: EditingCell = { ...ed, richDraft: runs, value: flattenRuns(runs) };
+    editingRef.current = nextEd;
+    setEditing(nextEd);
+    return true;
+  }, []);
+  editorRunStyleIntercept.current = applyRunStyleToEditor;
 
   useTheme(theme);
   useFormulaSync(store, formulaEngine);
@@ -298,10 +335,10 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   }, [editing]);
 
   return <ErrorBoundary><div className="ss-root">
-    <MenuBar {...menuBarProps(store, cmdManager, selected, selectRange, () => selectSelection(sheetSelection(allSheetRange())), onClose)} view={{ ...view, setZoom: (zoom) => setView((current) => ({ ...current, zoom })), setShowFormula: (showFormula) => setView((current) => ({ ...current, showFormula })), setShowGrid: (showGrid) => setView((current) => ({ ...current, showGrid })), setFreeze: (frozenRows, frozenCols) => setView((current) => ({ ...current, frozenRows, frozenCols })) }} onFindNavigate={(match) => { if (match.sheetId !== store.getActiveSheetId()) store.activateSheet(match.sheetId); selectSelection(cellSelection(match.r, match.c)); }} onFindHighlight={(matches, current) => setFindHighlights(matches.length === 0 ? null : { matches, current })} openDialogKey={findDialogOpen} onCreateChart={(type, title) => submitCreateChart(type, title, store, selected, execCmd, rendererRef.current, setSelectedChartId)} onInsertSparkline={(type, rangeInput) => submitInsertSparkline(type, rangeInput, store, selected, execCmd)} />
+    <MenuBar {...menuBarProps(store, cmdManager, selected, selectRange, () => selectSelection(sheetSelection(allSheetRange())), onClose, applyRunStyleToEditor)} view={{ ...view, setZoom: (zoom) => setView((current) => ({ ...current, zoom })), setShowFormula: (showFormula) => setView((current) => ({ ...current, showFormula })), setShowGrid: (showGrid) => setView((current) => ({ ...current, showGrid })), setFreeze: (frozenRows, frozenCols) => setView((current) => ({ ...current, frozenRows, frozenCols })) }} onFindNavigate={(match) => { if (match.sheetId !== store.getActiveSheetId()) store.activateSheet(match.sheetId); selectSelection(cellSelection(match.r, match.c)); }} onFindHighlight={(matches, current) => setFindHighlights(matches.length === 0 ? null : { matches, current })} openDialogKey={findDialogOpen} onCreateChart={(type, title) => submitCreateChart(type, title, store, selected, execCmd, rendererRef.current, setSelectedChartId)} onInsertSparkline={(type, rangeInput) => submitInsertSparkline(type, rangeInput, store, selected, execCmd)} />
     <InteractionToolbar selected={selected} store={store} cmdManager={cmdManager} view={view} setView={setView} selectAll={() => selectSelection(sheetSelection(allSheetRange()))} painting={painting} onTogglePainter={() => { if (painting) { setPainting(false); setSourceStyle(undefined); } else { const cell = selected?.active; const s = cell === undefined ? undefined : store.getCell(cell.r, cell.c)?.styleId === undefined ? undefined : store.getStyle(store.getCell(cell.r, cell.c)!.styleId!); setSourceStyle(s); setPainting(true); } }} onToggleProtection={() => setProtectOpen(true)} />
     <ProtectionModal open={protectOpen} onClose={() => setProtectOpen(false)} store={store} />
-    <FormulaBar selected={selected} value={formulaValue} onChange={setFormulaValue} onCommit={() => commitFormulaValue(selected, formulaValue, store, cmdManager)} onGoTo={(input) => jumpNameBox(store, input, selectRange)} />
+    <FormulaBar selected={selected} value={formulaValue} onChange={setFormulaValue} onCommit={() => commitFormulaValue(selected, formulaValue, store, cmdManager)} onGoTo={(input) => { jumpNameBox(store, input, selectRange); canvasRef.current?.focus(); }} />
     <div className="ss-canvas-wrap"><canvas ref={canvasRef} className="ss-canvas" tabIndex={0} aria-label="Spreadsheet canvas, use arrow keys to navigate" onKeyDown={(e) => {
         if ((e.ctrlKey || e.metaKey) && e.altKey && e.key.toLowerCase() === 'v') {
           // Excel: Ctrl+Alt+V opens Paste Special.
@@ -318,7 +355,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
         if (handleEndMode(e, selectedRef.current, store, endModeRef, selectSelection, selectRange)) return;
         handleCanvasKeyDown(e, selectedRef.current, store, cmdManager, startEditing, selectSelection, selectRange, setView, setFindDialogOpen, runClipboard, clearClipboardSession, execCmd, view.frozenRows, view.frozenCols, view.zoom, () => setMulti([]), () => multiRef.current);
       }} onDoubleClick={(e) => { const cell = rendererRef.current?.cellAtPoint(e.clientX, e.clientY); if (cell != null) startEditing(cell, undefined, true); }} />
-      {editing !== null && <EditorOverlay refEl={inputRef} editingRefSetter={(cell) => { editingRef.current = cell; setEditing(cell); }} editing={editing} setEditing={setEditing} commit={commitEditing} zoom={view.zoom} store={store} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}
+      {editing !== null && <EditorOverlay refEl={inputRef} editingRefSetter={(cell) => { editingRef.current = cell; setEditing(cell); }} editing={editing} setEditing={setEditing} commit={commitEditing} zoom={view.zoom} store={store} richApiRef={richApiRef} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}
       <div className="ss-chart-layer">{store.getCharts().map((spec) => <FloatingChart key={spec.id} spec={spec} store={store} renderer={rendererRef.current} selected={selectedChartId === spec.id} onSelect={setSelectedChartId} onGeometry={(id, anchor) => execCmd(new SetChartAnchorCommand({ id, anchor }))} onRemove={(id) => { execCmd(new RemoveChartCommand({ id })); setSelectedChartId((current) => current === id ? null : current); canvasRef.current?.focus(); }} onUndo={() => cmdManager?.undo()} onRedo={() => cmdManager?.redo()} />)}</div></div>
       <PasteSpecialDialog open={pasteSpecialOpen} onOk={(opts) => void applyPasteSpecial(opts)} onCancel={() => setPasteSpecialOpen(false)} />
       {filterPopup !== null && <FilterDropdown store={store} cmdManagerExecutor={execCmd} r={filterPopup.r} c={filterPopup.c} x={filterPopup.x} y={filterPopup.y} onClose={() => setFilterPopup(null)} />}
@@ -384,13 +421,40 @@ export class Spreadsheet {
   }
 }
 
-interface EditorOverlayProps { readonly refEl: RefObject<HTMLTextAreaElement>; readonly editingRefSetter: (cell: EditingCell) => void; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly commit: (value: string, moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection?: boolean) => void; readonly zoom: number; readonly store: Store; readonly cellRect?: { x: number; y: number; w: number; h: number } }
-const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editing, setEditing, commit, zoom, store, cellRect }) => {
+interface EditorOverlayProps { readonly refEl: RefObject<HTMLTextAreaElement>; readonly editingRefSetter: (cell: EditingCell) => void; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly commit: (value: string, moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection?: boolean, runs?: RichTextRun[]) => void; readonly zoom: number; readonly store: Store; readonly cellRect?: { x: number; y: number; w: number; h: number }; readonly richApiRef: MutableRefObject<RichEditorApi | null> }
+const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editing, setEditing, commit, zoom, store, cellRect, richApiRef }) => {
   const composing = useRef(false);
   const cellStyle = store.getCell(editing.r, editing.c)?.styleId !== undefined
     ? store.getStyle(store.getCell(editing.r, editing.c)!.styleId!)
     : undefined;
   const wrapping = cellStyle?.wrap === true || editing.value.includes('\n');
+  const cell = store.getCell(editing.r, editing.c);
+  const initialRuns = editing.richDraft ?? (isRich(cell?.richText) ? cell!.richText! : undefined);
+  if (initialRuns !== undefined) {
+    // Excel: rich cells edit in place with per-character styling. The DOM is
+    // authoritative while typing; runs for the commit come from the editor api.
+    const commitRich = (moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection?: boolean): void => {
+      const runs = richApiRef.current?.getRuns() ?? [...initialRuns];
+      const normalized = normalizeEditorRuns(runs);
+      commit(flattenRuns(runs), moveAfter, fillSelection, normalized ?? undefined);
+    };
+    return <RichEditor
+      initialRuns={initialRuns}
+      css={editorStyle(store, editing, zoom, cellRect, cellStyle, editing.value)}
+      editMode={editing.editMode === true}
+      registerApi={(api) => { richApiRef.current = api; }}
+      commit={commitRich}
+      cancel={() => setEditing(null)}
+      onValueChange={(value) => editingRefSetter({ ...editing, value })}
+      onBlur={() => {
+        // Toolbar/menu interaction keeps the draft alive so formatting can land
+        // in the selection; any other blur (click-away) commits like the textarea.
+        const active = document.activeElement as HTMLElement | null;
+        if (active !== null && active.closest('.ss-interaction-toolbar, .ss-menu-bar, .ant-dropdown, .ant-popover') !== null) return;
+        commitRich();
+      }}
+    />;
+  }
   return <textarea
     ref={refEl}
     className={`ss-editor-overlay${wrapping ? ' ss-editor-overlay--wrap' : ''}`}
@@ -401,7 +465,13 @@ const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editin
     onChange={(e) => setEditing({ ...editing, value: e.target.value })}
     onCompositionStart={() => { composing.current = true; }}
     onCompositionEnd={() => { composing.current = false; }}
-    onBlur={() => commit(refEl.current?.value ?? editing.value)}
+    onBlur={() => {
+      // Same toolbar/menu guard as the rich editor: formatting from the
+      // toolbars must land in the draft, not commit it.
+      const active = document.activeElement as HTMLElement | null;
+      if (active !== null && active.closest('.ss-interaction-toolbar, .ss-menu-bar, .ant-dropdown, .ant-popover') !== null) return;
+      commit(refEl.current?.value ?? editing.value);
+    }}
     onKeyDown={(e) => {
       if (composing.current) return;
       // Excel F4: cycle $ anchors on the reference at the caret (A1 → $A$1 → A$1 → $A1).
@@ -773,7 +843,16 @@ function editorStyle(
     resize: 'none',
   };
 }
-function setCellText(store: Store, cmdManager: CommandManager | undefined, cell: CellAddress, text: string): void { if (cmdManager === undefined) store.setCell(cell.r, cell.c, cellFromText(store.getCell(cell.r, cell.c), text)); else cmdManager.execute(new SetCellText({ r: cell.r, c: cell.c, text })); }
+function setCellText(store: Store, cmdManager: CommandManager | undefined, cell: CellAddress, text: string, runs?: RichTextRun[]): void {
+  if (cmdManager === undefined) {
+    const next = cellFromText(store.getCell(cell.r, cell.c), text);
+    if (runs !== undefined) next.richText = runs;
+    store.setCell(cell.r, cell.c, next);
+    return;
+  }
+  const cmd = new SetCellText({ r: cell.r, c: cell.c, text, richText: runs });
+  cmdManager.execute.bind(cmdManager)(cmd);
+}
 function cellEditValue(store: Store, cell: CellAddress): string { const current = store.getCell(cell.r, cell.c); return current?.formula ?? current?.text ?? ''; }
 function syncExistingFormulas(store: Store, engine: FormulaEngine): void { const sheetId = store.getActiveSheetId(); store.getCells().forEach(([id, cell]) => { const formula = formulaText(cell); if (formula !== undefined) engine.setFormula(id, formula, formulaDependencies(formula), sheetId); }); }
 function syncCellFormula(engine: FormulaEngine, r: number, c: number, cell: Cell | undefined, sheetId?: string): void { const formula = formulaText(cell); const id = cellId(r, c); if (formula === undefined) engine.removeFormula(id, sheetId); else engine.setFormula(id, formula, formulaDependencies(formula), sheetId); }
@@ -793,10 +872,10 @@ function growRowsToContent(store: Store, range: RangeAddress): void {
   }
 }
 
-function menuBarProps(store: Store, cmdManager: CommandManager | undefined, selected: Selection | null, selectRange: (range: RangeAddress) => void, allRange: () => void, onClose: (() => void) | undefined): React.ComponentProps<typeof MenuBar> {
+function menuBarProps(store: Store, cmdManager: CommandManager | undefined, selected: Selection | null, selectRange: (range: RangeAddress) => void, allRange: () => void, onClose: (() => void) | undefined, applyRunStyleToEditor: (style: Partial<Style>) => boolean): React.ComponentProps<typeof MenuBar> {
   const range = selected?.range ?? null;
   const activeCell = selected?.active ?? null;
-  const props = { store, selected: range, activeCell, selectRange, clearRange: () => { if (range !== null) clearRange(store, cmdManager, range); }, allRange };
+  const props = { store, selected: range, activeCell, selectRange, clearRange: () => { if (range !== null) clearRange(store, cmdManager, range); }, allRange, applyRunStyleToEditor };
   return cmdManager === undefined ? withClose(props, onClose) : withClose({ ...props, cmdManager }, onClose);
 }
 function withClose<T extends Omit<React.ComponentProps<typeof MenuBar>, 'closeDemo'>>(props: T, onClose: (() => void) | undefined): React.ComponentProps<typeof MenuBar> {
@@ -851,7 +930,14 @@ function handleMenuShortcut(command: MenuShortcutCommand, store: Store, cmdManag
   const map: Record<MenuShortcutCommand, () => void> = { save: () => saveToLocal(store), find: () => setFindDialog('find'), replace: () => setFindDialog('replace'), selectAll: () => selectRange(allSheetRange()), bold: () => applyShortcutStyle(store, cmdManager, selected, { bold: true }), italic: () => applyShortcutStyle(store, cmdManager, selected, { italic: true }), underline: () => applyShortcutStyle(store, cmdManager, selected, { underline: true }), zoom100: () => setView((current) => ({ ...current, zoom: 100 })), zoomIn: () => setView((current) => ({ ...current, zoom: Math.min(200, current.zoom + 10) })), zoomOut: () => setView((current) => ({ ...current, zoom: Math.max(50, current.zoom - 10) })), undo: () => cmdManager?.undo(), redo: () => cmdManager?.redo(), formatCells: () => setFindDialog('numberFormat'), nextSheet: () => switchSheet(store, 1), prevSheet: () => switchSheet(store, -1), toggleFilter: () => { const cmd = toggleAutoFilterCommand(store, selected); if (cmd !== null) execCmd(cmd); } };
   map[command]();
 }
-function applyShortcutStyle(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress, style: Partial<Style>): void { const cmd = new SetRangeStyleCommand({ ...range, style }); if (cmdManager === undefined) cmd.execute(store); else cmdManager.execute(cmd); }
+function applyShortcutStyle(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress, style: Partial<Style>): void {
+  // Excel: run-level style keys with a cell editor open + text selection apply
+  // to the selected characters of the draft instead of the cells.
+  if (editorRunStyleIntercept.current?.(style) === true) return;
+  const cmd = new SetRangeStyleCommand({ ...range, style });
+  if (cmdManager === undefined) cmd.execute.bind(cmd)(store);
+  else cmdManager.execute.bind(cmdManager)(cmd);
+}
 function applyRangeBorder(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress, preset: BorderPreset, line: BorderLine = 'solid'): void { const cmd = new SetRangeBorderCommand({ ...range, preset, line }); if (cmdManager === undefined) cmd.execute(store); else cmdManager.execute(cmd); }
 function saveToLocal(store: Store): void { void saveToDB(DEFAULT_ID, store.serialize()).then(() => message.success('已保存到 IndexedDB')); }
 function dispatchThemeChanged(): void { window.dispatchEvent(new CustomEvent('ss:theme-changed')); }
@@ -997,7 +1083,10 @@ const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly sto
   const fontColor = current?.color ?? '#000000';
   const fillColor = current?.bgcolor ?? '#FFFFFF';
   const wrapping = current?.wrap === true;
-  return <div className="ss-interaction-toolbar" role="toolbar" aria-label="Spreadsheet toolbar">
+  return <div className="ss-interaction-toolbar" role="toolbar" aria-label="Spreadsheet toolbar"
+    // Excel: clicking the toolbar while editing keeps the edit session alive —
+    // plain buttons must not steal focus from the cell editor.
+    onMouseDown={(e) => { const t = e.target as HTMLElement; if (t.closest('button') !== null && t.closest('.ant-select, .ant-popover, .ant-dropdown, .ant-picker') === null) e.preventDefault(); }}>
     <Space size={4} wrap>
       <Tooltip title="全选"><Button size="small" icon={<SelectOutlined />} aria-label="Select all" onClick={selectAll} /></Tooltip>
       <Tooltip title="清除内容"><Button size="small" icon={<ClearOutlined />} aria-label="Clear contents" onClick={() => { if (range !== undefined) clearRange(store, cmdManager, range); }} /></Tooltip>

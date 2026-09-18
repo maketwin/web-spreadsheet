@@ -81,7 +81,9 @@ export const MenuBar: FC<MenuBarProps> = (props) => {
   return <div className="ss-menu-bar" role="menubar" aria-orientation="horizontal" aria-label="Spreadsheet menu">
     <div className="ss-menu-strip">
       {menus.map((menu) => <Dropdown key={menu.key} trigger={['click']} placement="bottomLeft" menu={{ items: menu.items, onClick: ({ key }) => actions.run(String(key)) }}>
-        <button className="ss-menu-trigger" type="button" role="menuitem" aria-haspopup="menu">
+        <button className="ss-menu-trigger" type="button" role="menuitem" aria-haspopup="menu"
+          // Excel: opening a menu while editing a cell keeps the edit session alive.
+          onMouseDown={(e) => e.preventDefault()}>
           {menu.icon}<span>{menu.label}</span>
         </button>
       </Dropdown>)}
@@ -425,8 +427,15 @@ function runHelpAction(key: string, openDialog: (name: DialogName) => void): voi
 }
 
 function applyStyle(ctx: MenuContext, style: Partial<Style>): void {
+  // Excel: with a cell editor open and characters selected, character-level
+  // style keys format that slice of the draft instead of the whole cells.
+  const handledByEditor = ctx.applyRunStyleToEditor?.(style);
+  if (handledByEditor === true) return;
   const selected = ctx.selected ?? Range.single(0, 0).toAddress();
-  execute(ctx, new SetRangeStyleCommand({ ...selected, style }));
+  const cmd = new SetRangeStyleCommand({ ...selected, style });
+  if (ctx.cmdManager === undefined) { cmd.execute.bind(cmd)(ctx.store); return; }
+  const manager = ctx.cmdManager;
+  manager.execute.bind(manager)(cmd);
 }
 
 function execute(ctx: MenuContext, cmd: Command): void {

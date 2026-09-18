@@ -13,6 +13,12 @@ export interface MenuContext {
   readonly clearRange: () => void;
   readonly allRange: () => void;
   readonly closeDemo?: () => void;
+  /**
+   * While a cell editor is open with a text selection, run-level style keys
+   * (bold/italic/underline/fontSize/fontFamily/color) apply to the selected
+   * characters instead of the whole cells. Returns true when handled.
+   */
+  readonly applyRunStyleToEditor?: (style: Partial<Style>) => boolean;
 }
 
 export type DialogName =
