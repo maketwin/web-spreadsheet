@@ -1,6 +1,9 @@
-/* Excel-inspired light chrome (Win / Microsoft 365) */
+/* Excel-inspired light chrome (Win / Microsoft 365) — LOCKED to Excel green.
+ * Classic blue was considered (P2); product choice is green (#217346).
+ */
 :root {
   --ss-bg: #ffffff;
+  --ss-outside: #f3f3f3;
   --ss-color: #000000;
   --ss-border: #bdbdbd;
   --ss-freeze-line: #6f6f6f;
@@ -22,6 +25,7 @@
   --ss-status-bg: #217346;
   --ss-status-text: #ffffff;
   --ss-font-family: Calibri, "Segoe UI", "Microsoft YaHei", sans-serif;
+  --ss-font-size: 11px;
   --ss-row-height: 20px;
   --ss-col-width: 64px;
 }

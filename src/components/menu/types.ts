@@ -24,7 +24,7 @@ export interface MenuContext {
 export type DialogName =
   | 'find' | 'replace' | 'insertRow' | 'insertCol' | 'zoom' | 'numberFormat'
   | 'about' | 'shortcuts' | 'options' | 'plugins' | 'chart' | 'history' | 'printPreview'
-  | 'dataValidation' | 'sparkline' | 'protectSheet' | 'unprotectSheet';
+  | 'dataValidation' | 'sparkline' | 'protectSheet' | 'unprotectSheet' | 'cfFormula';
 
 export interface ViewState {
   readonly zoom: number;

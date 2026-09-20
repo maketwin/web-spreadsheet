@@ -7,16 +7,18 @@ export interface FormulaBarProps {
   readonly selected: Selection | null;
   readonly value: string;
   readonly onChange: (value: string) => void;
-  readonly onCommit: () => void;
+  readonly onCommit: (value?: string) => void;
   /** Excel name box: jump to an A1 reference, range or defined name. */
   readonly onGoTo?: (input: string) => void;
   /** Ref to the formula input so char-level formatting can read its selection. */
   readonly inputRef?: MutableRefObject<HTMLInputElement | null>;
   /** Excel: Ctrl/Cmd+B/I/U with characters selected in the formula bar formats those characters. */
   readonly onCharStyleKey?: (key: 'bold' | 'italic' | 'underline') => void;
+  /** Excel: Esc cancels an in-progress cell edit (same as Esc in the cell editor). */
+  readonly onCancel?: () => void;
 }
 
-export const FormulaBar: FC<FormulaBarProps> = ({ selected, value, onChange, onCommit, onGoTo, inputRef, onCharStyleKey }) => {
+export const FormulaBar: FC<FormulaBarProps> = ({ selected, value, onChange, onCommit, onGoTo, inputRef, onCharStyleKey, onCancel }) => {
   const label = selectionLabel(selected);
   const [nameInput, setNameInput] = useState(label);
   const [editingName, setEditingName] = useState(false);
@@ -45,8 +47,8 @@ export const FormulaBar: FC<FormulaBarProps> = ({ selected, value, onChange, onC
         value={value}
         onChange={(event) => onChange(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key === 'Enter') onCommit();
-          if (event.key === 'Escape') (event.target as HTMLInputElement).blur();
+          if (event.key === 'Enter') onCommit((event.target as HTMLInputElement).value);
+          if (event.key === 'Escape') { event.preventDefault(); onCancel?.(); (event.target as HTMLInputElement).blur(); }
           // Excel: Ctrl/Cmd+B/I/U with a selection in the formula bar formats those characters.
           if ((event.ctrlKey || event.metaKey) && !event.altKey) {
             const key = event.key.toLowerCase();

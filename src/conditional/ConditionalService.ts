@@ -20,7 +20,11 @@ export class ConditionalService {
     let style: Partial<Style> | undefined;
     let dataBar: ConditionalOverlay['dataBar'];
 
-    for (const [, ruleList] of rules) {
+    // Excel: a rule only paints cells inside the range it was created for.
+    for (const [key, ruleList] of rules) {
+      const range = parseRangeKey(key);
+      if (range === null) continue;
+      if (r < range.r1 || r > range.r2 || c < range.c1 || c > range.c2) continue;
       for (const rule of ruleList) {
         const overlay = this.applyRule(store, r, c, rule, sheetId);
         if (overlay.style !== undefined) style = { ...style, ...overlay.style };
@@ -71,6 +75,19 @@ export class ConditionalService {
 function barRatio(value: number, min: number, max: number): number {
   if (!(max > min)) return clamp01(value >= max ? 1 : 0);
   return clamp01((value - min) / (max - min));
+}
+
+/** Parse the `r1,c1:r2,c2` range key SetConditionalFormat stores rules under. */
+function parseRangeKey(key: string): { r1: number; c1: number; r2: number; c2: number } | null {
+  const [lo, hi] = key.split(':');
+  if (lo === undefined || hi === undefined) return null;
+  const nums = [...lo.split(','), ...hi.split(',')].map(Number);
+  if (nums.length !== 4 || nums.some((n) => !Number.isInteger(n))) return null;
+  const r1 = nums[0] ?? 0;
+  const c1 = nums[1] ?? 0;
+  const r2 = nums[2] ?? 0;
+  const c2 = nums[3] ?? 0;
+  return { r1: Math.min(r1, r2), c1: Math.min(c1, c2), r2: Math.max(r1, r2), c2: Math.max(c1, c2) };
 }
 
 function cellNumericValue(cell: Cell | undefined): number | null {

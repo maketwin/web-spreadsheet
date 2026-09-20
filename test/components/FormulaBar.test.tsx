@@ -32,4 +32,13 @@ describe('FormulaBar', () => {
     expect(onChange).toHaveBeenCalledWith('99');
     expect(onCommit).toHaveBeenCalled();
   });
+
+
+  it('cancels on Escape', () => {
+    const onCancel = vi.fn();
+    const selected = cellSelection(0, 0);
+    render(<FormulaBar selected={selected} value="x" onChange={() => {}} onCommit={() => {}} onCancel={onCancel} />);
+    fireEvent.keyDown(screen.getByLabelText('Formula bar'), { key: 'Escape' });
+    expect(onCancel).toHaveBeenCalled();
+  });
 });

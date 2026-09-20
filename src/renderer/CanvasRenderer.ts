@@ -15,6 +15,10 @@ import { VirtualScroller, type VisibleRange } from './VirtualScroller';
 import type { StoreEvent, Style, RichTextRun } from '../types';
 import { parseRange } from '../util/cell';
 import { coveredBySameMerge } from '../util/merge';
+import { selectionFillBands } from './selectionFill';
+import { hashFillText, usesHashOverflow } from './narrowOverflow';
+import { resolveCellAlign } from '../util/generalAlign';
+import { DEFAULT_FONT_SIZE } from '../util/defaults';
 import { formatValue } from '../format/NumberFormatter';
 import { ConditionalService } from '../conditional/ConditionalService';
 import { sparklineValues } from '../sparkline/values';
@@ -504,7 +508,12 @@ export class CanvasRenderer {
     const rr = this.clampToViewport(region);
     if (rr.w <= 0 || rr.h <= 0) return;
     this.ctx.save(); this.ctx.beginPath(); this.ctx.rect(rr.x, rr.y, rr.w, rr.h); this.ctx.clip();
-    this.ctx.fillStyle = theme.bg; this.ctx.fillRect(0, 0, this.vpW(), this.vpH());
+    // Excel: gray outside the sheet; theme.bg only over headers + in-bounds grid.
+    this.ctx.fillStyle = theme.outside; this.ctx.fillRect(0, 0, this.vpW(), this.vpH());
+    const contentW = Math.min(this.gridW(), Math.max(0, this.scroller.totalWidth() - this.scroller.scrollLeft));
+    const contentH = Math.min(this.gridH(), Math.max(0, this.scroller.totalHeight() - this.scroller.scrollTop));
+    this.ctx.fillStyle = theme.bg;
+    this.ctx.fillRect(0, 0, ROW_HEADER_WIDTH + contentW, COL_HEADER_HEIGHT + contentH);
     const quads = this.paintQuads(vis);
     this.paintHeaders(vis, theme);
     this.borderEdges.clear();
@@ -1088,13 +1097,16 @@ export class CanvasRenderer {
 
   private paintTextWith(r: number, c: number, x: number, y: number, cw: number, rh: number, theme: CanvasTheme, style: Style | undefined): void {
     const cell = this.opts.store.getCell(r, c); if (cell === undefined || cell.text.length === 0) return;
-    const fontSize = Math.max(8, Math.round((style?.fontSize ?? 11) * this.zoom()));
+    const fontSize = Math.max(8, Math.round((style?.fontSize ?? DEFAULT_FONT_SIZE) * this.zoom()));
     const fontFamily = style?.fontFamily ?? theme.fontFamily;
     const rawText = this.opts.showFormula === true && cell.formula !== undefined ? cell.formula : cell.text;
     const nf = style?.numberFormat;
     const fr = nf !== undefined && nf !== 'general' ? formatValue(cell.value, nf) : undefined;
     const text = fr?.formatted === true ? fr.text : rawText;
-    const align = style?.align ?? 'left';
+    const align = resolveCellAlign(style?.align, cell.value, {
+      showFormula: this.opts.showFormula === true,
+      formula: cell.formula,
+    });
     const valign = style?.valign ?? 'middle';
     const wrapping = style?.wrap === true;
 
@@ -1122,9 +1134,20 @@ export class CanvasRenderer {
     this.ctx.fillStyle = style?.color ?? theme.text; this.ctx.textBaseline = 'middle'; this.ctx.textAlign = align;
     const fontStr = `${style?.italic === true ? 'italic ' : ''}${style?.bold === true ? 'bold ' : ''}${fontSize}px ${fontFamily}`;
     this.ctx.font = fontStr;
-    const tx = align === 'center' ? x + cw / 2 : align === 'right' ? x + cw - 3 : x + 3;
     const maxW = Math.max(4, cw - 6);
-    const lines = wrapping ? wrapTextLines((t) => this.textMetrics.measure(this.ctx, fontStr, t), text, maxW) : [text.replace(/\r?\n/g, '')];
+    // Excel: numbers/dates that do not fit show ##### instead of overflowing.
+    let paintText = text;
+    let paintAlign = align;
+    if (!wrapping && usesHashOverflow(cell.value, this.opts.showFormula === true, cell.formula, nf)) {
+      const needed = this.textMetrics.measure(this.ctx, fontStr, text.replace(/\r?\n/g, ''));
+      if (needed > maxW) {
+        paintText = hashFillText((s) => this.textMetrics.measure(this.ctx, fontStr, s), maxW);
+        paintAlign = 'right';
+      }
+    }
+    this.ctx.textAlign = paintAlign;
+    const tx = paintAlign === 'center' ? x + cw / 2 : paintAlign === 'right' ? x + cw - 3 : x + 3;
+    const lines = wrapping ? wrapTextLines((t) => this.textMetrics.measure(this.ctx, fontStr, t), paintText, maxW) : [paintText.replace(/\r?\n/g, '')];
     const lineH = fontSize * WRAP_LINE_HEIGHT;
     const contentHeight = lines.length * lineH;
     const contentTop = valign === 'top'
@@ -1140,7 +1163,7 @@ export class CanvasRenderer {
       this.ctx.fillText(line, tx, ly);
       if (style?.underline === true) {
         const w = this.textMetrics.measure(this.ctx, fontStr, line);
-        const sx = align === 'center' ? tx - w / 2 : align === 'right' ? tx - w : tx;
+        const sx = paintAlign === 'center' ? tx - w / 2 : paintAlign === 'right' ? tx - w : tx;
         this.ctx.beginPath();
         this.ctx.moveTo(sx, ly + fontSize * 0.38);
         this.ctx.lineTo(sx + w, ly + fontSize * 0.38);
@@ -1315,17 +1338,19 @@ export class CanvasRenderer {
 
     ctx.fillStyle = selectionFillColor(theme);
     const ac = this.activeCell;
-    const hole = ac !== undefined && new Range(range).contains(ac.r, ac.c);
-    if (!hole) {
-      ctx.fillRect(x, y, w, h);
-    } else {
-      const ap = this.cellVP(ac.r, ac.c);
-      const aw = this.scroller.getColWidth(ac.c);
-      const ah = this.scroller.getRowHeight(ac.r);
-      if (ap.y > y) ctx.fillRect(x, y, w, ap.y - y);
-      if (ap.y + ah < y + h) ctx.fillRect(x, ap.y + ah, w, y + h - (ap.y + ah));
-      if (ap.x > x) ctx.fillRect(x, ap.y, ap.x - x, ah);
-      if (ap.x + aw < x + w) ctx.fillRect(ap.x + aw, ap.y, x + w - (ap.x + aw), ah);
+    let holeRect: { x: number; y: number; w: number; h: number } | null = null;
+    if (ac !== undefined && new Range(range).contains(ac.r, ac.c)) {
+      // Excel: the undimmed active area is the whole merge when the active cell is merged.
+      const merge = this.opts.store.getMergeAt(ac.r, ac.c);
+      if (merge !== undefined) {
+        holeRect = this.rangeRect(parseRange(merge));
+      } else {
+        const ap = this.cellVP(ac.r, ac.c);
+        holeRect = { x: ap.x, y: ap.y, w: this.scroller.getColWidth(ac.c), h: this.scroller.getRowHeight(ac.r) };
+      }
+    }
+    for (const band of selectionFillBands({ x, y, w, h }, holeRect)) {
+      ctx.fillRect(band.x, band.y, band.w, band.h);
     }
 
     if (kind === 'sheet') return;

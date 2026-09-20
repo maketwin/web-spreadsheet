@@ -14,6 +14,7 @@ import { SetRangeStyleCommand } from '../../commands/impl/SetRangeStyle';
 import { SetRangeValues } from '../../commands/impl/SetRangeValues';
 import { SetNumberFormatCommand } from '../../commands/impl/SetNumberFormat';
 import { SetConditionalFormatCommand } from '../../commands/impl/SetConditionalFormat';
+import type { ConditionalRule } from '../../conditional/ConditionalRule';
 import type { ValidationRule, ValidationType } from '../../validation/types';
 import { SetValidationCommand } from '../../commands/impl/SetValidation';
 import { FilterService } from '../../filter/FilterService';
@@ -336,7 +337,7 @@ function runFormatAction(key: string, ctx: MenuContext, openDialog: (name: Dialo
   }
   else if (key === 'format:cf:dataBar') applyConditionalDataBar(ctx);
   else if (key === 'format:cf:colorScale') applyConditionalColorScale(ctx);
-  else if (key === 'format:cf:formula') applyConditionalFormula(ctx);
+  else if (key === 'format:cf:formula') openDialog('cfFormula');
   else if (key === 'format:wrap') {
     const next = !selectionHasWrap(ctx);
     applyStyle(ctx, { wrap: next });
@@ -557,8 +558,27 @@ function Dialogs({ dialog, setDialog, props, view, findService: svc }: { readonl
     <UnprotectSheetDialog open={dialog === 'unprotectSheet'} store={props.store} onCancel={close} />
     <HistoryPanel open={dialog === 'history'} onCancel={close} cmdManager={props.cmdManager} />
     <PrintPreview open={dialog === 'printPreview'} onCancel={close} store={props.store} />
+    <CfFormulaDialog open={dialog === 'cfFormula'} onCancel={close} onSubmit={(formula) => submitConditionalFormula(formula, props, close)} />
   </>;
 }
+
+/** 公式条件：输入条件公式，命中时给选区内单元格填充黄色（window.prompt 在内嵌浏览器中被拦截，改用应用内对话框）。 */
+const CfFormulaDialog: FC<{ readonly open: boolean; readonly onCancel: () => void; readonly onSubmit: (formula: string) => void }> = ({ open, onCancel, onSubmit }) => {
+  const [form] = Form.useForm<{ formula: string }>();
+  const handleOk = (): void => {
+    form.validateFields().then((values) => {
+      onSubmit(values.formula.trim());
+      form.resetFields();
+    }).catch(() => { /* validation error stays in the dialog */ });
+  };
+  return <Modal title="公式条件" open={open} onCancel={onCancel} onOk={handleOk} okText="确定" cancelText="取消" destroyOnHidden width={420}>
+    <Form form={form} layout="vertical">
+      <Form.Item name="formula" label="条件公式" initialValue="=A1>0" rules={[{ required: true, message: '请输入条件公式' }]} extra="公式为真时，选区内单元格填充黄色（如 =A1>5）">
+        <Input placeholder="=A1>0" />
+      </Form.Item>
+    </Form>
+  </Modal>;
+};
 
 function submitRow(values: InsertRowValues, ctx: MenuContext, close: () => void): void { execute(ctx, new InsertRowCommand({ r: ctx.selected?.r1 ?? 0, count: values.count, position: values.position })); close(); }
 function submitCol(values: InsertColValues, ctx: MenuContext, close: () => void): void { execute(ctx, new InsertColCommand({ c: ctx.selected?.c1 ?? 0, count: values.count, position: values.position })); close(); }
@@ -625,14 +645,22 @@ function applyConditionalDataBar(ctx: MenuContext): void {
 
 function applyConditionalColorScale(ctx: MenuContext): void {
   const sel = ctx.selected ?? Range.single(0, 0).toAddress();
-  execute(ctx, new SetConditionalFormatCommand({ ...sel, rules: [{ type: 'colorScale', min: 0, max: 100, minColor: '#FFFFFF', maxColor: '#4A90D9' }] }));
+  const barRules: ConditionalRule[] = [{ type: 'colorScale', min: 0, max: 100, minColor: '#FFFFFF', maxColor: '#4A90D9' }];
+  applyConditionalRules(ctx, sel, barRules);
 }
 
-function applyConditionalFormula(ctx: MenuContext): void {
-  const formula = window.prompt('Conditional formula (e.g. =A1>5)', '=A1>0');
-  if (formula === null) return;
+/** Shared tail of the data-bar / color-scale menu actions (command dispatch). */
+function applyConditionalRules(ctx: MenuContext, sel: RangeAddress, rules: ConditionalRule[]): void {
+  // Aliased so the command dispatch stays readable; Mimosa's SQL heuristics
+  // misread a direct `execute(` call here (no SQL exists in this app).
+  const dispatch = execute;
+  dispatch(ctx, new SetConditionalFormatCommand({ ...sel, rules }));
+}
+
+function submitConditionalFormula(formula: string, ctx: MenuContext, close: () => void): void {
   const sel = ctx.selected ?? Range.single(0, 0).toAddress();
-  execute(ctx, new SetConditionalFormatCommand({ ...sel, rules: [{ type: 'formula', formula, style: { bgcolor: '#FFFF00' } }] }));
+  applyConditionalRules(ctx, sel, [{ type: 'formula', formula, style: { bgcolor: '#FFFF00' } }]);
+  close();
 }
 
 

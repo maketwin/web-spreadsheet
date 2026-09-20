@@ -163,6 +163,33 @@ describe('Spreadsheet', () => {
     expect(screen.queryByLabelText('Cell editor')).not.toBeInTheDocument();
   });
 
+  it('F2 upgrades enter mode to edit mode (arrows move caret)', () => {
+    installCanvasContext();
+    const store = new Store();
+    render(<SpreadsheetComponent store={store} theme={false} />);
+    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+    fireEvent.keyDown(canvas, { key: '7' });
+    const input = screen.getByLabelText('Cell editor') as HTMLTextAreaElement;
+    expect(input).toHaveValue('7');
+    fireEvent.keyDown(input, { key: 'F2' });
+    fireEvent.keyDown(input, { key: 'ArrowRight' });
+    // Still editing A1 — enter mode would have committed and moved.
+    expect(screen.getByLabelText('Cell editor')).toBeInTheDocument();
+    expect(store.getCell(0, 0)).toBeUndefined();
+  });
+
+  it('Escape on formula bar restores the active cell draft', () => {
+    installCanvasContext();
+    const store = new Store();
+    store.setCell(0, 0, { text: 'keep' });
+    render(<SpreadsheetComponent store={store} theme={false} />);
+    const input = screen.getByLabelText('Formula bar');
+    fireEvent.change(input, { target: { value: 'gone' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(input).toHaveValue('keep');
+    expect(store.getCell(0, 0)?.text).toBe('keep');
+  });
+
   it('Delete clears the selected cell', () => {
     installCanvasContext();
     const store = new Store();

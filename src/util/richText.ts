@@ -1,3 +1,4 @@
+import { DEFAULT_FONT_SIZE } from './defaults';
 import type { RunStyle, RichTextRun, Style } from '../types';
 
 /**
@@ -78,7 +79,7 @@ export function effectiveRunStyle(cellStyle: Style | undefined, run: RichTextRun
     italic: s.italic ?? cellStyle?.italic === true,
     underline: s.underline ?? cellStyle?.underline === true,
     strike: s.strike === true,
-    fontSize: s.fontSize ?? cellStyle?.fontSize ?? 11,
+    fontSize: s.fontSize ?? cellStyle?.fontSize ?? DEFAULT_FONT_SIZE,
     fontFamily: s.fontFamily ?? cellStyle?.fontFamily,
     color: s.color ?? cellStyle?.color,
     vertAlign: s.vertAlign,

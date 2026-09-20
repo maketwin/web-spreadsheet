@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+### Bug Fixes (Excel parity, GUI 体验回归)
+
+- **P2 theme lock (Excel green)** — Tokens document Excel green as final; add
+  `--ss-outside` gray beyond the sheet, `--ss-font-size: 11px`. Default font
+  size centralized as `DEFAULT_FONT_SIZE = 11`.
+- **General alignment** — Unset `style.align` now follows Excel General:
+  numbers right, booleans center, text/formula-view left (explicit align wins).
+
+- **Merged active-cell selection fill** — Selection tint now punches out the
+  whole merged active area (not just the anchor cell), matching Excel.
+- **Narrow numeric columns show ###** — Numbers/dates that do not fit the
+  column width render as Excel-style hash fill instead of overflowing.
+- **Sheet tab context menu** — Right-click a sheet tab opens 重命名 / 删除
+  (delete still confirms); no longer deletes immediately on contextmenu.
+- **Sheet tab drag reorder + color** — Drag tabs to reorder; context menu
+  picks a tab tint (persisted in workbook serialize).
+
+- **F2 upgrades enter → edit mode** — While typing (enter mode), F2 switches
+  to edit mode so arrows move the caret instead of committing; formula-bar Esc
+  in ready mode restores the active cell draft.
+
+- **Formula bar ↔ cell editor lockstep** — While editing, formula-bar typing
+  updates the in-cell draft; Esc cancels the edit (same as cell Esc). Formula
+  bar / commit target the active cell, not only the selection origin.
+
+- **Cell editor caret position** — Opening the editor (typing, F2, double-click)
+  now places the caret after the typed text / at the end of the content,
+  matching Excel; previously it stayed at position 0, so F2-edits prepended
+  ("100" + "5" → "5100") and continued typing reversed order. Verified via DOM
+  selectionStart on all three entry paths.
+- **Point-mode arrow interception in edit mode** — Arrow keys with the caret
+  after a formula operator no longer enter reference-pointing while in edit
+  mode (F2/double-click); they move the caret like Excel. The stray references
+  previously spliced into the formula (the "broken F4" symptom) are gone; F4
+  itself now toggles the reference under the caret (`B2` → `$B$2`) correctly.
+- **Add/rename sheet modal** — The sheet tab "+" and double-click rename used
+  `window.prompt`, which embedded browsers auto-dismiss (the button silently
+  did nothing). Both now open an in-app antd modal (default `Sheet<N>` name,
+  Enter confirms); 删除工作表 uses `Modal.confirm`.
+- **Conditional formatting range scoping** — dataBar/colorScale/formula rules
+  now paint only cells inside the range the rule was created for
+  (`ConditionalService` parses the stored `r1,c1:r2,c2` key); previously a
+  data bar applied to B2:B5 painted every numeric cell on the sheet.
+- **公式条件 dialog** — 格式 → 条件格式 → 公式条件 opens an in-app modal
+  (required formula, =A1>0 default) instead of `window.prompt`, which was
+  suppressed in embedded browsers and made the menu item a no-op.
+
 ### New Features (Excel parity batch 2)
 
 - **Charts & sparklines wired into the UI** — 插入 → 图表... opens the chart

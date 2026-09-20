@@ -34,6 +34,8 @@ export interface RichEditorProps {
   /** Flat selection to restore after mount (mid-edit textarea upgrade keeps the user's selection). */
   readonly initialSelection?: { readonly start: number; readonly end: number } | undefined;
   readonly editMode?: boolean;
+  /** Excel: F2 while typing upgrades enter → edit mode. */
+  readonly onUpgradeEditMode?: () => void;
   readonly registerApi: (api: RichEditorApi | null) => void;
   readonly commit: (moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection?: boolean) => void;
   readonly cancel: () => void;
@@ -44,7 +46,7 @@ export interface RichEditorProps {
   readonly ariaLabel?: string;
 }
 
-export function RichEditor({ initialRuns, css, cellStyle, initialSelection, editMode, registerApi, commit, cancel, onValueChange, onBlur, ariaLabel }: RichEditorProps): JSX.Element {
+export function RichEditor({ initialRuns, css, cellStyle, initialSelection, editMode, registerApi, commit, cancel, onValueChange, onBlur, ariaLabel, onUpgradeEditMode }: RichEditorProps): JSX.Element {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const composingRef = useRef(false);
   const runsRef = useRef<RichTextRun[]>([...initialRuns]);
@@ -108,6 +110,7 @@ export function RichEditor({ initialRuns, css, cellStyle, initialSelection, edit
     const arrowDeltas: Record<string, { dr: number; dc: number }> = { ArrowUp: { dr: -1, dc: 0 }, ArrowDown: { dr: 1, dc: 0 }, ArrowLeft: { dr: 0, dc: -1 }, ArrowRight: { dr: 0, dc: 1 } };
     const arrow = arrowDeltas[e.key];
     if (e.key === 'Escape') { e.preventDefault(); cancel(); return; }
+    if (e.key === 'F2') { e.preventDefault(); if (!editMode) onUpgradeEditMode?.(); return; }
     if (!editMode && arrow !== undefined && !e.shiftKey && !e.ctrlKey && !e.metaKey) { e.preventDefault(); commit(arrow); return; }
     if (e.key === 'Tab') { e.preventDefault(); commit({ dr: 0, dc: e.shiftKey ? -1 : 1 }); return; }
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.altKey) { e.preventDefault(); commit(undefined, true); return; }

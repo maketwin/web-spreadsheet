@@ -65,6 +65,8 @@ import { loadWorkbook, DEFAULT_ID, saveWorkbook as saveToDB } from '../db/Workbo
 import type { Cell, Style, RichTextRun } from '../types';
 import { WRAP_LINE_HEIGHT, wrappedContentHeight } from '../util/wrapText';
 import { autoFitRowHeight, autofitRowHeights } from '../util/rowAutofit';
+import { resolveCellAlign } from '../util/generalAlign';
+import { DEFAULT_FONT_SIZE } from '../util/defaults';
 import { fillShortcut } from '../fill/fillShortcut';
 import { cycleDollars, endsWithRef, isPointTrigger, refAtCaret, upsertRef } from '../formula/pointMode';
 import { RichEditor, normalizeEditorRuns, type RichEditorApi } from './RichEditor';
@@ -95,6 +97,8 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const [findDialogOpen, setFindDialogOpen] = useState<DialogName | null>(null);
   const [ctxMenu, setCtxMenu] = useState<SpreadsheetContextMenu | null>(null);
   const [protectOpen, setProtectOpen] = useState(false);
+  /** Add/rename sheet prompt: window.prompt is suppressed in embedded browsers, so use an in-app modal. */
+  const [sheetPrompt, setSheetPrompt] = useState<{ readonly mode: 'add' | 'rename'; readonly id?: string; readonly value: string } | null>(null);
   const [storeVersion, setStoreVersion] = useState(0);
   const [formulaValue, setFormulaValue] = useState('');
   const [painting, setPainting] = useState(false);
@@ -376,7 +380,22 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   useStoreVersion(store, () => setStoreVersion((value) => value + 1));
   useFormulaValue(selected, editing, store, storeVersion, setFormulaValue);
   useAutoSave(store);
-  useEffect(() => inputRef.current?.focus(), [editing]);
+  // Excel: opening the editor places the caret after the typed text (typing)
+  // or at the end of the content (F2/double-click) — never at position 0.
+  // The cell-key guard keeps mid-edit caret moves (same cell) untouched.
+  const lastEditKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const el = inputRef.current;
+    if (el === null) return;
+    el.focus();
+    if (editing === null) { lastEditKeyRef.current = null; return; }
+    const key = `${editing.r}:${editing.c}`;
+    if (lastEditKeyRef.current !== key) {
+      const pos = el.value.length;
+      el.setSelectionRange(pos, pos);
+      lastEditKeyRef.current = key;
+    }
+  }, [editing]);
   // Ctrl/Cmd+P: browser-native print would dump the viewport bitmap only —
   // route the shortcut to the paginated print preview instead.
   useEffect(() => {
@@ -397,7 +416,68 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     <MenuBar {...menuBarProps(store, cmdManager, selected, selectRange, () => selectSelection(sheetSelection(allSheetRange())), onClose, applyRunStyleToEditor)} view={{ ...view, setZoom: (zoom) => setView((current) => ({ ...current, zoom })), setShowFormula: (showFormula) => setView((current) => ({ ...current, showFormula })), setShowGrid: (showGrid) => setView((current) => ({ ...current, showGrid })), setFreeze: (frozenRows, frozenCols) => setView((current) => ({ ...current, frozenRows, frozenCols })) }} onFindNavigate={(match) => { if (match.sheetId !== store.getActiveSheetId()) store.activateSheet(match.sheetId); selectSelection(cellSelection(match.r, match.c)); }} onFindHighlight={(matches, current) => setFindHighlights(matches.length === 0 ? null : { matches, current })} openDialogKey={findDialogOpen} onCreateChart={(type, title) => submitCreateChart(type, title, store, selected, execCmd, rendererRef.current, setSelectedChartId)} onInsertSparkline={(type, rangeInput) => submitInsertSparkline(type, rangeInput, store, selected, execCmd)} />
     <InteractionToolbar selected={selected} store={store} cmdManager={cmdManager} view={view} setView={setView} selectAll={() => selectSelection(sheetSelection(allSheetRange()))} painting={painting} onTogglePainter={() => { if (painting) { setPainting(false); setSourceStyle(undefined); } else { const cell = selected?.active; const s = cell === undefined ? undefined : store.getCell(cell.r, cell.c)?.styleId === undefined ? undefined : store.getStyle(store.getCell(cell.r, cell.c)!.styleId!); setSourceStyle(s); setPainting(true); } }} onToggleProtection={() => setProtectOpen(true)} />
     <ProtectionModal open={protectOpen} onClose={() => setProtectOpen(false)} store={store} />
-    <FormulaBar selected={selected} value={formulaValue} onChange={setFormulaValue} onCommit={() => commitFormulaValue(selected, formulaValue, store, cmdManager)} onGoTo={(input) => { jumpNameBox(store, input, selectRange); canvasRef.current?.focus(); }} inputRef={formulaInputRef} onCharStyleKey={applyCharStyleKey} />
+    <Modal
+      title={sheetPrompt?.mode === 'rename' ? '重命名工作表' : '新建工作表'}
+      open={sheetPrompt !== null}
+      onCancel={() => setSheetPrompt(null)}
+      onOk={() => {
+        if (sheetPrompt === null) return;
+        const name = sheetPrompt.value.trim();
+        if (name === '') return;
+        if (sheetPrompt.mode === 'rename' && sheetPrompt.id !== undefined) store.renameSheet(sheetPrompt.id, name);
+        else store.addSheet(name);
+        setSheetPrompt(null);
+      }}
+      okText="确定"
+      cancelText="取消"
+      width={360}
+      destroyOnHidden
+    >
+      <Input
+        autoFocus
+        value={sheetPrompt?.value ?? ''}
+        placeholder="工作表名称"
+        onChange={(e) => setSheetPrompt((current) => current === null ? current : { ...current, value: e.target.value })}
+        onPressEnter={() => {
+          if (sheetPrompt === null) return;
+          const name = sheetPrompt.value.trim();
+          if (name === '') return;
+          if (sheetPrompt.mode === 'rename' && sheetPrompt.id !== undefined) store.renameSheet(sheetPrompt.id, name);
+          else store.addSheet(name);
+          setSheetPrompt(null);
+        }}
+      />
+    </Modal>
+    <FormulaBar selected={selected} value={formulaValue} onChange={(next) => {
+      setFormulaValue(next);
+      const ed = editingRef.current;
+      if (ed === null) return;
+      // Keep in-cell editor and formula bar in lockstep (Excel enter/edit mode).
+      const synced: EditingCell = ed.richDraft !== undefined
+        ? {
+          r: ed.r,
+          c: ed.c,
+          value: next,
+          ...(ed.editMode !== undefined ? { editMode: ed.editMode } : {}),
+          ...(ed.point !== undefined ? { point: ed.point } : {}),
+        }
+        : { ...ed, value: next };
+      editingRef.current = synced;
+      setEditing(synced);
+    }} onCommit={(committed) => {
+      const value = committed ?? formulaInputRef.current?.value ?? formulaValue;
+      const ed = editingRef.current;
+      if (ed !== null) { commitEditing(value); return; }
+      commitFormulaValue(selected, value, store, cmdManager);
+    }} onCancel={() => {
+      if (editingRef.current !== null) { setEditing(null); return; }
+      // Ready-mode formula bar: Esc discards the draft and restores the active cell.
+      const sel = selectedRef.current;
+      if (sel === null) { setFormulaValue(''); return; }
+      const active = sel.active ?? { r: sel.range.r1, c: sel.range.c1 };
+      const cell = store.getCell(active.r, active.c);
+      setFormulaValue(cell?.formula ?? cell?.text ?? '');
+    }} onGoTo={(input) => { jumpNameBox(store, input, selectRange); canvasRef.current?.focus(); }} inputRef={formulaInputRef} onCharStyleKey={applyCharStyleKey} />
     <div className="ss-canvas-wrap"><canvas ref={canvasRef} className="ss-canvas" tabIndex={0} aria-label="Spreadsheet canvas, use arrow keys to navigate" onKeyDown={(e) => {
         if ((e.ctrlKey || e.metaKey) && e.altKey && e.key.toLowerCase() === 'v') {
           // Excel: Ctrl+Alt+V opens Paste Special.
@@ -419,7 +499,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       <PasteSpecialDialog open={pasteSpecialOpen} onOk={(opts) => void applyPasteSpecial(opts)} onCancel={() => setPasteSpecialOpen(false)} />
       {filterPopup !== null && <FilterDropdown store={store} cmdManagerExecutor={execCmd} r={filterPopup.r} c={filterPopup.c} x={filterPopup.x} y={filterPopup.y} onClose={() => setFilterPopup(null)} />}
     <StatusBar store={store} selected={selected?.range ?? null} zoom={view.zoom} />
-    <BottomBar sheets={sheets} activeSheetId={activeSheetId} onSheetChange={(id) => { setMulti([]); store.activateSheet(id); }} onAddSheet={() => addSheet(store)} onRenameSheet={(id) => renameSheet(store, id)} onDeleteSheet={(id) => deleteSheet(store, id)} />
+    <BottomBar sheets={sheets} activeSheetId={activeSheetId} onSheetChange={(id) => { setMulti([]); store.activateSheet(id); }} onAddSheet={() => setSheetPrompt({ mode: 'add', value: `Sheet${store.getSheets().length + 1}` })} onRenameSheet={(id) => setSheetPrompt({ mode: 'rename', id, value: sheets.find((s) => s.id === id)?.name ?? '' })} onDeleteSheet={(id) => deleteSheet(store, id)} onMoveSheet={(id, toIndex) => store.moveSheet(id, toIndex)} onSheetColor={(id, color) => store.setSheetColor(id, color)} />
     {ctxMenu?.kind === 'cell' && <CellContextMenu
       x={ctxMenu.x} y={ctxMenu.y} onClose={closeCtxMenu}
       onCut={() => runCtxClipboard('cut')} onCopy={() => runCtxClipboard('copy')} onPaste={() => runCtxClipboard('paste')} onClear={() => runCtxClipboard('clear')} onPasteSpecial={() => setPasteSpecialOpen(true)}
@@ -503,6 +583,7 @@ const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editin
       cellStyle={cellStyle}
       initialSelection={editing.richSel}
       editMode={editing.editMode === true}
+      onUpgradeEditMode={() => setEditing({ ...editing, editMode: true })}
       registerApi={(api) => { richApiRef.current = api; }}
       commit={commitRich}
       cancel={() => setEditing(null)}
@@ -560,11 +641,12 @@ const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editin
         requestAnimationFrame(() => { el.selectionStart = span.start + cycled.length; el.selectionEnd = span.start + cycled.length; });
         return;
       }
-      // Excel point mode: while a formula awaits an operand, arrows move the
-      // inserted reference instead of committing.
+      // Excel point mode: while TYPING a formula that awaits an operand, arrows
+      // move the inserted reference instead of committing. In edit mode (F2 /
+      // double-click) arrows always move the caret — never insert references.
       const arrowDeltas: Record<string, { dr: number; dc: number }> = { ArrowUp: { dr: -1, dc: 0 }, ArrowDown: { dr: 1, dc: 0 }, ArrowLeft: { dr: 0, dc: -1 }, ArrowRight: { dr: 0, dc: 1 } };
       const arrow = arrowDeltas[e.key];
-      if (arrow !== undefined && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
+      if (arrow !== undefined && editing.editMode !== true && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
         const el = refEl.current;
         const value = el?.value ?? editing.value;
         const caret = el?.selectionStart ?? value.length;
@@ -581,7 +663,7 @@ const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editin
           return;
         }
       }
-      handleEditorKey(e, refEl, (moveAfter, fillSelection) => commit(refEl.current?.value ?? editing.value, moveAfter, fillSelection), () => setEditing(null), (next) => setEditing({ ...editing, value: next }), editing.editMode === true);
+      handleEditorKey(e, refEl, (moveAfter, fillSelection) => commit(refEl.current?.value ?? editing.value, moveAfter, fillSelection), () => setEditing(null), (next) => setEditing({ ...editing, value: next }), editing.editMode === true, () => setEditing({ ...editing, value: refEl.current?.value ?? editing.value, editMode: true }));
     }}
     aria-label="Cell editor"
   />;
@@ -643,12 +725,13 @@ function useFormulaSync(store: Store, formulaEngine: FormulaEngine | undefined):
 function useFormulaValue(selected: Selection | null, editing: EditingCell | null, store: Store, storeVersion: number, setFormulaValue: (value: string) => void): void {
   useEffect(() => {
     if (selected === null) return;
-    const { r1, c1 } = selected.range;
-    if (editing !== null && editing.r === r1 && editing.c === c1) {
+    // Excel formula bar tracks the active cell (not just the selection origin).
+    const active = selected.active ?? { r: selected.range.r1, c: selected.range.c1 };
+    if (editing !== null && editing.r === active.r && editing.c === active.c) {
       setFormulaValue(editing.value);
       return;
     }
-    const cell = store.getCell(r1, c1);
+    const cell = store.getCell(active.r, active.c);
     setFormulaValue(cell?.formula ?? cell?.text ?? '');
   }, [selected, editing, store, storeVersion, setFormulaValue]);
 }
@@ -816,8 +899,11 @@ function handleEditorKey(
   cancel: () => void,
   setValue: (value: string) => void,
   editMode = false,
+  upgradeEditMode?: () => void,
 ): void {
   if (event.key === 'Escape') { cancel(); return; }
+  // Excel: F2 while typing upgrades enter mode → edit mode (arrows then move the caret).
+  if (event.key === 'F2') { event.preventDefault(); if (!editMode) upgradeEditMode?.(); return; }
   // Excel "enter mode" (typing): arrows commit and move; F2 edit mode moves the caret.
   // While the text is a formula, arrows stay in the editor (formula entry).
   const arrowDeltas: Record<string, { dr: number; dc: number }> = { ArrowUp: { dr: -1, dc: 0 }, ArrowDown: { dr: 1, dc: 0 }, ArrowLeft: { dr: 0, dc: -1 }, ArrowRight: { dr: 0, dc: 1 } };
@@ -860,7 +946,7 @@ function editorStyle(
   // Borderless inset 2px so it sits inside the canvas accent strokeRect.
   const inset = 2;
   const scale = zoom / 100;
-  const fontSize = Math.max(8, Math.round((style?.fontSize ?? 11) * scale));
+  const fontSize = Math.max(8, Math.round((style?.fontSize ?? DEFAULT_FONT_SIZE) * scale));
   const fontFamily = style?.fontFamily ?? 'Calibri, "Segoe UI", "Microsoft YaHei", sans-serif';
   const wrapping = style?.wrap === true || value.includes('\n');
   const valign = style?.valign ?? 'middle';
@@ -906,7 +992,12 @@ function editorStyle(
     // an explicit underline override inherit it from here).
     textDecoration: style?.underline === true ? 'underline' : undefined,
     color: style?.color ?? undefined,
-    textAlign: style?.align ?? 'left',
+    textAlign: resolveCellAlign(style?.align, (() => {
+      const live = store.getCell(cell.r, cell.c);
+      if (live !== undefined && typeof live.value === 'number') return live.value;
+      const n = Number(value);
+      return value.trim() !== '' && Number.isFinite(n) && !value.trim().startsWith('=') ? n : value;
+    })()),
     lineHeight: `${WRAP_LINE_HEIGHT}`,
     paddingTop: valign === 'top'
       ? 0
@@ -932,9 +1023,18 @@ function cellEditValue(store: Store, cell: CellAddress): string { const current 
 function syncExistingFormulas(store: Store, engine: FormulaEngine): void { const sheetId = store.getActiveSheetId(); store.getCells().forEach(([id, cell]) => { const formula = formulaText(cell); if (formula !== undefined) engine.setFormula(id, formula, formulaDependencies(formula), sheetId); }); }
 function syncCellFormula(engine: FormulaEngine, r: number, c: number, cell: Cell | undefined, sheetId?: string): void { const formula = formulaText(cell); const id = cellId(r, c); if (formula === undefined) engine.removeFormula(id, sheetId); else engine.setFormula(id, formula, formulaDependencies(formula), sheetId); }
 
-function addSheet(store: Store): void { const name = window.prompt('Sheet name', `Sheet${store.getSheets().length + 1}`); if (name !== null) store.addSheet(name); }
-function renameSheet(store: Store, id: string): void { const current = store.getSheets().find((s) => s.id === id)?.name ?? ''; const name = window.prompt('Rename sheet', current); if (name !== null) store.renameSheet(id, name); }
-function deleteSheet(store: Store, id: string): void { if (window.confirm('Delete this sheet?')) store.deleteSheet(id); }
+function deleteSheet(store: Store, id: string): void {
+  // window.confirm is suppressed (auto-dismissed) in embedded browsers — use
+  // the in-app confirm so the entry point never silently does nothing.
+  Modal.confirm({
+    title: '删除工作表',
+    content: '确定要删除此工作表吗？',
+    okText: '确定',
+    okType: 'danger',
+    cancelText: '取消',
+    onOk: () => store.deleteSheet(id),
+  });
+}
 function loadData(store: Store, cmd: CommandManager, formula: FormulaEngine, data: readonly (readonly CellInput[])[]): void { loadValues(cmd, data); syncExistingFormulas(store, formula); }
 function loadSheets(store: Store, cmd: CommandManager, formula: FormulaEngine, sheets: readonly SheetInput[]): void { sheets.forEach((sheet, index) => { const id = index === 0 ? store.getActiveSheetId() : store.addSheet(sheet.name); store.renameSheet(id, sheet.name); store.activateSheet(id); loadValues(cmd, sheet.data ?? []); syncExistingFormulas(store, formula); }); const first = store.getSheets()[0]; if (first !== undefined) store.activateSheet(first.id); }
 function loadValues(cmd: CommandManager, data: readonly (readonly CellInput[])[]): void { const values = data.map((row) => row.map(normalizeCellInput)); const maxCols = values.reduce((max, row) => Math.max(max, row.length), 0); if (values.length === 0 || maxCols === 0) return; cmd.execute(new SetRangeValues({ r1: 0, c1: 0, r2: values.length - 1, c2: maxCols - 1, values })); }
@@ -1018,7 +1118,8 @@ function saveToLocal(store: Store): void { void saveToDB(DEFAULT_ID, store.seria
 function dispatchThemeChanged(): void { window.dispatchEvent(new CustomEvent('ss:theme-changed')); }
 function commitFormulaValue(selected: Selection | null, value: string, store: Store, cmdManager: CommandManager | undefined): void {
   if (selected === null) return;
-  setCellText(store, cmdManager, { r: selected.range.r1, c: selected.range.c1 }, value);
+  const active = selected.active ?? { r: selected.range.r1, c: selected.range.c1 };
+  setCellText(store, cmdManager, active, value);
 }
 
 /**
@@ -1154,7 +1255,7 @@ const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly sto
   const style = (next: Partial<Style>): void => { if (range !== undefined) applyShortcutStyle(store, cmdManager, range, next); };
   const setZoom = (zoom: number): void => setView((currentView) => ({ ...currentView, zoom }));
   const fontFamily = current?.fontFamily ?? 'Calibri';
-  const fontSize = current?.fontSize ?? 11;
+  const fontSize = current?.fontSize ?? DEFAULT_FONT_SIZE;
   const fontColor = current?.color ?? '#000000';
   const fillColor = current?.bgcolor ?? '#FFFFFF';
   const wrapping = current?.wrap === true;

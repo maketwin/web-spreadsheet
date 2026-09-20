@@ -1,3 +1,4 @@
+import { DEFAULT_FONT_SIZE } from './defaults';
 import { COL_WIDTH, ROW_HEIGHT, TOTAL_COLS } from '../renderer/coordinate';
 import { Command } from '../commands/Command';
 import type { Store } from '../store/Store';
@@ -20,7 +21,7 @@ function lineCountForCell(
   const cell = store.getCell(r, c);
   const style = cell?.styleId === undefined ? undefined : store.getStyle(cell.styleId);
   const text = cell?.text ?? '';
-  if (text.length === 0) return { fontSize: style?.fontSize ?? 11, lineCount: 1, hasText: false };
+  if (text.length === 0) return { fontSize: style?.fontSize ?? DEFAULT_FONT_SIZE, lineCount: 1, hasText: false };
 
   const fontFamily = style?.fontFamily ?? 'Calibri, "Segoe UI", "Microsoft YaHei", sans-serif';
 
@@ -55,7 +56,7 @@ function lineCountForCell(
     return { fontSize: maxFontSize, lineCount, hasText: true };
   }
 
-  const fontSize = style?.fontSize ?? 11;
+  const fontSize = style?.fontSize ?? DEFAULT_FONT_SIZE;
   const font = `${style?.italic === true ? 'italic ' : ''}${style?.bold === true ? 'bold ' : ''}${fontSize}px ${fontFamily}`;
   const colW = store.getCol(c)?.width ?? COL_WIDTH;
   let lineCount = 1;

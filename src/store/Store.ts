@@ -13,11 +13,14 @@ import type { AutoFilterState } from '../types';
 export interface SheetInfo {
   readonly id: string;
   readonly name: string;
+  /** Excel sheet-tab tint (optional CSS color). */
+  readonly color?: string;
 }
 
 export class Store {
   private readonly sheets = new Map<string, SheetData>();
   private readonly sheetNames = new Map<string, string>();
+  private readonly sheetColors = new Map<string, string>();
   private readonly subscribers = new Set<(e: StoreEvent) => void>();
   private activeSheetId = 'sheet-1';
   private nextSheetNumber = 2;
@@ -45,7 +48,10 @@ export class Store {
   }
 
   public getSheets(): readonly SheetInfo[] {
-    return [...this.sheets.keys()].map((id) => ({ id, name: this.sheetNames.get(id) ?? id }));
+    return [...this.sheets.keys()].map((id) => {
+      const color = this.sheetColors.get(id);
+      return color === undefined ? { id, name: this.sheetNames.get(id) ?? id } : { id, name: this.sheetNames.get(id) ?? id, color };
+    });
   }
 
   public activateSheet(sheetId: string): boolean {
@@ -72,10 +78,47 @@ export class Store {
     return true;
   }
 
+  public setSheetColor(sheetId: string, color: string | undefined): boolean {
+    if (!this.sheets.has(sheetId)) return false;
+    if (color === undefined || color.trim() === '') this.sheetColors.delete(sheetId);
+    else this.sheetColors.set(sheetId, color.trim());
+    this.notify({ type: 'sheet', action: 'rename', sheetId, name: this.sheetNames.get(sheetId) ?? sheetId });
+    return true;
+  }
+
+  /** Reorder sheets; `toIndex` is the destination index in the current tab order. */
+  public moveSheet(sheetId: string, toIndex: number): boolean {
+    const ids = [...this.sheets.keys()];
+    const from = ids.indexOf(sheetId);
+    if (from < 0) return false;
+    const clamped = Math.max(0, Math.min(toIndex, ids.length - 1));
+    if (from === clamped) return true;
+    ids.splice(from, 1);
+    ids.splice(clamped, 0, sheetId);
+    const nextSheets = new Map<string, SheetData>();
+    const nextNames = new Map<string, string>();
+    const nextColors = new Map<string, string>();
+    for (const id of ids) {
+      nextSheets.set(id, this.sheets.get(id)!);
+      nextNames.set(id, this.sheetNames.get(id) ?? id);
+      const color = this.sheetColors.get(id);
+      if (color !== undefined) nextColors.set(id, color);
+    }
+    this.sheets.clear();
+    this.sheetNames.clear();
+    this.sheetColors.clear();
+    for (const [id, data] of nextSheets) this.sheets.set(id, data);
+    for (const [id, name] of nextNames) this.sheetNames.set(id, name);
+    for (const [id, color] of nextColors) this.sheetColors.set(id, color);
+    this.notify({ type: 'sheet', action: 'activate', sheetId: this.activeSheetId });
+    return true;
+  }
+
   public deleteSheet(sheetId: string): boolean {
     if (this.sheets.size <= 1 || !this.sheets.has(sheetId)) return false;
     this.sheets.delete(sheetId);
     this.sheetNames.delete(sheetId);
+    this.sheetColors.delete(sheetId);
     if (this.activeSheetId === sheetId) this.activeSheetId = this.sheets.keys().next().value as string;
     this.notify({ type: 'sheet', action: 'delete', sheetId });
     return true;
@@ -303,7 +346,11 @@ export class Store {
   public serialize(): SerializedStore {
     return {
       activeSheetId: this.activeSheetId,
-      sheets: this.getSheets().map(({ id, name }) => ({ id, name, data: this.requireSheet(id).serialize() })),
+      sheets: this.getSheets().map(({ id, name, color }) => (
+        color === undefined
+          ? { id, name, data: this.requireSheet(id).serialize() }
+          : { id, name, color, data: this.requireSheet(id).serialize() }
+      )),
     };
   }
 
@@ -319,9 +366,11 @@ export class Store {
       const oldIds = [...this.sheets.keys()];
       this.sheets.clear();
       this.sheetNames.clear();
+      this.sheetColors.clear();
       for (const sheet of next) {
         this.sheets.set(sheet.id, SheetData.deserialize(sheet.data));
         this.sheetNames.set(sheet.id, sheet.name);
+        if (sheet.color !== undefined && sheet.color !== '') this.sheetColors.set(sheet.id, sheet.color);
       }
       const ids = new Set(this.sheets.keys());
       this.activeSheetId = ids.has(data.activeSheetId) ? data.activeSheetId : (this.sheets.keys().next().value as string);
@@ -350,9 +399,11 @@ export class Store {
     const store = new Store();
     store.sheets.clear();
     store.sheetNames.clear();
+    store.sheetColors.clear();
     data.sheets.forEach((sheet) => {
       store.sheets.set(sheet.id, SheetData.deserialize(sheet.data));
       store.sheetNames.set(sheet.id, sheet.name);
+      if (sheet.color !== undefined && sheet.color !== '') store.sheetColors.set(sheet.id, sheet.color);
     });
     store.activeSheetId = store.sheets.has(data.activeSheetId) ? data.activeSheetId : (store.sheets.keys().next().value as string);
     store.nextSheetNumber = store.sheets.size + 1;
@@ -429,5 +480,5 @@ function eventKey(e: StoreEvent): string | undefined {
 
 export interface SerializedStore {
   readonly activeSheetId: string;
-  readonly sheets: Array<{ readonly id: string; readonly name: string; readonly data: SerializedSheetData }>;
+  readonly sheets: Array<{ readonly id: string; readonly name: string; readonly color?: string; readonly data: SerializedSheetData }>;
 }

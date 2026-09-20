@@ -1,6 +1,7 @@
 /* Excel-ish dark chrome */
 :root[data-spreadsheet-theme="dark"] {
   --ss-bg: #1e1e1e;
+  --ss-outside: #252526;
   --ss-color: #f3f3f3;
   --ss-border: #454545;
   --ss-freeze-line: #a6a6a6;
@@ -20,4 +21,5 @@
   --ss-tab-inactive-bg: #2d2d2d;
   --ss-status-bg: #185c37;
   --ss-status-text: #ffffff;
+  --ss-font-size: 11px;
 }

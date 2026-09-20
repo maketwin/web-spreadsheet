@@ -35,14 +35,18 @@ describe('SheetTabs (BottomBar)', () => {
     expect(onAdd).toHaveBeenCalled();
   });
 
-  it('right-clicks tab to delete sheet', () => {
+  it('right-clicks tab to open rename/delete menu', () => {
     const onDelete = vi.fn();
+    const onRename = vi.fn();
     const sheets = [{ id: 'sheet-1', name: 'Sheet1' }, { id: 'sheet-2', name: 'Sheet2' }];
 
-    render(<BottomBar sheets={sheets} activeSheetId="sheet-1" onSheetChange={vi.fn()} onAddSheet={vi.fn()} onDeleteSheet={onDelete} />);
+    render(<BottomBar sheets={sheets} activeSheetId="sheet-1" onSheetChange={vi.fn()} onAddSheet={vi.fn()} onRenameSheet={onRename} onDeleteSheet={onDelete} />);
 
     fireEvent.contextMenu(screen.getByText('Sheet2'));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除' }).querySelector('button')!);
     expect(onDelete).toHaveBeenCalledWith('sheet-2');
+    expect(onRename).not.toHaveBeenCalled();
   });
 
   it('Store addSheet creates auto-named sheet', () => {
@@ -80,5 +84,34 @@ describe('SheetTabs (BottomBar)', () => {
 
     store.activateSheet('sheet-1');
     expect(store.getActiveSheetId()).toBe('sheet-1');
+  });
+
+  it('drags a tab onto another to reorder', () => {
+    const onMove = vi.fn();
+    const sheets = [{ id: 'sheet-1', name: 'Sheet1' }, { id: 'sheet-2', name: 'Sheet2' }];
+    render(<BottomBar sheets={sheets} activeSheetId="sheet-1" onSheetChange={vi.fn()} onAddSheet={vi.fn()} onMoveSheet={onMove} />);
+    fireEvent.dragStart(screen.getByText('Sheet1'), { dataTransfer: { setData: vi.fn(), effectAllowed: 'move' } });
+    fireEvent.drop(screen.getByText('Sheet2'), { dataTransfer: { getData: () => 'sheet-1', dropEffect: 'move' }, preventDefault: vi.fn() });
+    expect(onMove).toHaveBeenCalledWith('sheet-1', 1);
+  });
+
+  it('sets sheet tab color from the context menu', () => {
+    const onColor = vi.fn();
+    render(<BottomBar sheets={[{ id: 'sheet-1', name: 'Sheet1' }]} activeSheetId="sheet-1" onSheetChange={vi.fn()} onAddSheet={vi.fn()} onSheetColor={onColor} />);
+    fireEvent.contextMenu(screen.getByText('Sheet1'));
+    fireEvent.click(screen.getByLabelText('Sheet color #217346'));
+    expect(onColor).toHaveBeenCalledWith('sheet-1', '#217346');
+  });
+
+  it('Store moveSheet and setSheetColor persist through serialize', () => {
+    const store = new Store();
+    const id2 = store.addSheet('Sheet2');
+    store.setSheetColor(id2, '#ed7d31');
+    store.moveSheet(id2, 0);
+    expect(store.getSheets()[0]?.id).toBe(id2);
+    expect(store.getSheets()[0]?.color).toBe('#ed7d31');
+    const round = Store.deserialize(store.serialize());
+    expect(round.getSheets()[0]?.color).toBe('#ed7d31');
+    expect(round.getSheets()[0]?.name).toBe('Sheet2');
   });
 });
