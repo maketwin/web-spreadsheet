@@ -238,7 +238,7 @@ function formatItems(ctx: MenuBarProps): NonNullable<MenuProps['items']> {
     divider('format:divider:3'),
     item('format:number', '数字格式...'),
     divider('format:divider:4'),
-    { key: 'format:conditional', label: '条件格式', children: [item('format:cf:dataBar', '数据条'), item('format:cf:colorScale', '色阶'), item('format:cf:formula', '公式条件')] },
+    { key: 'format:conditional', label: '条件格式', children: [item('format:cf:dataBar', '数据条'), item('format:cf:colorScale', '色阶'), item('format:cf:cellValue', '单元格值'), item('format:cf:formula', '公式条件')] },
   ];
 }
 
@@ -337,7 +337,11 @@ function runFormatAction(key: string, ctx: MenuContext, openDialog: (name: Dialo
   }
   else if (key === 'format:cf:dataBar') applyConditionalDataBar(ctx);
   else if (key === 'format:cf:colorScale') applyConditionalColorScale(ctx);
-  else if (key === 'format:cf:formula') openDialog('cfFormula');
+  else if (key === 'format:cf:cellValue' && ctx.selected !== null) {
+    execute(ctx, new SetConditionalFormatCommand({ ...ctx.selected, rules: [{ type: 'cellValue', operator: 'gt', value: 0, style: { bgcolor: '#FFC7CE', color: '#9C0006' } }] }));
+    return;
+  }
+  if (key === 'format:cf:formula') openDialog('cfFormula');
   else if (key === 'format:wrap') {
     const next = !selectionHasWrap(ctx);
     applyStyle(ctx, { wrap: next });
@@ -708,6 +712,12 @@ function submitValidation(type: ValidationType, config: ValidationConfig, ctx: M
     rule = { type: 'list', values };
   } else if (type === 'integer') {
     rule = { type: 'integer', min: config.min ?? 0, max: config.max ?? 100 };
+  } else if (type === 'decimal') {
+    rule = { type: 'decimal', min: config.min ?? 0, max: config.max ?? 100 };
+  } else if (type === 'textLength') {
+    rule = { type: 'textLength', min: config.min ?? 0, max: config.max ?? 100 };
+  } else if (type === 'custom') {
+    rule = { type: 'custom', formula: config.customFormula ?? '=TRUE' };
   } else {
     rule = { type: 'date', minDate: config.minDate ?? '2020-01-01', maxDate: config.maxDate ?? '2030-12-31' };
   }

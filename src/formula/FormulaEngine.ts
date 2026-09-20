@@ -6,6 +6,8 @@ import type { AstNode, FormulaArgument, FormulaValue } from './types';
 
 export class FormulaEngine {
   private graph = new DependencyGraph();
+  /** Cells currently being evaluated — used for circular-ref detection. */
+  private readonly evalStack = new Set<string>();
   private formulas = new Map<string, string>();
   private parser = new FormulaParser();
 
@@ -16,10 +18,23 @@ export class FormulaEngine {
   }
 
   setFormula(cellId: string, formula: string, dependsOn: string[], sheetId?: string): void {
-    const scopedId = scopedKey(cellId, sheetId ?? this.store.getActiveSheetId());
-    const scopedDeps = dependsOn.map((d) => scopeDep(d, sheetId ?? this.store.getActiveSheetId()));
+    const sid = sheetId ?? this.store.getActiveSheetId();
+    const scopedId = scopedKey(cellId, sid);
+    const scopedDeps = dependsOn.map((d) => scopeDep(d, sid));
+    const circular = this.graph.wouldCreateCycle(scopedId, scopedDeps);
     this.graph.setDependencies(scopedId, scopedDeps);
     this.formulas.set(scopedId, formula);
+    if (circular) {
+      const { r, c } = parseScopedKey(scopedId);
+      const existing = this.store.getCell(r, c, sid);
+      this.store.setCell(r, c, { ...existing, text: '0', value: 0 }, sid);
+      // Refresh other cells in the cycle (Excel shows 0 across the ring).
+      for (const id of this.graph.getAffected(scopedId)) {
+        if (id === scopedId) continue;
+        this.recalculate(id);
+      }
+      return;
+    }
     this.recalculate(scopedId);
   }
 
@@ -36,13 +51,34 @@ export class FormulaEngine {
     if (ast === null) return;
 
     const { sheetId, r, c } = parseScopedKey(scopedId);
+    // Excel (iteration off): cells in a circular reference show 0.
+    if (this.graph.wouldCreateCycle(scopedId, this.graph.getDependencies(scopedId))) {
+      const existing = this.store.getCell(r, c, sheetId);
+      this.store.setCell(r, c, { ...existing, text: '0', value: 0 }, sheetId);
+      return;
+    }
+    if (this.evalStack.has(scopedId)) {
+      const existing = this.store.getCell(r, c, sheetId);
+      this.store.setCell(r, c, { ...existing, text: '0', value: 0 }, sheetId);
+      return;
+    }
+    this.evalStack.add(scopedId);
     try {
       const value = scalar(evaluate(ast, (x, y, sheetName) => this.resolveCell(x, y, sheetName, sheetId), this.nameResolver));
       const existing = this.store.getCell(r, c, sheetId);
       this.store.setCell(r, c, { ...existing, text: String(value ?? ''), value }, sheetId);
     } catch (err) {
       console.error(`Formula error at ${scopedId}:`, err);
+    } finally {
+      this.evalStack.delete(scopedId);
     }
+  }
+
+  /** Whether installing these deps on cellId would form a circular reference. */
+  wouldCreateCycle(cellId: string, dependsOn: string[], sheetId?: string): boolean {
+    const scopedId = scopedKey(cellId, sheetId ?? this.store.getActiveSheetId());
+    const scopedDeps = dependsOn.map((d) => scopeDep(d, sheetId ?? this.store.getActiveSheetId()));
+    return this.graph.wouldCreateCycle(scopedId, scopedDeps);
   }
 
   onCellChanged(cellId: string, sheetId?: string): void {
@@ -64,11 +100,37 @@ export class FormulaEngine {
 
   /** Unscoped references resolve against the formula's own sheet, not the active one. */
   private resolveCell(x: number, y: number, sheetName: string | undefined, formulaSheetId: string): FormulaValue {
-    const cell = sheetName === undefined
+    let sheetId = formulaSheetId;
+    let cell = sheetName === undefined
       ? this.store.getCell(y, x, formulaSheetId)
-      : this.store.getCellBySheetName(sheetName, y, x);
+      : undefined;
+    if (sheetName !== undefined) {
+      const id = this.sheetIdForName(sheetName);
+      if (id === undefined) return '#REF!';
+      sheetId = id;
+      cell = this.store.getCell(y, x, id);
+    }
     if (cell === undefined) return null;
-    return cell.value ?? cell.text;
+    // If this cell has a live formula, evaluate it (Excel pulls the current chain).
+    // Formula keys use "r,c" (see util/cell.cellId), not A1.
+    const cellKey = `${y},${x}`;
+    const scoped = scopedKey(cellKey, sheetId);
+    if (this.formulas.has(scoped)) {
+      if (this.evalStack.has(scoped)) return 0; // circular — Excel iteration-off
+      this.recalculate(scoped);
+      cell = this.store.getCell(y, x, sheetId);
+      if (cell === undefined) return null;
+    }
+    const v = cell.value ?? cell.text;
+    if (typeof v === 'string' && v.startsWith('#')) return v; // keep error literals
+    return v as FormulaValue;
+  }
+
+  private sheetIdForName(name: string): string | undefined {
+    for (const { id, name: n } of this.store.getSheets()) {
+      if (n === name) return id;
+    }
+    return undefined;
   }
 
   private sheetNameForId(sheetId: string): string | undefined {

@@ -15,6 +15,7 @@ export interface ValidationConfig {
   readonly max?: number;
   readonly minDate?: string;
   readonly maxDate?: string;
+  readonly customFormula?: string;
 }
 
 export const DataValidationDialog: FC<DataValidationDialogProps> = ({ open, onCancel, onSubmit }) => {
@@ -24,8 +25,9 @@ export const DataValidationDialog: FC<DataValidationDialogProps> = ({ open, onCa
   const [max, setMax] = useState(100);
   const [minDate, setMinDate] = useState('2020-01-01');
   const [maxDate, setMaxDate] = useState('2030-12-31');
+  const [customFormula, setCustomFormula] = useState('=TRUE');
   const handleOk = (): void => {
-    onSubmit(vtype, { listValues, min, max, minDate, maxDate });
+    onSubmit(vtype, { listValues, min, max, minDate, maxDate, customFormula });
     reset();
   };
   const handleCancel = (): void => { reset(); onCancel(); };
@@ -37,18 +39,25 @@ export const DataValidationDialog: FC<DataValidationDialogProps> = ({ open, onCa
         <Radio.Group value={vtype} onChange={(e) => setVtype(e.target.value as ValidationType)}>
           <Radio value="list">下拉列表</Radio>
           <Radio value="integer">整数范围</Radio>
+          <Radio value="decimal">小数范围</Radio>
           <Radio value="date">日期范围</Radio>
+          <Radio value="textLength">文本长度</Radio>
+          <Radio value="custom">自定义公式</Radio>
         </Radio.Group>
       </div>
       {vtype === 'list' && (
         <div><div style={{ marginBottom: 8 }}>允许值（逗号分隔）：</div>
           <Input placeholder="值1,值2,值3" value={listValues} onChange={(e) => setListValues(e.target.value)} /></div>
       )}
-      {vtype === 'integer' && (
+      {(vtype === 'integer' || vtype === 'decimal' || vtype === 'textLength') && (
         <div style={{ display: 'flex', gap: 16 }}>
           <div><div style={{ marginBottom: 8 }}>最小值：</div><InputNumber value={min} onChange={(v) => setMin(v ?? 0)} /></div>
           <div><div style={{ marginBottom: 8 }}>最大值：</div><InputNumber value={max} onChange={(v) => setMax(v ?? 100)} /></div>
         </div>
+      )}
+      {vtype === 'custom' && (
+        <div><div style={{ marginBottom: 8 }}>公式（返回 TRUE 则通过）：</div>
+          <Input value={customFormula} onChange={(e) => setCustomFormula(e.target.value)} /></div>
       )}
       {vtype === 'date' && (
         <div style={{ display: 'flex', gap: 16 }}>

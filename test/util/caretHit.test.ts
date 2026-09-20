@@ -52,4 +52,57 @@ describe('caretOffsetFromLocalPoint', () => {
       cellH: 20,
     })).toBe(0);
   });
+
+  it('mixed run font sizes shift X hit vs uniform size', () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+      font: '11px sans-serif',
+      measureText(this: { font: string }, s: string) {
+        const m = /(\d+(?:\.\d+)?)px/.exec(this.font);
+        const px = m !== null ? Number(m[1]) : 11;
+        return { width: s.length * px };
+      },
+    } as unknown as CanvasRenderingContext2D);
+
+    const text = 'AAAAABBBBB';
+    const runs = [
+      { text: 'AAAAA', style: { fontSize: 10 } },
+      { text: 'BBBBB', style: { fontSize: 30 } },
+    ];
+    // X just past the 5 small glyphs (5*10) into the first large glyph.
+    const x = 3 + 5 * 10 + 5;
+    const mixed = caretOffsetFromLocalPoint({
+      text,
+      localX: x,
+      localY: 10,
+      cellW: 400,
+      cellH: 40,
+      style: { valign: 'top', fontSize: 10, align: 'left' },
+      zoom: 100,
+      runs,
+    });
+    const uniform = caretOffsetFromLocalPoint({
+      text,
+      localX: x,
+      localY: 10,
+      cellW: 400,
+      cellH: 40,
+      style: { valign: 'top', fontSize: 10, align: 'left' },
+      zoom: 100,
+    });
+    // Mixed: still near the run boundary (large glyphs eat X faster).
+    expect(mixed).toBeGreaterThanOrEqual(5);
+    expect(mixed).toBeLessThan(uniform);
+    expect(uniform).toBeGreaterThan(5);
+  });
+
+  it('returns 0 when click is left of content', () => {
+    expect(caretOffsetFromLocalPoint({
+      text: 'Hi',
+      localX: 0,
+      localY: 10,
+      cellW: 100,
+      cellH: 20,
+      style: { valign: 'top', align: 'left', fontSize: 11 },
+    })).toBe(0);
+  });
 });

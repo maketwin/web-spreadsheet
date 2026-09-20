@@ -83,7 +83,7 @@ export function runStyleFromElement(el: HTMLElement): RunStyle {
 }
 
 /** `rgb(r, g, b)` / hex → `#RRGGBB`; named colors are not supported. */
-function parseCssColor(css: string): string | undefined {
+export function parseCssColor(css: string): string | undefined {
   const rgb = css.match(/rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
   if (rgb !== null) {
     const [, r, g, b] = rgb;

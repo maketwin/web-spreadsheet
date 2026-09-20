@@ -12,6 +12,7 @@ export interface BottomBarProps {
   readonly onDeleteSheet?: (sheetId: string) => void;
   readonly onMoveSheet?: (sheetId: string, toIndex: number) => void;
   readonly onSheetColor?: (sheetId: string, color: string | undefined) => void;
+  readonly onMoveOrCopySheet?: (sheetId: string) => void;
 }
 
 interface SheetMenuState {
@@ -55,6 +56,7 @@ export const BottomBar: FC<BottomBarProps> = ({
   onDeleteSheet,
   onMoveSheet,
   onSheetColor,
+  onMoveOrCopySheet,
 }) => {
   const [menu, setMenu] = useState<SheetMenuState | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -130,6 +132,11 @@ export const BottomBar: FC<BottomBarProps> = ({
           <li role="menuitem">
             <button type="button" style={menuItemBtnStyle} onClick={() => { onDeleteSheet?.(menu.id); setMenu(null); }}>
               删除
+            </button>
+          </li>
+          <li role="menuitem">
+            <button type="button" style={menuItemBtnStyle} onClick={() => { onMoveOrCopySheet?.(menu.id); setMenu(null); }}>
+              移动或复制…
             </button>
           </li>
           <li role="separator" style={{ height: 1, background: '#e0e0e0', margin: '4px 0' }} />

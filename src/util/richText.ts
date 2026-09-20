@@ -78,7 +78,7 @@ export function effectiveRunStyle(cellStyle: Style | undefined, run: RichTextRun
     bold: s.bold ?? cellStyle?.bold === true,
     italic: s.italic ?? cellStyle?.italic === true,
     underline: s.underline ?? cellStyle?.underline === true,
-    strike: s.strike === true,
+    strike: s.strike ?? cellStyle?.strike === true,
     fontSize: s.fontSize ?? cellStyle?.fontSize ?? DEFAULT_FONT_SIZE,
     fontFamily: s.fontFamily ?? cellStyle?.fontFamily,
     color: s.color ?? cellStyle?.color,

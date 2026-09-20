@@ -38,7 +38,16 @@ export class ConditionalService {
   private applyRule(store: Store, r: number, c: number, rule: ConditionalRule, sheetId?: string): ConditionalOverlay {
     if (rule.type === 'dataBar') return this.applyDataBar(store, r, c, rule, sheetId);
     if (rule.type === 'colorScale') return this.applyColorScale(store, r, c, rule, sheetId);
+    if (rule.type === 'cellValue') return this.applyCellValue(store, r, c, rule, sheetId);
     return this.applyFormula(store, rule, sheetId);
+  }
+
+  private applyCellValue(store: Store, r: number, c: number, rule: ConditionalRule & { type: 'cellValue' }, sheetId?: string): ConditionalOverlay {
+    const cell = store.getCell(r, c, sheetId);
+    if (cell === undefined) return {};
+    const raw = cell.value ?? cell.text;
+    if (matchCellValue(raw, rule.operator, rule.value, rule.value2)) return { style: rule.style };
+    return {};
   }
 
   private applyDataBar(store: Store, r: number, c: number, rule: ConditionalRule & { type: 'dataBar' }, sheetId?: string): ConditionalOverlay {
@@ -136,4 +145,32 @@ function parseHex(color: string): { r: number; g: number; b: number } {
 
 function hex(n: number): string {
   return n.toString(16).padStart(2, '0');
+}
+
+function matchCellValue(raw: unknown, op: string, value: string | number, value2?: string | number): boolean {
+  if (op === 'contains') return String(raw ?? '').toLowerCase().includes(String(value).toLowerCase());
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  const a = typeof value === 'number' ? value : Number(value);
+  const bothNum = Number.isFinite(n) && Number.isFinite(a);
+  if (op === 'between') {
+    const b = typeof value2 === 'number' ? value2 : Number(value2);
+    if (!bothNum || !Number.isFinite(b)) return false;
+    return n >= Math.min(a, b) && n <= Math.max(a, b);
+  }
+  if (bothNum) {
+    switch (op) {
+      case 'gt': return n > a;
+      case 'gte': return n >= a;
+      case 'lt': return n < a;
+      case 'lte': return n <= a;
+      case 'eq': return n === a;
+      case 'neq': return n !== a;
+      default: return false;
+    }
+  }
+  const ls = String(raw ?? '').toLowerCase();
+  const rs = String(value).toLowerCase();
+  if (op === 'eq') return ls === rs;
+  if (op === 'neq') return ls !== rs;
+  return false;
 }

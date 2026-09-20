@@ -1,9 +1,9 @@
 import { cellFromText } from '../util/cell';
 import type { RangeAddress } from '../selection/Range';
 import type { Store } from '../store/Store';
-import type { Cell, RichTextRun, RunStyle } from '../types';
+import type { Cell, RichTextRun, RunStyle, Style } from '../types';
 import { isRich, normalizeRuns } from '../util/richText';
-import { runSpanStyle, runStyleFromElement } from '../util/runStyleCss';
+import { parseCssColor, runSpanStyle, runStyleFromElement } from '../util/runStyleCss';
 
 export interface ClipboardPayload {
   readonly text: string;
@@ -107,8 +107,41 @@ function cellFromHtml(td: Element): Cell {
   const cell = cellFromText(undefined, text);
   const normalized = normalizeRuns(runs);
   if (normalized !== undefined) cell.richText = normalized;
+  const pasteStyle = cellStyleFromElement(td as HTMLElement);
+  if (pasteStyle !== undefined) cell.pasteStyle = pasteStyle;
   return cell;
 }
+
+/** Whole-cell styles Excel often puts on `<td style="...">`. */
+function cellStyleFromElement(el: HTMLElement): Partial<Style> | undefined {
+  const out: Partial<Style> = {};
+  const css = el.style;
+  const bg = css.backgroundColor || css.background;
+  if (bg !== undefined && bg !== '' && bg !== 'transparent') {
+    const parsed = parseCssColor(bg);
+    if (parsed !== undefined) out.bgcolor = parsed;
+  }
+  const color = css.color;
+  if (color !== undefined && color !== '') {
+    const parsed = parseCssColor(color);
+    if (parsed !== undefined) out.color = parsed;
+  }
+  const weight = css.fontWeight;
+  if (weight === 'bold' || weight === '700' || weight === '800' || weight === '900') out.bold = true;
+  if (css.fontStyle === 'italic') out.italic = true;
+  const deco = css.textDecoration ?? '';
+  if (deco.includes('underline')) out.underline = true;
+  if (deco.includes('line-through')) out.strike = true;
+  const align = css.textAlign;
+  if (align === 'left' || align === 'center' || align === 'right') out.align = align;
+  const size = css.fontSize;
+  if (size !== undefined && size !== '') {
+    const pt = Number(size.replace(/pt.*$/, '').replace(/px.*$/, ''));
+    if (Number.isFinite(pt) && pt > 0) out.fontSize = Math.round(pt * (size.includes('px') ? 0.75 : 1));
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 
 const TEXT_NODE = 3;
 const ELEMENT_NODE = 1;

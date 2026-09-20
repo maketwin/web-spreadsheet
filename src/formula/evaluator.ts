@@ -43,13 +43,17 @@ function evaluateFunction(node: Extract<AstNode, { type: 'func' }>, resolve: Cel
   if (node.name === 'VLOOKUP') return vlookup(node, resolve, resolveName);
   // IF is lazy in Excel: an error in the not-taken branch does not propagate.
   if (node.name === 'IF') return ifLazy(node, resolve, resolveName);
+  // IFERROR / IFNA must see the error value instead of short-circuit propagation.
+  if (node.name === 'IFERROR' || node.name === 'IFNA') return ifErrorLike(node, resolve, resolveName);
   const spec = registry.get(node.name);
   if (!spec) return '#NAME?';
   const args = node.args.map((arg) => evaluate(arg, resolve, resolveName));
-  // Excel: an error argument propagates out of any function call.
-  for (const arg of args) {
-    const err = firstErrorIn(arg);
-    if (err !== undefined) return err;
+  // Excel: most functions propagate error args; IS* inspect them instead.
+  if (!ERROR_INSPECTING.has(node.name)) {
+    for (const arg of args) {
+      const err = firstErrorIn(arg);
+      if (err !== undefined) return err;
+    }
   }
   return guardNumeric(spec.evaluate(args));
 }
@@ -65,6 +69,19 @@ function ifLazy(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver,
     return elseArg === undefined ? false : scalar(evaluate(elseArg, resolve, resolveName));
   }
   return thenArg === undefined ? null : scalar(evaluate(thenArg, resolve, resolveName));
+}
+
+/** Excel IFERROR(value, fallback) / IFNA(value, fallback). */
+function ifErrorLike(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver, resolveName?: NamedRangeResolver): FormulaValue {
+  const [valueArg, fallbackArg] = node.args;
+  if (valueArg === undefined) return null;
+  const value = scalar(evaluate(valueArg, resolve, resolveName));
+  const err = errorValueOf(value);
+  const naOnly = node.name === 'IFNA';
+  if (err !== undefined && (!naOnly || err === '#N/A')) {
+    return fallbackArg === undefined ? null : scalar(evaluate(fallbackArg, resolve, resolveName));
+  }
+  return value;
 }
 
 /** Map a function's non-finite numeric result to an Excel error literal. */
@@ -166,6 +183,10 @@ function compare(a: FormulaValue, b: FormulaValue): number {
 }
 
 /** The seven Excel error literals; plain text like "#tag" must NOT be treated as an error. */
+const ERROR_INSPECTING: ReadonlySet<string> = new Set([
+  'ISERROR', 'ISERR', 'ISNA', 'ISBLANK', 'ISNUMBER', 'ISTEXT', 'ISLOGICAL', 'ISNONTEXT',
+]);
+
 export const EXCEL_ERRORS: ReadonlySet<string> = new Set(['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A']);
 
 /** A cell/formula value that is itself an Excel error literal ('#DIV/0!', '#N/A', …). */

@@ -29,3 +29,14 @@
   --ss-row-height: 20px;
   --ss-col-width: 64px;
 }
+
+
+.ss-formula-input--rich {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow: auto;
+  outline: none;
+  padding: 2px 6px;
+  line-height: 1.4;
+}

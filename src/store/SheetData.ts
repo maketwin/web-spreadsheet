@@ -184,7 +184,11 @@ export class SheetData {
 
   public serialize(): SerializedSheetData {
     return {
-      cells: [...this.cells.entries()],
+      cells: [...this.cells.entries()].map(([key, value]) => {
+        if (value.pasteStyle === undefined) return [key, value] as const;
+        const { pasteStyle: _p, ...rest } = value;
+        return [key, rest] as const;
+      }),
       rows: [...this.rows.entries()],
       cols: [...this.cols.entries()],
       styles: [...this.styles.entries()],

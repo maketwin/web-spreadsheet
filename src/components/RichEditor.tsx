@@ -82,6 +82,35 @@ export function RichEditor({ initialRuns, css, cellStyle, initialSelection, edit
     collapseTo(root, sel.start + 1);
   };
 
+
+  const onBeforeInput = (e: React.FormEvent<HTMLDivElement>): void => {
+    const root = rootRef.current;
+    if (root === null) return;
+    const pending = readPending(root);
+    if (Object.keys(pending).length === 0) return;
+    const ie = e.nativeEvent as InputEvent;
+    if (ie.inputType !== 'insertText') return;
+    const data = ie.data;
+    if (data === null || data === '') return;
+    e.preventDefault();
+    const sel = flatSelectionOf(root) ?? { start: flatLength(root), end: flatLength(root) };
+    let runs = runsRef.current;
+    if (sel.end > sel.start) runs = replaceRangeInRuns(runs, sel.start, sel.end, '');
+    runs = insertAtRuns(runs, sel.start, data);
+    runs = applyRunModel(runs, sel.start, sel.start + data.length, {
+      ...(pending.bold === true ? { bold: true as const } : {}),
+      ...(pending.italic === true ? { italic: true as const } : {}),
+      ...(pending.underline === true ? { underline: true as const } : {}),
+      ...(pending.color !== undefined ? { color: pending.color } : {}),
+      ...(pending.fontFamily !== undefined ? { fontFamily: pending.fontFamily } : {}),
+      ...(pending.fontSize !== undefined ? { fontSize: pending.fontSize } : {}),
+    });
+    runsRef.current = runs;
+    renderRuns(root, runs);
+    collapseTo(root, sel.start + data.length);
+    onValueChange?.(runs.map((run) => run.text).join(''));
+  };
+
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
     // IME owns the keyboard while composing (Enter confirms the candidate).
     if (composingRef.current) return;
@@ -133,7 +162,7 @@ export function RichEditor({ initialRuns, css, cellStyle, initialSelection, edit
     role="textbox"
     aria-label={ariaLabel ?? '富文本单元格编辑器'}
     style={css}
-    onKeyDown={onKeyDown}
+    onKeyDown={onKeyDown} onBeforeInput={onBeforeInput}
     onBlur={onBlur}
     onInput={() => {
       if (composingRef.current) return;
@@ -314,18 +343,9 @@ function applyPatchToSelection(root: HTMLElement, patch: RunStylePatch, runsRef:
   const sel = flatSelectionOf(root);
   if (sel === null) return false;
   if (sel.end <= sel.start) {
-    // Collapsed caret: arm typing style for subsequent input (Excel).
+    // Collapsed caret: arm typing style for subsequent input (Excel) — model pending, no execCommand.
     root.focus();
-    if (patch.bold !== undefined) toggleTypingStyle(root, 'bold');
-    if (patch.italic !== undefined) toggleTypingStyle(root, 'italic');
-    if (patch.underline !== undefined) toggleTypingStyle(root, 'underline');
-    if (typeof patch.color === 'string') {
-      try { document.execCommand('foreColor', false, patch.color); } catch { /* */ }
-    }
-    if (typeof patch.fontFamily === 'string') {
-      try { document.execCommand('fontName', false, patch.fontFamily); } catch { /* */ }
-    }
-    runsRef.current = runsFromDom(root);
+    armTypingPatch(root, patch);
     return true;
   }
   const next = applyRunModel(runsRef.current, sel.start, sel.end, patch);
@@ -335,11 +355,49 @@ function applyPatchToSelection(root: HTMLElement, patch: RunStylePatch, runsRef:
   return true;
 }
 
-/** Excel: Ctrl+B with no selection arms bold for the next characters typed. */
+/** Pending typing style stored on the editor root (Excel collapsed-caret format). */
+type PendingTyping = { bold?: boolean; italic?: boolean; underline?: boolean; color?: string; fontFamily?: string; fontSize?: number };
+
+function readPending(root: HTMLElement): PendingTyping {
+  const raw = root.dataset.ssPending;
+  if (raw === undefined || raw === '') return {};
+  try { return JSON.parse(raw) as PendingTyping; } catch { return {}; }
+}
+
+function writePending(root: HTMLElement, pending: PendingTyping): void {
+  if (Object.keys(pending).length === 0) delete root.dataset.ssPending;
+  else root.dataset.ssPending = JSON.stringify(pending);
+}
+
+/** Excel: Ctrl+B with no selection arms bold for the next characters typed — without execCommand. */
 function toggleTypingStyle(root: HTMLElement, attr: 'bold' | 'italic' | 'underline'): void {
   root.focus();
-  const cmd = attr === 'bold' ? 'bold' : attr === 'italic' ? 'italic' : 'underline';
-  try { document.execCommand(cmd); } catch { /* jsdom / restricted */ }
+  const pending = readPending(root);
+  const cur = pending[attr] === true;
+  if (cur) delete pending[attr];
+  else pending[attr] = true;
+  writePending(root, pending);
+}
+
+function armTypingPatch(root: HTMLElement, patch: RunStylePatch): void {
+  const pending = readPending(root);
+  if (patch.bold === true) pending.bold = true;
+  else if (patch.bold === false) delete pending.bold;
+  if (patch.italic === true) pending.italic = true;
+  else if (patch.italic === false) delete pending.italic;
+  if (patch.underline === true) pending.underline = true;
+  else if (patch.underline === false) delete pending.underline;
+  if (typeof patch.color === 'string') pending.color = patch.color;
+  if (typeof patch.fontFamily === 'string') pending.fontFamily = patch.fontFamily;
+  if (typeof patch.fontSize === 'number') pending.fontSize = patch.fontSize;
+  const clean: PendingTyping = {};
+  if (pending.bold === true) clean.bold = true;
+  if (pending.italic === true) clean.italic = true;
+  if (pending.underline === true) clean.underline = true;
+  if (pending.color !== undefined) clean.color = pending.color;
+  if (pending.fontFamily !== undefined) clean.fontFamily = pending.fontFamily;
+  if (pending.fontSize !== undefined) clean.fontSize = pending.fontSize;
+  writePending(root, clean);
 }
 
 

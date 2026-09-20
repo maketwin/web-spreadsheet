@@ -41,4 +41,38 @@ export class DependencyGraph {
     }
     return [...result];
   }
+
+  /**
+   * True when adding `cellId → dependsOn` would create a cycle
+   * (self-ref, or cellId is reachable from any dependency via existing edges).
+   */
+  getDependencies(cellId: string): readonly string[] {
+    return [...(this.reverse.get(cellId) ?? [])];
+  }
+
+  wouldCreateCycle(cellId: string, dependsOn: readonly string[]): boolean {
+    for (const dep of dependsOn) {
+      if (dep === cellId) return true;
+      // Does `dep` (transitively) already depend on `cellId`?
+      if (this.dependsOnTransitively(dep, cellId)) return true;
+    }
+    return false;
+  }
+
+  /** Walk reverse edges: does `from` eventually depend on `target`? */
+  private dependsOnTransitively(from: string, target: string): boolean {
+    const seen = new Set<string>();
+    const queue = [from];
+    while (queue.length > 0) {
+      const cur = queue.shift();
+      if (cur === undefined) break;
+      if (cur === target) return true;
+      if (seen.has(cur)) continue;
+      seen.add(cur);
+      const deps = this.reverse.get(cur);
+      if (deps === undefined) continue;
+      for (const id of deps) queue.push(id);
+    }
+    return false;
+  }
 }

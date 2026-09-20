@@ -6,13 +6,25 @@ export type NumberFormatType = NonNullable<Style['numberFormat']>;
 export interface FormatResult {
   readonly text: string;
   readonly formatted: boolean;
+  /** From custom formats like [Red] / conditional color sections. */
+  readonly color?: string;
 }
 
 /** Format a cell value according to the number format type. */
 export function formatValue(value: unknown, fmt: NumberFormatType): FormatResult {
   if (value === null || value === undefined) return { text: '', formatted: false };
   if (fmt === 'general') return { text: String(value), formatted: false };
-  if (typeof value !== 'number') return { text: String(value), formatted: false };
+  if (typeof value !== 'number') {
+    if (typeof fmt === 'string' && fmt !== 'number' && fmt !== 'currency' && fmt !== 'percent' && fmt !== 'date' && fmt !== 'time' && fmt !== 'scientific') {
+      const custom = formatCustom(String(value), fmt);
+      if (custom !== undefined) {
+        return custom.color === undefined
+          ? { text: custom.text, formatted: true }
+          : { text: custom.text, formatted: true, color: custom.color };
+      }
+    }
+    return { text: String(value), formatted: false };
+  }
 
   switch (fmt) {
     case 'number': return formatNumber(value);
@@ -23,7 +35,10 @@ export function formatValue(value: unknown, fmt: NumberFormatType): FormatResult
     case 'scientific': return formatScientific(value);
     default: {
       const custom = formatCustom(value, fmt);
-      return custom === undefined ? { text: String(value), formatted: false } : { text: custom, formatted: true };
+      if (custom === undefined) return { text: String(value), formatted: false };
+      return custom.color === undefined
+        ? { text: custom.text, formatted: true }
+        : { text: custom.text, formatted: true, color: custom.color };
     }
   }
 }

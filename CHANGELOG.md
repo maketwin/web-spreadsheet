@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Features (Excel parity)
+
+- **Indent / text rotation / numfmt color** — `Style.indent` + toolbar; `textRotation` select; custom formats `[Red]`/`[>100]` with paint color.
+- **CF cellValue + expanded DV** — 单元格值规则; validation decimal / textLength / custom.
+- **Cross-app HTML paste styles** — `<td>` bold/color/fill → `pasteStyle` → styleId.
+
+- **Cell strikethrough** — `Style.strike` mid-line on canvas, toolbar 删除线,
+  editor `line-through`; rich runs inherit cell strike.
+
+- **Formula high-freq + circular** — `SUMIF`/`SUMIFS`/`COUNTIFS`, `IFERROR`/`IFNA`,
+  `TEXT`/`VALUE`/`ROUNDUP`/`ROUNDDOWN`/`POWER`/`SQRT`/`PI`, `IS*` helpers,
+  `CONCATENATE`; circular refs yield `0` (Excel iteration-off). Docs: error
+  values already first-class (guide was stale).
+
+- **Sheet Move or Copy dialog** — Sheet tab context menu 「移动或复制…」 opens
+  Excel-style dialog (insert before / end, optional create copy). `Store.copySheet`
+  deep-clones via serialize; copy names `Sheet1 (2)`, `Sheet1 (3)`, …
+
 ### Bug Fixes (Excel parity, GUI 体验回归)
 
 - **Rich text P0 vs Excel** — Formula-bar edits keep run styles via

@@ -114,6 +114,69 @@ export class Store {
     return true;
   }
 
+  /**
+   * Excel 「移动或复制」→ 建立副本：深拷贝整张表（含单元格/样式/合并等 serialize 字段）。
+   * Inserts the copy before `beforeSheetId`, or at end when omitted / not found.
+   */
+  public copySheet(sheetId: string, opts?: { readonly name?: string; readonly beforeSheetId?: string }): string | undefined {
+    if (!this.sheets.has(sheetId)) return undefined;
+    const source = this.requireSheet(sheetId);
+    const sourceName = this.sheetNames.get(sheetId) ?? 'Sheet';
+    const name = opts?.name?.trim()
+      ? this.uniqueSheetName(opts.name.trim())
+      : this.uniqueCopyName(sourceName);
+    const id = this.makeSheetId();
+    this.sheets.set(id, SheetData.deserialize(source.serialize()));
+    this.sheetNames.set(id, name);
+    const color = this.sheetColors.get(sheetId);
+    if (color !== undefined) this.sheetColors.set(id, color);
+    // Reorder: place new id before beforeSheetId (or at end).
+    const ids = [...this.sheets.keys()].filter((x) => x !== id);
+    const before = opts?.beforeSheetId;
+    const at = before !== undefined ? ids.indexOf(before) : -1;
+    if (at >= 0) ids.splice(at, 0, id);
+    else ids.push(id);
+    const nextSheets = new Map<string, SheetData>();
+    const nextNames = new Map<string, string>();
+    const nextColors = new Map<string, string>();
+    for (const sid of ids) {
+      nextSheets.set(sid, this.sheets.get(sid)!);
+      nextNames.set(sid, this.sheetNames.get(sid) ?? sid);
+      const c = this.sheetColors.get(sid);
+      if (c !== undefined) nextColors.set(sid, c);
+    }
+    this.sheets.clear();
+    this.sheetNames.clear();
+    this.sheetColors.clear();
+    for (const [sid, data] of nextSheets) this.sheets.set(sid, data);
+    for (const [sid, n] of nextNames) this.sheetNames.set(sid, n);
+    for (const [sid, c] of nextColors) this.sheetColors.set(sid, c);
+    this.activeSheetId = id;
+    this.notify({ type: 'sheet', action: 'add', sheetId: id, name });
+    return id;
+  }
+
+  /** Ensure sheet display name is unique (append " (n)" if taken). */
+  public uniqueSheetName(desired: string): string {
+    const names = new Set(this.sheetNames.values());
+    if (!names.has(desired)) return desired;
+    for (let n = 2; n < 10_000; n += 1) {
+      const candidate = `${desired} (${n})`;
+      if (!names.has(candidate)) return candidate;
+    }
+    return `${desired} (${Date.now()})`;
+  }
+
+  /** Excel copy naming: "Sheet1" → "Sheet1 (2)", then "Sheet1 (3)", … */
+  public uniqueCopyName(sourceName: string): string {
+    const names = new Set(this.sheetNames.values());
+    for (let n = 2; n < 10_000; n += 1) {
+      const candidate = `${sourceName} (${n})`;
+      if (!names.has(candidate)) return candidate;
+    }
+    return `${sourceName} (${Date.now()})`;
+  }
+
   public deleteSheet(sheetId: string): boolean {
     if (this.sheets.size <= 1 || !this.sheets.has(sheetId)) return false;
     this.sheets.delete(sheetId);

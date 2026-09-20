@@ -36,6 +36,8 @@ export interface Cell {
    * a single unstyled run is never stored.
    */
   richText?: RichTextRun[];
+  /** Ephemeral HTML-paste cell style; converted to styleId on apply, not serialized. */
+  pasteStyle?: Partial<Style>;
 }
 
 export interface RowMeta {
@@ -52,6 +54,8 @@ export interface Style {
   bold?: boolean;
   italic?: boolean;
   underline?: boolean;
+  /** Excel strikethrough (cell-level). */
+  strike?: boolean;
   color?: string;
   bgcolor?: string;
   align?: 'left' | 'center' | 'right';
@@ -65,6 +69,10 @@ export interface Style {
    */
   numberFormat?: string;
   wrap?: boolean;
+  /** Excel indent levels (0..15); shifts left-aligned text. */
+  indent?: number;
+  /** Excel text rotation in degrees (−90..90; 255 = stacked, treated as 0 for now). */
+  textRotation?: number;
   border?: { top?: string; bottom?: string; left?: string; right?: string };
 }
 

@@ -184,6 +184,20 @@ export async function pasteFromClipboard(store: Store, cmdManager: CommandManage
   const sourceRange: RangeAddress = { r1: 0, c1: 0, r2: cells.length - 1, c2: (cells[0]?.length ?? 1) - 1 };
   const plan = planMergePaste(store, [], sourceRange, target.r1, target.c1, target);
   if (!plan.ok) return plan;
-  applyMatrix(store, cmdManager, plan.rect.r1, plan.rect.c1, tilePlainCells(cells, plan.rect));
+  const tiled = tilePlainCells(cells, plan.rect);
+  const withStyles = applyPasteStyles(store, tiled, plan.rect.r1, plan.rect.c1);
+  applyMatrix(store, cmdManager, plan.rect.r1, plan.rect.c1, withStyles);
   return plan;
+}
+
+/** Turn ephemeral `pasteStyle` from HTML `<td>` into real styleIds before apply. */
+function applyPasteStyles(store: Store, cells: Cell[][], r0: number, c0: number): Cell[][] {
+  return cells.map((row, i) => row.map((cell, j) => {
+    if (cell === undefined || cell.pasteStyle === undefined) return cell;
+    const { pasteStyle, ...rest } = cell;
+    const styleId = `paste-${r0 + i}-${c0 + j}-${Date.now() % 1_000_000}`;
+    const prev = store.getStyle(styleId);
+    store.setStyle(styleId, { ...prev, ...pasteStyle });
+    return { ...rest, styleId };
+  }));
 }

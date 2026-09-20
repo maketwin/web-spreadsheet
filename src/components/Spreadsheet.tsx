@@ -1,5 +1,5 @@
 import { Button, ColorPicker, Divider, Dropdown, Form, Input, Modal, Select, Space, Switch, Tooltip, message } from 'antd';
-import { DownOutlined, AlignCenterOutlined, AlignLeftOutlined, AlignRightOutlined, BgColorsOutlined, BoldOutlined, BorderBottomOutlined, BorderInnerOutlined, BorderLeftOutlined, BorderOuterOutlined, BorderRightOutlined, BorderTopOutlined, ClearOutlined, ColumnHeightOutlined, FontColorsOutlined, FormatPainterOutlined, ItalicOutlined, LockOutlined, SelectOutlined, UnderlineOutlined, ZoomInOutlined, ZoomOutOutlined, TableOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, MergeCellsOutlined } from '@ant-design/icons';
+import { DownOutlined, AlignCenterOutlined, AlignLeftOutlined, AlignRightOutlined, BgColorsOutlined, BoldOutlined, BorderBottomOutlined, BorderInnerOutlined, BorderLeftOutlined, BorderOuterOutlined, BorderRightOutlined, BorderTopOutlined, ClearOutlined, ColumnHeightOutlined, FontColorsOutlined, FormatPainterOutlined, ItalicOutlined, LockOutlined, SelectOutlined, UnderlineOutlined, StrikethroughOutlined, ZoomInOutlined, ZoomOutOutlined, TableOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, MergeCellsOutlined } from '@ant-design/icons';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type Dispatch, type FC, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type RefObject, type SetStateAction } from 'react';
@@ -51,7 +51,8 @@ import { PasteSpecialDialog } from './PasteSpecialDialog';
 import { BottomBar } from './BottomBar';
 import { ErrorBoundary } from './ErrorBoundary';
 import { StatusBar } from './StatusBar';
-import { FormulaBar } from './FormulaBar';
+import { FormulaBar, type FormulaBarHandle } from './FormulaBar';
+import { MoveOrCopySheetDialog } from './menu/dialogs/MoveOrCopySheetDialog';
 import { MenuBar, allSheetRange } from './menu/MenuBar';
 import { excelSelectAll, edgeJump, currentRegion } from '../selection/currentRegion';
 import { parseNameBoxInput } from '../selection/nameBox';
@@ -99,6 +100,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const [ctxMenu, setCtxMenu] = useState<SpreadsheetContextMenu | null>(null);
   const [protectOpen, setProtectOpen] = useState(false);
   /** Add/rename sheet prompt: window.prompt is suppressed in embedded browsers, so use an in-app modal. */
+  const [moveOrCopySheetId, setMoveOrCopySheetId] = useState<string | null>(null);
   const [sheetPrompt, setSheetPrompt] = useState<{ readonly mode: 'add' | 'rename'; readonly id?: string; readonly value: string } | null>(null);
   const [storeVersion, setStoreVersion] = useState(0);
   const [formulaValue, setFormulaValue] = useState('');
@@ -109,8 +111,11 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const [selectedChartId, setSelectedChartId] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const formulaInputRef = useRef<HTMLInputElement>(null);
+  const formulaBarHandleRef = useRef<FormulaBarHandle | null>(null);
   /** Ready-mode formula-bar draft runs (kept in sync so commits preserve rich text). */
   const formulaRunsRef = useRef<RichTextRun[] | undefined>(undefined);
+  const [formulaRunsTick, setFormulaRunsTick] = useState(0);
+  const bumpFormulaRuns = (): void => setFormulaRunsTick((n) => n + 1);
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
   const editingRef = useRef<EditingCell | null>(editing);
@@ -324,10 +329,9 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     if (editingRef.current === null) {
       const { patch, ok } = buildPatch();
       if (!ok) return false;
-      const input = formulaInputRef.current;
-      if (input === null) return false;
-      const start = input.selectionStart ?? 0;
-      const end = input.selectionEnd ?? 0;
+      const fbSel = formulaBarHandleRef.current?.getSelection();
+      const start = fbSel?.start ?? formulaInputRef.current?.selectionStart ?? 0;
+      const end = fbSel?.end ?? formulaInputRef.current?.selectionEnd ?? 0;
       const active = selectedRef.current?.active ?? (selectedRef.current !== null ? { r: selectedRef.current.range.r1, c: selectedRef.current.range.c1 } : null);
       if (active === null || end <= start) return false;
       const cell = store.getCell(active.r, active.c);
@@ -410,14 +414,16 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   // Keep ready-mode formula-bar runs aligned with the active cell.
   useEffect(() => {
     if (editing !== null) return;
-    if (selected === null) { formulaRunsRef.current = undefined; return; }
+    if (selected === null) { formulaRunsRef.current = undefined; bumpFormulaRuns(); return; }
     const active = selected.active ?? { r: selected.range.r1, c: selected.range.c1 };
     const cell = store.getCell(active.r, active.c);
     if (cell === undefined || cell.formula !== undefined || typeof cell.value === 'number' || typeof cell.value === 'boolean') {
       formulaRunsRef.current = undefined;
+      bumpFormulaRuns();
       return;
     }
     formulaRunsRef.current = isRich(cell.richText) ? [...cell.richText] : (runsFromText(cell.text) ?? [{ text: cell.text ?? '' }]);
+    bumpFormulaRuns();
   }, [selected, editing, store, storeVersion]);
   useAutoSave(store);
   // Excel: opening the editor places the caret after the typed text (typing)
@@ -489,7 +495,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
         }}
       />
     </Modal>
-    <FormulaBar selected={selected} value={formulaValue} onChange={(next) => {
+    <FormulaBar selected={selected} value={formulaValue} runs={formulaRunsTick < 0 ? undefined : formulaRunsRef.current} onChange={(next, nextRuns) => {
       const prev = formulaValue;
       setFormulaValue(next);
       const ed = editingRef.current;
@@ -498,7 +504,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
           const synced: EditingCell = {
             ...ed,
             value: next,
-            richDraft: applyTextChangeToRuns(ed.richDraft, ed.value, next),
+            richDraft: nextRuns !== undefined ? [...nextRuns] : applyTextChangeToRuns(ed.richDraft, ed.value, next),
           };
           editingRef.current = synced;
           setEditing(synced);
@@ -509,13 +515,17 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
         }
         return;
       }
-      if (formulaRunsRef.current !== undefined && !next.startsWith('=')) {
-        formulaRunsRef.current = applyTextChangeToRuns(formulaRunsRef.current, prev, next);
-      } else if (next.startsWith('=')) {
+      if (next.startsWith('=')) {
         formulaRunsRef.current = undefined;
+        bumpFormulaRuns();
+      } else if (nextRuns !== undefined) {
+        formulaRunsRef.current = [...nextRuns];
+        bumpFormulaRuns();
+      } else if (formulaRunsRef.current !== undefined) {
+        formulaRunsRef.current = applyTextChangeToRuns(formulaRunsRef.current, prev, next);
       }
     }} onCommit={(committed) => {
-      const value = committed ?? formulaInputRef.current?.value ?? formulaValue;
+      const value = committed ?? formulaBarHandleRef.current?.getValue() ?? formulaInputRef.current?.value ?? formulaValue;
       const ed = editingRef.current;
       if (ed !== null) { commitEditing(value, undefined, false, ed.richDraft !== undefined ? normalizeRuns(ed.richDraft) ?? undefined : undefined); return; }
       commitFormulaValue(selected, value, store, cmdManager, formulaRunsRef.current);
@@ -527,7 +537,8 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       const cell = store.getCell(active.r, active.c);
       setFormulaValue(cell?.formula ?? cell?.text ?? '');
       formulaRunsRef.current = cell !== undefined && isRich(cell.richText) ? [...cell.richText] : (cell !== undefined ? runsFromText(cell.text) : undefined);
-    }} onGoTo={(input) => { jumpNameBox(store, input, selectRange); canvasRef.current?.focus(); }} inputRef={formulaInputRef} onCharStyleKey={applyCharStyleKey} />
+      bumpFormulaRuns();
+    }} onGoTo={(input) => { jumpNameBox(store, input, selectRange); canvasRef.current?.focus(); }} inputRef={formulaInputRef} handleRef={formulaBarHandleRef} onCharStyleKey={applyCharStyleKey} />
     <div className="ss-canvas-wrap"><canvas ref={canvasRef} className="ss-canvas" tabIndex={0} aria-label="Spreadsheet canvas, use arrow keys to navigate" onKeyDown={(e) => {
         if ((e.ctrlKey || e.metaKey) && e.altKey && e.key.toLowerCase() === 'v') {
           // Excel: Ctrl+Alt+V opens Paste Special.
@@ -554,7 +565,20 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       <PasteSpecialDialog open={pasteSpecialOpen} onOk={(opts) => void applyPasteSpecial(opts)} onCancel={() => setPasteSpecialOpen(false)} />
       {filterPopup !== null && <FilterDropdown store={store} cmdManagerExecutor={execCmd} r={filterPopup.r} c={filterPopup.c} x={filterPopup.x} y={filterPopup.y} onClose={() => setFilterPopup(null)} />}
     <StatusBar store={store} selected={selected?.range ?? null} zoom={view.zoom} />
-    <BottomBar sheets={sheets} activeSheetId={activeSheetId} onSheetChange={(id) => { setMulti([]); store.activateSheet(id); }} onAddSheet={() => setSheetPrompt({ mode: 'add', value: `Sheet${store.getSheets().length + 1}` })} onRenameSheet={(id) => setSheetPrompt({ mode: 'rename', id, value: sheets.find((s) => s.id === id)?.name ?? '' })} onDeleteSheet={(id) => deleteSheet(store, id)} onMoveSheet={(id, toIndex) => store.moveSheet(id, toIndex)} onSheetColor={(id, color) => store.setSheetColor(id, color)} />
+    <BottomBar sheets={sheets} activeSheetId={activeSheetId} onSheetChange={(id) => { setMulti([]); store.activateSheet(id); }} onAddSheet={() => setSheetPrompt({ mode: 'add', value: `Sheet${store.getSheets().length + 1}` })} onRenameSheet={(id) => setSheetPrompt({ mode: 'rename', id, value: sheets.find((s) => s.id === id)?.name ?? '' })} onDeleteSheet={(id) => deleteSheet(store, id)} onMoveSheet={(id, toIndex) => store.moveSheet(id, toIndex)} onSheetColor={(id, color) => store.setSheetColor(id, color)} onMoveOrCopySheet={(id) => setMoveOrCopySheetId(id)} />
+      {moveOrCopySheetId !== null && (
+        <MoveOrCopySheetDialog
+          open
+          sheetId={moveOrCopySheetId}
+          sheets={sheets}
+          onCancel={() => setMoveOrCopySheetId(null)}
+          onSubmit={(values) => {
+            const id = moveOrCopySheetId;
+            setMoveOrCopySheetId(null);
+            applyMoveOrCopySheet(store, id, values);
+          }}
+        />
+      )}
     {ctxMenu?.kind === 'cell' && <CellContextMenu
       x={ctxMenu.x} y={ctxMenu.y} onClose={closeCtxMenu}
       onCut={() => runCtxClipboard('cut')} onCopy={() => runCtxClipboard('copy')} onPaste={() => runCtxClipboard('paste')} onClear={() => runCtxClipboard('clear')} onPasteSpecial={() => setPasteSpecialOpen(true)}
@@ -1019,6 +1043,7 @@ function caretOffsetAtClick(
     value: data?.value,
     formula: data?.formula,
     zoom,
+    runs: data?.richText,
   });
 }
 
@@ -1077,7 +1102,10 @@ function editorStyle(
     fontStyle: style?.italic === true ? 'italic' : 'normal',
     // Cell-level underline must stay visible inside the editor (spans without
     // an explicit underline override inherit it from here).
-    textDecoration: style?.underline === true ? 'underline' : undefined,
+    textDecoration: [
+      style?.underline === true ? 'underline' : '',
+      style?.strike === true ? 'line-through' : '',
+    ].filter(Boolean).join(' ') || undefined,
     color: style?.color ?? undefined,
     textAlign: resolveCellAlign(style?.align, (() => {
       const live = store.getCell(cell.r, cell.c);
@@ -1385,6 +1413,24 @@ const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly sto
       <Tooltip title="加粗"><Button size="small" type={current?.bold === true ? 'primary' : 'default'} icon={<BoldOutlined />} aria-label="Bold" onClick={() => style({ bold: !(current?.bold === true) })} /></Tooltip>
       <Tooltip title="斜体"><Button size="small" type={current?.italic === true ? 'primary' : 'default'} icon={<ItalicOutlined />} aria-label="Italic" onClick={() => style({ italic: !(current?.italic === true) })} /></Tooltip>
       <Tooltip title="下划线"><Button size="small" type={current?.underline === true ? 'primary' : 'default'} icon={<UnderlineOutlined />} aria-label="Underline" onClick={() => style({ underline: !(current?.underline === true) })} /></Tooltip>
+      <Tooltip title="删除线"><Button size="small" type={current?.strike === true ? 'primary' : 'default'} icon={<StrikethroughOutlined />} aria-label="Strikethrough" onClick={() => style({ strike: !(current?.strike === true) })} /></Tooltip>
+      <Tooltip title="增加缩进"><Button size="small" aria-label="Increase indent" onClick={() => style({ indent: Math.min(15, (current?.indent ?? 0) + 1) })}>→|</Button></Tooltip>
+      <Tooltip title="减少缩进"><Button size="small" aria-label="Decrease indent" onClick={() => style({ indent: Math.max(0, (current?.indent ?? 0) - 1) })}>|←</Button></Tooltip>
+      <Select
+        size="small"
+        aria-label="Text rotation"
+        placeholder="旋转"
+        style={{ width: 72 }}
+        value={current?.textRotation ?? 0}
+        options={[
+          { value: 0, label: '0°' },
+          { value: 45, label: '45°' },
+          { value: 90, label: '90°' },
+          { value: -45, label: '-45°' },
+          { value: -90, label: '-90°' },
+        ]}
+        onChange={(v: number) => style({ textRotation: v })}
+      />
       <Tooltip title="字体颜色">
         <ColorPicker
           size="small"
@@ -1487,4 +1533,30 @@ function activeCellStyle(store: Store, selected: Selection | null): Style | unde
   const data = store.getCell(cell.r, cell.c);
   if (data?.styleId === undefined) return undefined;
   return store.getStyle(data.styleId);
+}
+
+
+function applyMoveOrCopySheet(
+  store: Store,
+  sheetId: string,
+  values: { readonly beforeSheetId: string | 'end'; readonly createCopy: boolean },
+): void {
+  const ids = store.getSheets().map((sh) => sh.id);
+  const beforeId = values.beforeSheetId === 'end' ? undefined : values.beforeSheetId;
+  if (values.createCopy) {
+    if (beforeId === undefined) store.copySheet(sheetId);
+    else store.copySheet(sheetId, { beforeSheetId: beforeId });
+    return;
+  }
+  let toIndex: number;
+  if (beforeId === undefined) {
+    toIndex = ids.length - 1;
+  } else {
+    const at = ids.indexOf(beforeId);
+    toIndex = at < 0 ? ids.length - 1 : at;
+    const from = ids.indexOf(sheetId);
+    if (from >= 0 && from < toIndex) toIndex -= 1;
+  }
+  store.moveSheet(sheetId, toIndex);
+  store.activateSheet(sheetId);
 }

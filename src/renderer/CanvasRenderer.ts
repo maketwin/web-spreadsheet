@@ -1131,10 +1131,12 @@ export class CanvasRenderer {
     this.ctx.rect(clipX, clipY, clipW, clipH);
     this.ctx.clip();
 
-    this.ctx.fillStyle = style?.color ?? theme.text; this.ctx.textBaseline = 'middle'; this.ctx.textAlign = align;
+    const formatColor = fr?.color;
+    this.ctx.fillStyle = formatColor ?? style?.color ?? theme.text; this.ctx.textBaseline = 'middle'; this.ctx.textAlign = align;
     const fontStr = `${style?.italic === true ? 'italic ' : ''}${style?.bold === true ? 'bold ' : ''}${fontSize}px ${fontFamily}`;
     this.ctx.font = fontStr;
-    const maxW = Math.max(4, cw - 6);
+    const indentPx = Math.max(0, Math.min(15, style?.indent ?? 0)) * Math.round(fontSize * 0.9);
+    const maxW = Math.max(4, cw - 6 - indentPx);
     // Excel: numbers/dates that do not fit show ##### instead of overflowing.
     let paintText = text;
     let paintAlign = align;
@@ -1146,7 +1148,7 @@ export class CanvasRenderer {
       }
     }
     this.ctx.textAlign = paintAlign;
-    const tx = paintAlign === 'center' ? x + cw / 2 : paintAlign === 'right' ? x + cw - 3 : x + 3;
+    const tx = paintAlign === 'center' ? x + cw / 2 : paintAlign === 'right' ? x + cw - 3 : x + 3 + indentPx;
     const lines = wrapping ? wrapTextLines((t) => this.textMetrics.measure(this.ctx, fontStr, t), paintText, maxW) : [paintText.replace(/\r?\n/g, '')];
     const lineH = fontSize * WRAP_LINE_HEIGHT;
     const contentHeight = lines.length * lineH;
@@ -1156,20 +1158,37 @@ export class CanvasRenderer {
         ? y + rh / 2 - contentHeight / 2
         : y + rh - 2 - contentHeight;
     const startY = contentTop + lineH / 2;
+    const rotation = style?.textRotation;
+    if (rotation !== undefined && rotation !== 0 && rotation !== 255) {
+      const deg = Math.max(-90, Math.min(90, rotation));
+      const cx = x + cw / 2;
+      const cy = y + rh / 2;
+      this.ctx.translate(cx, cy);
+      this.ctx.rotate((-deg * Math.PI) / 180);
+      this.ctx.translate(-cx, -cy);
+    }
     for (let i = 0; i < lines.length; i += 1) {
       const line = lines[i]!;
       const ly = startY + i * lineH;
       if (ly > y + rh) break;
       this.ctx.fillText(line, tx, ly);
-      if (style?.underline === true) {
+      if (style?.underline === true || style?.strike === true) {
         const w = this.textMetrics.measure(this.ctx, fontStr, line);
         const sx = paintAlign === 'center' ? tx - w / 2 : paintAlign === 'right' ? tx - w : tx;
-        this.ctx.beginPath();
-        this.ctx.moveTo(sx, ly + fontSize * 0.38);
-        this.ctx.lineTo(sx + w, ly + fontSize * 0.38);
         this.ctx.strokeStyle = String(this.ctx.fillStyle);
         this.ctx.lineWidth = 1;
-        this.ctx.stroke();
+        if (style?.underline === true) {
+          this.ctx.beginPath();
+          this.ctx.moveTo(sx, ly + fontSize * 0.38);
+          this.ctx.lineTo(sx + w, ly + fontSize * 0.38);
+          this.ctx.stroke();
+        }
+        if (style?.strike === true) {
+          this.ctx.beginPath();
+          this.ctx.moveTo(sx, ly);
+          this.ctx.lineTo(sx + w, ly);
+          this.ctx.stroke();
+        }
       }
     }
     this.ctx.restore();

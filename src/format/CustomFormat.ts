@@ -12,14 +12,19 @@
  * - literals: `"quoted text"`, `\x` escaped char, and other characters pass
  *   through verbatim
  *
- * Not supported (reserved for later): `[Red]` colors, `[>100]` conditions,
- * locale currency selectors like `[$¥-804]`.
+ * Also supports `[Red]`/`[Blue]`/… color and `[>100]`/`[<=0]` condition
+ * sections. Locale currency selectors like `[$¥-804]` are skipped.
  */
 
 const EPOCH_MS = Date.UTC(1899, 11, 30);
 const DAY_MS = 86_400_000;
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const MONTHS_LONG = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+export interface FormatCustomResult {
+  readonly text: string;
+  readonly color?: string;
+}
 
 interface CompiledSection {
   readonly kind: 'number' | 'date';
@@ -33,6 +38,8 @@ interface CompiledSection {
   readonly percent: boolean;
   readonly scientific: boolean;
   readonly ampm: boolean;
+  readonly color?: string;
+  readonly condition?: { readonly op: '>' | '<' | '>=' | '<=' | '=' | '<>'; readonly value: number };
 }
 
 type Token =
@@ -43,26 +50,58 @@ type Token =
 const cache = new Map<string, readonly CompiledSection[]>();
 
 /** Format `value` with a custom format string. Returns undefined if unsupported. */
-export function formatCustom(value: number | string, fmt: string): string | undefined {
+export function formatCustom(value: number | string, fmt: string): FormatCustomResult | undefined {
   const sections = compile(fmt);
   if (sections === undefined) return undefined;
   if (typeof value !== 'number') {
-    const textSection = sections[3];
-    if (textSection === undefined) return String(value);
-    return renderText(String(value), textSection);
+    const textSection = sections[3] ?? sections[0];
+    if (textSection === undefined) return { text: String(value) };
+    return withColor(renderText(String(value), textSection), textSection.color);
+  }
+  const picked = pickSection(sections, value);
+  if (picked === undefined) return undefined;
+  let v = value;
+  // Classic 2nd section (negative) without a condition still formats |value|.
+  if (picked.condition === undefined && value < 0 && sections.indexOf(picked) === 1) v = -value;
+  return withColor(renderNumber(v, picked), picked.color);
+}
+
+function withColor(text: string, color: string | undefined): FormatCustomResult {
+  return color === undefined ? { text } : { text, color };
+}
+
+function pickSection(sections: readonly CompiledSection[], value: number): CompiledSection | undefined {
+  const conditioned = sections.filter((s) => s.condition !== undefined);
+  if (conditioned.length > 0) {
+    for (const s of sections) {
+      if (s.condition === undefined) continue;
+      if (matchCondition(value, s.condition)) return s;
+    }
+    // Excel: if no condition matches, use the first section without a condition, else last.
+    return sections.find((s) => s.condition === undefined) ?? sections[sections.length - 1];
   }
   let section = sections[0]!;
-  let v = value;
-  if (value < 0 && sections.length >= 2) { section = sections[1]!; v = -value; }
-  else if (value === 0 && sections.length >= 3) { section = sections[2]!; }
-  return renderNumber(v, section);
+  if (value < 0 && sections.length >= 2) section = sections[1]!;
+  else if (value === 0 && sections.length >= 3) section = sections[2]!;
+  return section;
+}
+
+function matchCondition(value: number, cond: NonNullable<CompiledSection['condition']>): boolean {
+  switch (cond.op) {
+    case '>': return value > cond.value;
+    case '<': return value < cond.value;
+    case '>=': return value >= cond.value;
+    case '<=': return value <= cond.value;
+    case '<>': return value !== cond.value;
+    default: return value === cond.value;
+  }
 }
 
 function compile(fmt: string): readonly CompiledSection[] | undefined {
   const hit = cache.get(fmt);
   if (hit !== undefined) return hit;
   const raw = splitSections(fmt);
-  if (raw.length === 0 || raw.length > 4) return undefined;
+  if (raw.length === 0 || raw.length > 8) return undefined;
   const sections = raw.map((sec, i) => compileSection(sec, i));
   if (sections.some((s) => s === undefined)) return undefined;
   const compiled = sections as readonly CompiledSection[];
@@ -85,10 +124,23 @@ function splitSections(fmt: string): string[] {
   return out.filter((s, i) => s.length > 0 || i === 0);
 }
 
+const NAMED_COLORS: Record<string, string> = {
+  red: '#FF0000',
+  blue: '#0000FF',
+  green: '#008000',
+  black: '#000000',
+  white: '#FFFFFF',
+  yellow: '#FFFF00',
+  cyan: '#00FFFF',
+  magenta: '#FF00FF',
+};
+
 const DATE_TOKEN = /^(yyyy|yy|mmmm|mmm|mm|dd|hh|ss|AM\/PM|am\/pm)/i;
 
 function compileSection(src: string, index: number): CompiledSection | undefined {
   const tokens: Token[] = [];
+  let color: string | undefined;
+  let condition: CompiledSection['condition'];
   let intMinDigits = 0;
   let intOptional = false;
   let groupThousands = false;
@@ -120,9 +172,17 @@ function compileSection(src: string, index: number): CompiledSection | undefined
     if (ch === '[') {
       const end = src.indexOf(']', i + 1);
       if (end < 0) return undefined;
-      const inner = src.slice(i + 1, end);
-      // Only locale/currency selectors pass through silently; conditions/colors unsupported.
-      if (!inner.startsWith('$')) return undefined;
+      const inner = src.slice(i + 1, end).trim();
+      if (inner.startsWith('$')) { i = end + 1; continue; } // locale/currency — skip
+      const named = NAMED_COLORS[inner.toLowerCase()];
+      if (named !== undefined) { color = named; i = end + 1; continue; }
+      const cm = /^(>=|<=|<>|>|<|=)\s*([+-]?\d+(?:\.\d+)?)$/.exec(inner);
+      if (cm !== null) {
+        condition = { op: cm[1] as NonNullable<CompiledSection['condition']>['op'], value: Number(cm[2]) };
+        i = end + 1;
+        continue;
+      }
+      // Unknown bracket — ignore rather than fail the whole format.
       i = end + 1;
       continue;
     }
@@ -190,6 +250,8 @@ function compileSection(src: string, index: number): CompiledSection | undefined
   return {
     kind: hasDate && !hasNum ? 'date' : 'number',
     tokens, intMinDigits, intOptional, groupThousands, fracDigits, fracOptional, percent, scientific, ampm,
+    ...(color !== undefined ? { color } : {}),
+    ...(condition !== undefined ? { condition } : {}),
   };
 }
 

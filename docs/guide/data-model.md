@@ -58,7 +58,7 @@ export interface Style {
 样式去重存储：相同的样式共享一个 `styleId`，单元格只存引用。
 
 ::: warning 注意
-字段名是 `numberFormat`（不是 `format`）。样式暂不支持删除线、文字旋转。
+字段名是 `numberFormat`（不是 `format`）。样式已支持删除线（`strike`）、缩进（`indent`）、文字旋转（`textRotation`，−90…90）。
 :::
 
 ## 行 / 列元数据

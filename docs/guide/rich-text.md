@@ -49,7 +49,7 @@ interface Cell {
 2. **theme 颜色**（`<color theme="n"/>`）按内置 Office 12 色近似映射，不解析 theme1.xml；`tint` 按 OOXML 公式加深/变浅（仍非真实 theme1 色）。
 3. 无选区 Ctrl+B/I/U / 工具栏字符格式会锁定后续输入格式（`document.execCommand`）；jsdom 下可能无可见 DOM 效果，浏览器中有效。
 4. 双击进入编辑会按点击位置估算光标（含 Alt+Enter 硬换行与 wrap 软换行的 Y 落点）；混合字号/复杂排版仍是近似。
-5. 编辑器内粘贴已解析 `text/html` 分段；复杂 Excel 剪贴板（条件格式碎片、主题色）仍可能降级。
+5. 编辑器内粘贴已解析 `text/html` 分段；跨应用 HTML 粘贴会尽量读取 `<td>` 上的粗体/颜色/底色等到单元格样式。复杂 Excel 剪贴板（条件格式碎片、真实 theme 色）仍可能降级。
 
 ## 测试
 
