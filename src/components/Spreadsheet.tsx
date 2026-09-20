@@ -132,8 +132,11 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     const ed = editingRef.current;
     if (ed !== null) {
       const el = inputRef.current;
-      const value = el?.value ?? ed.value;
-      const caret = el?.selectionStart ?? value.length;
+      // Rich editor keeps its runs in the contenteditable DOM — the commit must
+      // carry them, or clicking another cell flattens the cell (Excel keeps them).
+      const richRuns = richApiRef.current?.getRuns();
+      const value = richRuns !== undefined ? flattenRuns(richRuns) : (el?.value ?? ed.value);
+      const caret = richRuns === undefined ? (el?.selectionStart ?? value.length) : value.length;
       const head = value.slice(0, caret);
       if (ed.point !== undefined || isPointTrigger(head)) {
         // Excel point mode: clicking a cell drops its reference into the formula.
@@ -145,7 +148,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
         return;
       }
       // Excel: clicking another cell commits the edit and selects the clicked cell.
-      commitEditingRef.current?.(value);
+      commitEditingRef.current?.(value, richRuns !== undefined ? normalizeRuns(richRuns) ?? undefined : undefined);
     }
     if (ctrl && !shift) {
       // Excel Ctrl+click: keep the existing selection as an extra range, activate the new cell.
@@ -158,7 +161,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     // Excel: clicking a merged cell selects the whole merge; shift-extend snaps to merge edges.
     selectSelection(shift && selectedRef.current ? snapRangeSelection(store, extendSelection(selectedRef.current, cell)) : snapClickSelection(store, cell.r, cell.c));
   }, [painting, sourceStyle, selectSelection, cmdManager, store, setMulti]);
-  const commitEditingRef = useRef<((value: string) => void) | null>(null);
+  const commitEditingRef = useRef<((value: string, runs?: RichTextRun[]) => void) | null>(null);
   const closeCtxMenu = useCallback(() => setCtxMenu(null), []);
   const onAutoFilterClick = useCallback((r: number, c: number, x: number, y: number) => {
     setFilterPopup((current) => current !== null && current.r === r && current.c === c ? null : { r, c, x, y });
@@ -279,7 +282,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     }
     setEditing(null);
   };
-  commitEditingRef.current = (value: string) => commitEditing(value);
+  commitEditingRef.current = (value: string, runs?: RichTextRun[]) => commitEditing(value, undefined, false, runs);
 
   /**
    * Excel: run-level style keys with a cell editor open format the selected
