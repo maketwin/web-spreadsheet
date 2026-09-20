@@ -902,6 +902,9 @@ function editorStyle(
     fontFamily,
     fontWeight: style?.bold === true ? 700 : 400,
     fontStyle: style?.italic === true ? 'italic' : 'normal',
+    // Cell-level underline must stay visible inside the editor (spans without
+    // an explicit underline override inherit it from here).
+    textDecoration: style?.underline === true ? 'underline' : undefined,
     color: style?.color ?? undefined,
     textAlign: style?.align ?? 'left',
     lineHeight: `${WRAP_LINE_HEIGHT}`,
