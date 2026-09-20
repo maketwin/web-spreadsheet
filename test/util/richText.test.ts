@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applyTextChangeToRuns,
   applyRunStyle,
   charsAllHave,
   deleteRangeRuns,
@@ -260,5 +261,33 @@ describe('cell write paths', () => {
 describe('RichTextRun type sanity', () => {
   it('runs are plain JSON-serializable (IndexedDB autosave)', () => {
     expect(JSON.parse(JSON.stringify({ richText: AB }))).toEqual({ richText: AB });
+  });
+});
+
+describe('applyTextChangeToRuns', () => {
+  it('keeps surrounding styles when typing in the middle', () => {
+    const runs = [
+      { text: '红', style: { color: '#FF0000' } },
+      { text: '蓝', style: { color: '#0000FF', bold: true } },
+    ];
+    const next = applyTextChangeToRuns(runs, '红蓝', '红x蓝');
+    expect(flattenRuns(next)).toBe('红x蓝');
+    expect(next[0]?.style?.color).toBe('#FF0000');
+    expect(next[next.length - 1]?.style?.color).toBe('#0000FF');
+  });
+
+  it('appends with the trailing run style', () => {
+    const runs = [{ text: 'Hi', style: { bold: true } }];
+    const next = applyTextChangeToRuns(runs, 'Hi', 'Hi!');
+    expect(next).toEqual([{ text: 'Hi!', style: { bold: true } }]);
+  });
+
+  it('deletes across a run boundary', () => {
+    const runs = [
+      { text: 'AB', style: { bold: true } },
+      { text: 'CD', style: { italic: true } },
+    ];
+    const next = applyTextChangeToRuns(runs, 'ABCD', 'AD');
+    expect(flattenRuns(next)).toBe('AD');
   });
 });

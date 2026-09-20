@@ -45,12 +45,11 @@ interface Cell {
 
 ## 已知偏差（与 Excel 相比）
 
-1. **公式栏**显示平铺纯文本：选字后应用字符格式可以正确落到选中片段，但在公式栏里**改字**再提交视为整格替换，会丢掉原分段（Excel 编辑栏可保留分段编辑文字）。
-2. **theme 颜色**（`<color theme="n"/>`）按内置 Office 12 色近似映射，不解析 theme1.xml，忽略 tint。
-3. 编辑态下 Ctrl+B/I/U 仅在有选中文字时生效；无选区时不对光标后续输入生效（Excel 会记住光标处格式）。
-4. 双击进入编辑时光标定位于末尾，未定位到点击位置。
-5. Ctrl+Enter 多格填充使用平铺文本（不带 runs）。
-6. 编辑器内粘贴按纯文本处理（不解析剪贴板 HTML 分段）。
+1. **公式栏**仍显示平铺纯文本，但改字提交会通过 `applyTextChangeToRuns` 尽量保留分段样式（前缀/后缀拼接）；复杂多点编辑仍可能不如 Excel 精细。
+2. **theme 颜色**（`<color theme="n"/>`）按内置 Office 12 色近似映射，不解析 theme1.xml；`tint` 按 OOXML 公式加深/变浅（仍非真实 theme1 色）。
+3. 无选区 Ctrl+B/I/U / 工具栏字符格式会锁定后续输入格式（`document.execCommand`）；jsdom 下可能无可见 DOM 效果，浏览器中有效。
+4. 双击进入编辑会按点击位置估算光标（含 Alt+Enter 硬换行与 wrap 软换行的 Y 落点）；混合字号/复杂排版仍是近似。
+5. 编辑器内粘贴已解析 `text/html` 分段；复杂 Excel 剪贴板（条件格式碎片、主题色）仍可能降级。
 
 ## 测试
 
@@ -60,3 +59,6 @@ interface Cell {
 - `test/find/FindReplaceService.test.ts` — 保格式替换
 - `test/clipboard/RichClipboard.test.ts` — 剪贴板 HTML 双向
 - `test/components/RichEditor.test.tsx` — 编辑器选区改样式
+- `test/util/caretHit.test.ts` — 双击多行/换行 caret
+- `test/fill/fillSelection.test.ts` — Ctrl+Enter 含 runs
+- `test/io/themeTint.test.ts` — theme tint

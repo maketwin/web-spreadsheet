@@ -149,6 +149,26 @@ describe('Spreadsheet', () => {
     expect(store.getCell(0, 0)).toMatchObject({ text: '=SUM(1,2)', formula: '=SUM(1,2)' });
   });
 
+  it('formula bar edit keeps rich runs', () => {
+    installCanvasContext();
+    const store = new Store();
+    store.setCell(0, 0, {
+      text: '红蓝',
+      richText: [
+        { text: '红', style: { color: '#FF0000' } },
+        { text: '蓝', style: { color: '#0000FF', bold: true } },
+      ],
+    });
+    render(<SpreadsheetComponent store={store} theme={false} />);
+    const input = screen.getByLabelText('Formula bar');
+    fireEvent.change(input, { target: { value: '红x蓝' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    const cell = store.getCell(0, 0);
+    expect(cell?.text).toBe('红x蓝');
+    expect(cell?.richText?.[0]?.style?.color).toBe('#FF0000');
+    expect(cell?.richText?.[cell.richText!.length - 1]?.style?.color).toBe('#0000FF');
+  });
+
   it('cancels overlay editor changes on Escape', () => {
     installCanvasContext();
     const store = new Store();

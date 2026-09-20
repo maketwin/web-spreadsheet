@@ -4,6 +4,15 @@
 
 ### Bug Fixes (Excel parity, GUI 体验回归)
 
+- **Rich text P0 vs Excel** — Formula-bar edits keep run styles via
+  `applyTextChangeToRuns`; collapsed caret Ctrl+B/I/U arms typing style;
+  double-click places caret near the click; in-cell paste accepts HTML runs.
+
+- **Rich text P1 vs Excel** — Ctrl+Enter fills selection with the anchor cell's
+  `richText` runs; double-click caret uses Y for Alt+Enter / wrap lines
+  (`caretOffsetFromLocalPoint`); theme `<color theme tint>` applies OOXML tint
+  on the built-in Office palette (still no theme1.xml).
+
 - **P2 theme lock (Excel green)** — Tokens document Excel green as final; add
   `--ss-outside` gray beyond the sheet, `--ss-font-size: 11px`. Default font
   size centralized as `DEFAULT_FONT_SIZE = 11`.

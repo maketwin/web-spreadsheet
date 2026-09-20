@@ -43,6 +43,16 @@ export class ClipboardService {
     return parseDelimited(trimTrailingEmptyRow(text)).map((row) => row.map((value) => cellFromText(undefined, value)));
   }
 
+
+  /** Inline HTML fragment → runs (editor paste). Wraps bare markup in a table cell. */
+  public static runsFromHtmlSnippet(html: string): RichTextRun[] {
+    const wrapped = /<t[dh]\b/i.test(html) ? html : `<table><tr><td>${html}</td></tr></table>`;
+    const cell = ClipboardService.parseHtml(wrapped)[0]?.[0];
+    if (cell === undefined) return [{ text: '' }];
+    if (isRich(cell.richText)) return [...cell.richText];
+    return cell.text === '' ? [{ text: '' }] : [{ text: cell.text }];
+  }
+
   public static parseHtml(html: string): Cell[][] {
     if (typeof DOMParser === 'undefined') return [];
     const doc = new DOMParser().parseFromString(html, 'text/html');

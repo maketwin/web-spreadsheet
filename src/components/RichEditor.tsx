@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react';
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { RichTextRun, RunStyle, Style } from '../types';
-import { applyRunStyle as applyRunModel, charsAllHave, insertAtRuns, mergeRuns, normalizeRuns, type RunStylePatch } from '../util/richText';
+import { applyRunStyle as applyRunModel, charsAllHave, flattenRuns, insertAtRuns, mergeRuns, normalizeRuns, replaceRangeInRuns, type RunStylePatch } from '../util/richText';
 import { runSpanStyle, runStyleFromElement } from '../util/runStyleCss';
+import { ClipboardService } from '../clipboard/ClipboardService';
 
 const TEXT_NODE = 3;
 const ELEMENT_NODE = 1;
@@ -21,7 +22,7 @@ export interface RichEditorApi {
   getRuns(): RichTextRun[];
   /** Editor selection as flat offsets; null when the selection is elsewhere. */
   getSelection(): { readonly start: number; readonly end: number } | null;
-  /** Apply a style patch to the editor's text selection; false when no selection. */
+  /** Apply a style patch to the selection; collapsed caret toggles typing style (Excel). */
   applyRunStyle(patch: RunStylePatch): boolean;
   hasSelection(): boolean;
 }
@@ -89,11 +90,12 @@ export function RichEditor({ initialRuns, css, cellStyle, initialSelection, edit
     if ((e.ctrlKey || e.metaKey) && !e.altKey) {
       const key = e.key.toLowerCase();
       if (key === 'b' || key === 'i' || key === 'u') {
+        e.preventDefault();
         const attr = key === 'b' ? 'bold' : key === 'i' ? 'italic' : 'underline';
         const root = rootRef.current;
-        const sel = root === null ? null : flatSelectionOf(root);
-        if (root !== null && sel !== null && sel.end > sel.start) {
-          e.preventDefault();
+        if (root === null) return;
+        const sel = flatSelectionOf(root);
+        if (sel !== null && sel.end > sel.start) {
           // Excel toggle: off clears the run override, unless the cell style is
           // bold itself — then an explicit false is needed to win over inherit.
           const turnOff = charsAllHave(runsRef.current, sel.start, sel.end, attr, cellStyle);
@@ -103,6 +105,10 @@ export function RichEditor({ initialRuns, css, cellStyle, initialSelection, edit
           renderRuns(root, next);
           setFlatSelection(root, sel.start, sel.end);
           onValueChange?.(next.map((run) => run.text).join(''));
+        } else {
+          // Collapsed caret: lock typing style for subsequent input (Excel).
+          toggleTypingStyle(root, attr);
+          runsRef.current = runsFromDom(root);
         }
         return;
       }
@@ -139,6 +145,33 @@ export function RichEditor({ initialRuns, css, cellStyle, initialSelection, edit
       composingRef.current = false;
       runsRef.current = runsFromDom(rootRef.current);
       onValueChange?.(runsRef.current.map((run) => run.text).join(''));
+    }}
+    onPaste={(e) => {
+      e.preventDefault();
+      const root = rootRef.current;
+      if (root === null) return;
+      const html = e.clipboardData.getData('text/html');
+      const plain = e.clipboardData.getData('text/plain');
+      const sel = flatSelectionOf(root) ?? { start: flatLength(root), end: flatLength(root) };
+      let inserted: RichTextRun[];
+      if (html.trim() !== '') {
+        inserted = ClipboardService.runsFromHtmlSnippet(html);
+      } else {
+        inserted = [{ text: plain.replace(/\r\n/g, '\n') }];
+      }
+      const insertedText = flattenRuns(inserted);
+      let next = replaceRangeInRuns(runsRef.current, sel.start, sel.end, '');
+      // Splice runs at caret: delete selection then insert each run with its style.
+      let pos = sel.start;
+      for (const run of inserted) {
+        next = insertAtRuns(next, pos, run.text, run.style);
+        pos += run.text.length;
+      }
+      runsRef.current = mergeRuns(next);
+      renderRuns(root, runsRef.current);
+      const caret = sel.start + insertedText.length;
+      setFlatSelection(root, caret, caret);
+      onValueChange?.(flattenRuns(runsRef.current));
     }}
   />;
 }
@@ -279,13 +312,36 @@ function flatLength(root: HTMLElement): number {
 
 function applyPatchToSelection(root: HTMLElement, patch: RunStylePatch, runsRef: { current: RichTextRun[] }): boolean {
   const sel = flatSelectionOf(root);
-  if (sel === null || sel.end <= sel.start) return false;
+  if (sel === null) return false;
+  if (sel.end <= sel.start) {
+    // Collapsed caret: arm typing style for subsequent input (Excel).
+    root.focus();
+    if (patch.bold !== undefined) toggleTypingStyle(root, 'bold');
+    if (patch.italic !== undefined) toggleTypingStyle(root, 'italic');
+    if (patch.underline !== undefined) toggleTypingStyle(root, 'underline');
+    if (typeof patch.color === 'string') {
+      try { document.execCommand('foreColor', false, patch.color); } catch { /* */ }
+    }
+    if (typeof patch.fontFamily === 'string') {
+      try { document.execCommand('fontName', false, patch.fontFamily); } catch { /* */ }
+    }
+    runsRef.current = runsFromDom(root);
+    return true;
+  }
   const next = applyRunModel(runsRef.current, sel.start, sel.end, patch);
   runsRef.current = next;
   renderRuns(root, next);
   setFlatSelection(root, sel.start, sel.end);
   return true;
 }
+
+/** Excel: Ctrl+B with no selection arms bold for the next characters typed. */
+function toggleTypingStyle(root: HTMLElement, attr: 'bold' | 'italic' | 'underline'): void {
+  root.focus();
+  const cmd = attr === 'bold' ? 'bold' : attr === 'italic' ? 'italic' : 'underline';
+  try { document.execCommand(cmd); } catch { /* jsdom / restricted */ }
+}
+
 
 /** Normalized runs for commit: undefined when the draft carries no formatting. */
 export function normalizeEditorRuns(runs: readonly RichTextRun[]): RichTextRun[] | undefined {

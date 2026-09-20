@@ -11,7 +11,31 @@ describe('fillSelectionPatches (Excel Ctrl+Enter)', () => {
     for (const row of patches) for (const p of row) {
       expect(p.text).toBe('hello');
       expect(p.formula).toBeUndefined();
+      expect(p.richText).toBeUndefined();
     }
+  });
+
+  it('copies richText runs onto every filled cell', () => {
+    const runs = [
+      { text: 'Hi', style: { bold: true } },
+      { text: ' there', style: { color: '#FF0000' } },
+    ];
+    const patches = fillSelectionPatches(range, anchor, 'Hi there', runs);
+    for (const row of patches) for (const p of row) {
+      expect(p.text).toBe('Hi there');
+      expect(p.richText).toEqual([
+        { text: 'Hi', style: { bold: true } },
+        { text: ' there', style: { color: '#FF0000' } },
+      ]);
+    }
+  });
+
+  it('does not attach runs to formula fills', () => {
+    const runs = [{ text: '=A1', style: { bold: true } }];
+    const patches = fillSelectionPatches(range, anchor, '=A1', runs);
+    expect(patches[0]?.[0]?.formula).toBe('=A1');
+    expect(patches[0]?.[0]?.richText).toBeUndefined();
+    expect(patches[1]?.[0]?.formula).toBe('=A2');
   });
 
   it('parses numbers into values', () => {

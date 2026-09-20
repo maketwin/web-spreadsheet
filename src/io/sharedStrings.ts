@@ -6,7 +6,7 @@ import { normalizeRuns } from '../util/richText';
  * SheetJS flattens shared-string runs into plain text, so the `<si>` runs
  * (and inlineStr cells) are parsed here — same regex style as the rest of
  * the io layer. Theme-colored runs map through a fixed Office palette
- * (theme1.xml is not parsed; tint is ignored — see the known-deviations list).
+ * (theme1.xml is not parsed; tint is applied to the built-in Office palette — see the known-deviations list).
  */
 
 export interface SharedStringEntry {
@@ -114,13 +114,36 @@ function parseRPr(xml: string): RunStyle | undefined {
   return style;
 }
 
-/** rgb ARGB → CSS `#RRGGBB`; theme index → palette; indexed/auto → undefined. */
+/** rgb ARGB → CSS `#RRGGBB`; theme index → palette (+ optional tint); indexed/auto → undefined. */
 function parseColor(attrs: string): string | undefined {
   const rgb = attr(attrs, 'rgb');
   if (rgb !== undefined && /^[0-9A-Fa-f]{8}$/.test(rgb)) return `#${rgb.slice(2)}`;
   const theme = attr(attrs, 'theme');
-  if (theme !== undefined && /^\d+$/.test(theme)) return THEME_COLORS[Number(theme)] ?? undefined;
+  if (theme !== undefined && /^\d+$/.test(theme)) {
+    const base = THEME_COLORS[Number(theme)];
+    if (base === undefined) return undefined;
+    const tintRaw = attr(attrs, 'tint');
+    if (tintRaw === undefined || tintRaw === '') return base;
+    const tint = Number(tintRaw);
+    return Number.isFinite(tint) && tint !== 0 ? applyThemeTint(base, tint) : base;
+  }
   return undefined;
+}
+
+/**
+ * Excel OOXML theme tint: negative darkens toward black, positive lightens toward white.
+ * Still uses the built-in Office palette (theme1.xml not parsed).
+ */
+export function applyThemeTint(hex: string, tint: number): string {
+  const m = /^#?([0-9A-Fa-f]{6})$/.exec(hex.trim());
+  if (m === null) return hex;
+  const n = Number.parseInt(m[1]!, 16);
+  const channels = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => {
+    if (tint < 0) return Math.round(c * (1 + tint));
+    return Math.round(c * (1 - tint) + 255 * tint);
+  });
+  const clamp = (v: number): number => Math.max(0, Math.min(255, v));
+  return `#${channels.map((c) => clamp(c).toString(16).padStart(2, '0')).join('').toUpperCase()}`;
 }
 
 function flagOn(xml: string, tag: string): boolean {

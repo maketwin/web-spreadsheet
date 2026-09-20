@@ -195,6 +195,32 @@ export function applyRunStyle(runs: readonly RichTextRun[], start: number, end: 
   return mergeRuns(out);
 }
 
+/**
+ * Remap runs after a plain-text edit (formula bar / synced overlay).
+ * Uses a common-prefix / common-suffix splice so mid-string typing keeps
+ * surrounding run styles (Excel formula-bar behavior).
+ */
+export function applyTextChangeToRuns(runs: readonly RichTextRun[], before: string, after: string): RichTextRun[] {
+  if (before === after) return mergeRuns([...runs]);
+  const base = runs.length === 0 ? [{ text: before }] : runs;
+  let prefix = 0;
+  const minLen = Math.min(before.length, after.length);
+  while (prefix < minLen && before.charCodeAt(prefix) === after.charCodeAt(prefix)) prefix += 1;
+  let suffix = 0;
+  while (
+    suffix < before.length - prefix
+    && suffix < after.length - prefix
+    && before.charCodeAt(before.length - 1 - suffix) === after.charCodeAt(after.length - 1 - suffix)
+  ) {
+    suffix += 1;
+  }
+  const deleteEnd = before.length - suffix;
+  const inserted = after.slice(prefix, after.length - suffix);
+  let next = deleteRangeRuns(base, prefix, deleteEnd);
+  if (inserted.length > 0) next = insertAtRuns(next, prefix, inserted);
+  return next;
+}
+
 /** Resplit plain text into run form (undefined when unstyled, for storage). */
 export function runsFromText(text: string): RichTextRun[] | undefined {
   return normalizeRuns([{ text }]);

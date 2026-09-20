@@ -84,11 +84,29 @@ describe('RichEditor', () => {
     ]);
   });
 
-  it('applyRunStyle with a collapsed caret is a no-op', () => {
+  it('applyRunStyle with a collapsed caret arms typing style (Excel)', () => {
     const { api, root } = mountEditor([{ text: 'abc' }]);
     selectFlat(root, 1, 1);
-    expect(api().applyRunStyle({ bold: true })).toBe(false);
-    expect(api().getRuns()).toEqual([{ text: 'abc' }]);
+    // Returns true so toolbar/Ctrl+B treat it as handled; text runs stay until the next keystroke.
+    expect(api().applyRunStyle({ bold: true })).toBe(true);
+    expect(api().getRuns().map((r) => r.text).join('')).toBe('abc');
+  });
+
+  it('pastes HTML as styled runs at the caret', () => {
+    const { api, root } = mountEditor([{ text: 'ab' }]);
+    selectFlat(root, 1, 1);
+    const clipboardData = {
+      getData: (type: string) => (
+        type === 'text/html'
+          ? '<span style="font-weight:700;color:#FF0000">X</span>'
+          : type === 'text/plain' ? 'X' : ''
+      ),
+    };
+    const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent;
+    Object.defineProperty(event, 'clipboardData', { value: clipboardData });
+    root.dispatchEvent(event);
+    expect(api().getRuns().map((r) => r.text).join('')).toBe('aXb');
+    expect(api().getRuns().some((r) => r.text === 'X' && r.style?.bold === true)).toBe(true);
   });
 
   it('Ctrl+B toggles bold on the selection and stays in the editor', () => {
