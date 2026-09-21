@@ -65,6 +65,9 @@ registry.register('COUNTIF', { minArgs: 2, maxArgs: 2, evaluate: ([arr, criteria
 registry.register('SUMIF', { minArgs: 2, maxArgs: 3, evaluate: ([range, criteria, sumRange]) => sumIf(range, first(criteria), sumRange) });
 registry.register('SUMIFS', { minArgs: 3, maxArgs: 255, evaluate: (args) => sumIfs(args) });
 registry.register('COUNTIFS', { minArgs: 2, maxArgs: 255, evaluate: (args) => countIfs(args) });
+registry.register('AVERAGEIF', { minArgs: 2, maxArgs: 3, evaluate: ([range, criteria, avgRange]) => averageIf(range, first(criteria), avgRange) });
+registry.register('AVERAGEIFS', { minArgs: 3, maxArgs: 255, evaluate: (args) => averageIfs(args) });
+registry.register('TEXTJOIN', { minArgs: 3, maxArgs: 255, evaluate: (args) => textJoin(args) });
 registry.register('CONCATENATE', { minArgs: 1, maxArgs: 255, evaluate: (args) => flatten(args).map(text).join('') });
 registry.register('TEXT', { minArgs: 2, maxArgs: 2, evaluate: ([v, fmt]) => textFormat(first(v), first(fmt)) });
 registry.register('VALUE', { minArgs: 1, maxArgs: 1, evaluate: ([v]) => valueFn(first(v)) });
@@ -220,6 +223,55 @@ function countIfs(args: FormulaArgument[]): number {
     if (pairs.every((p) => matchesCriteria(p.keys[i] ?? null, p.crit))) count += 1;
   }
   return count;
+}
+
+
+function averageIf(range: FormulaArgument | undefined, criteria: FormulaValue | undefined, avgRange: FormulaArgument | undefined): FormulaArgument {
+  const keys = range === undefined ? [] : flatten([range]);
+  const vals = avgRange === undefined ? keys : flatten([avgRange]);
+  let total = 0;
+  let count = 0;
+  for (let i = 0; i < keys.length; i += 1) {
+    if (!matchesCriteria(keys[i] ?? null, criteria)) continue;
+    const n = numericOf(vals[i] ?? null);
+    if (n === undefined) continue;
+    total += n;
+    count += 1;
+  }
+  if (count === 0) return '#DIV/0!';
+  return total / count;
+}
+
+function averageIfs(args: FormulaArgument[]): FormulaArgument {
+  if (args.length < 3 || args.length % 2 === 0) return '#DIV/0!';
+  const avgVals = flatten([args[0]!]);
+  const pairs: { keys: FormulaValue[]; crit: FormulaValue | undefined }[] = [];
+  for (let i = 1; i + 1 < args.length; i += 2) {
+    pairs.push({ keys: flatten([args[i]!]), crit: first(args[i + 1]) });
+  }
+  let total = 0;
+  let count = 0;
+  for (let i = 0; i < avgVals.length; i += 1) {
+    if (!pairs.every((p) => matchesCriteria(p.keys[i] ?? null, p.crit))) continue;
+    const n = numericOf(avgVals[i] ?? null);
+    if (n === undefined) continue;
+    total += n;
+    count += 1;
+  }
+  if (count === 0) return '#DIV/0!';
+  return total / count;
+}
+
+function textJoin(args: FormulaArgument[]): string {
+  const delim = text(first(args[0]));
+  const ignoreEmpty = Boolean(first(args[1]));
+  const parts: string[] = [];
+  for (const entry of flatten(args.slice(2))) {
+    const s = text(entry);
+    if (ignoreEmpty && s === '') continue;
+    parts.push(s);
+  }
+  return parts.join(delim);
 }
 
 /** Excel-ish criteria: ">5", ">=10", "<>a", exact / case-insensitive text. */

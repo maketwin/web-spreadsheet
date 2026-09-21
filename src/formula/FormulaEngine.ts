@@ -57,14 +57,29 @@ export class FormulaEngine {
       this.store.setCell(r, c, { ...existing, text: '0', value: 0 }, sheetId);
       return;
     }
-    if (this.evalStack.has(scopedId)) {
-      const existing = this.store.getCell(r, c, sheetId);
-      this.store.setCell(r, c, { ...existing, text: '0', value: 0 }, sheetId);
-      return;
-    }
+    // Re-entrant echo of our own result write (store event -> formula sync ->
+    // setFormula): do NOT clobber the value the outer frame is about to write.
+    // Genuine cycles are caught above via the dependency graph, and resolveCell
+    // returns 0 for cells still on the stack (Excel iteration-off).
+    if (this.evalStack.has(scopedId)) return;
     this.evalStack.add(scopedId);
     try {
-      const value = scalar(evaluate(ast, (x, y, sheetName) => this.resolveCell(x, y, sheetName, sheetId), this.nameResolver));
+      const value = scalar(evaluate(
+        ast,
+        (x, y, sheetName) => this.resolveCell(x, y, sheetName, sheetId),
+        this.nameResolver,
+        {
+          isRowHidden: (row, sheetName) => {
+            let sid = sheetId;
+            if (sheetName !== undefined) {
+              const id = this.sheetIdForName(sheetName);
+              if (id === undefined) return false;
+              sid = id;
+            }
+            return this.store.getRow(row, sid)?.hide === true;
+          },
+        },
+      ));
       const existing = this.store.getCell(r, c, sheetId);
       this.store.setCell(r, c, { ...existing, text: String(value ?? ''), value }, sheetId);
     } catch (err) {

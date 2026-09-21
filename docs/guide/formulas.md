@@ -117,7 +117,8 @@ const ss = new Spreadsheet('app', {
 - **`$A$1` 绝对引用**：解析器接受 `$` 锚定（求值与普通引用一致）；公式平移（填充/排序/会话粘贴）尊重 `$` 锚定。
 - **错误值**：`#DIV/0!`、`#VALUE!`、`#REF!`、`#NAME?`、`#NUM!`、`#N/A`、`#NULL!` 会在运算与多数函数间传播；未知函数 → `#NAME?`。
 - **循环引用**：迭代关闭时按 Excel 习惯对环上单元格显示 `0`（`DependencyGraph.wouldCreateCycle` / 求值栈检测）。
-- 动态数组 / `XLOOKUP` / `LAMBDA` / `LET` / `FILTER` 等尚未实现。
+- `XLOOKUP` / `HLOOKUP` / `AVERAGEIF(S)` / `SUBTOTAL` / `TEXTJOIN` 已实现（`XLOOKUP` 仅精确与通配，无 spill；`SUBTOTAL` 的 7/8/10/11 未做）。动态数组 / `LAMBDA` / `LET` / `FILTER` 等仍未实现。
+- `SUBTOTAL`：隐藏行（含筛选与手动隐藏，共用 `RowMeta.hide`）一律跳过，不区分 Excel 的 1–11 vs 101–111 细别。
 - 字符串字面量的引号不会被特殊处理，含引号的参数会连同引号一起成为字符串。
 :::
 
