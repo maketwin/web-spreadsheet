@@ -192,7 +192,19 @@ function runsFromDom(root: HTMLElement): RichTextRun[] {
 }
 
 function flatText(root: HTMLElement): string {
-  return root.innerText.replace(/\u00a0/g, ' ');
+  // Walk the DOM instead of innerText: jsdom has no innerText, and the walk
+  // stays consistent with runsFromDom (spans per run, <br> for newlines).
+  let out = '';
+  const walk = (node: Node): void => {
+    if (node.nodeType === TEXT_NODE) { out += node.textContent ?? ''; return; }
+    if (node.nodeType === ELEMENT_NODE) {
+      const el = node as HTMLElement;
+      if (el.tagName.toLowerCase() === 'br') { out += '\n'; return; }
+      for (const child of Array.from(el.childNodes)) walk(child);
+    }
+  };
+  for (const child of Array.from(root.childNodes)) walk(child);
+  return out.replace(/\u00a0/g, ' ');
 }
 
 function flatSelectionOf(root: HTMLElement): { start: number; end: number } | null {

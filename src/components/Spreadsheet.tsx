@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties, type Disp
 import { applyMatrix, clearRange, clearRangeCmd, CompositeCommand } from '../util/rangeValues';
 import { fillSelectionPatches } from '../fill/fillSelection';
 import { caretOffsetFromLocalPoint } from '../util/caretHit';
+import { openHyperlink } from '../util/hyperlink';
 import { repeatOnRange } from '../commands/repeat';
 import { useMultiSelection } from './hooks/useMultiSelection';
 import { useClipboardSession } from './hooks/useClipboardSession';
@@ -163,6 +164,15 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       commitEditingRef.current?.(value, richRuns !== undefined ? normalizeRuns(richRuns) ?? undefined : undefined);
     }
     if (ctrl && !shift) {
+      const link = store.getCell(cell.r, cell.c)?.hyperlink;
+      if (link !== undefined) {
+        // Excel: Ctrl+click follows the hyperlink (external or in-sheet).
+        openHyperlink(store, link, (r, c, sheetId) => {
+          if (sheetId !== undefined) store.activateSheet(sheetId);
+          selectSelection(snapClickSelection(store, r, c));
+        });
+        return;
+      }
       // Excel Ctrl+click: keep the existing selection as an extra range, activate the new cell.
       const current = selectedRef.current;
       setMulti([...multiRef.current, ...(current !== null ? [current.range] : [])]);
@@ -822,21 +832,43 @@ function useFormulaValue(selected: Selection | null, editing: EditingCell | null
  */
 export function createFormulaSync(store: Store, engine: FormulaEngine): { readonly unsubscribe: () => void } {
   let syncing = false;
-  const deferred = new Map<string, string | undefined>();
+  interface DeferredCell { readonly r: number; readonly c: number; readonly sheetId: string | undefined }
+  const deferred = new Map<string, DeferredCell>();
   const unsubscribe = store.subscribe((event) => {
     if (event.type !== 'cell' || syncing) return;
     syncing = true;
     const sheetId = event.sheetId;
     const id = cellId(event.r, event.c);
-    syncCellFormula(engine, event.r, event.c, event.cell, sheetId);
-    if (store.isFlushing()) deferred.set(`${sheetId ?? ''}:${id}`, sheetId);
-    else engine.onCellChanged(id, sheetId);
+    if (store.isFlushing()) {
+      // Mid-batch states are transient (e.g. rows half-moved by a sort):
+      // defer all engine work to batch end so formulas never register
+      // against stale edges (false circular refs / clobbered values).
+      deferred.set(`${sheetId ?? ''}:${id}`, { r: event.r, c: event.c, sheetId });
+    } else {
+      syncCellFormula(engine, event.r, event.c, event.cell, sheetId);
+      engine.onCellChanged(id, sheetId);
+    }
     syncing = false;
   });
   const offBatchEnd = store.onBatchEnd(() => {
-    const entries = [...deferred.entries()];
+    if (deferred.size === 0) return;
+    syncing = true;
+    const entries = [...deferred.values()];
     deferred.clear();
-    entries.forEach(([key, sheetId]) => engine.onCellChanged(key.slice(key.indexOf(':') + 1), sheetId));
+    // Read the final cell state, not the per-event snapshot.
+    const current = entries.map((e) => ({ ...e, cell: store.getCell(e.r, e.c, e.sheetId) }));
+    // Removals before registrations: a formula that moved cells must drop its
+    // old graph edges before the new position registers, or the stale edge
+    // makes the new registration look circular.
+    for (const e of current) {
+      if (formulaText(e.cell) === undefined) engine.removeFormula(cellId(e.r, e.c), e.sheetId);
+    }
+    for (const e of current) {
+      const formula = formulaText(e.cell);
+      if (formula !== undefined) engine.setFormula(cellId(e.r, e.c), formula, formulaDependencies(formula), e.sheetId);
+    }
+    for (const e of current) engine.onCellChanged(cellId(e.r, e.c), e.sheetId);
+    syncing = false;
   });
   return { unsubscribe: () => { unsubscribe(); offBatchEnd(); } };
 }

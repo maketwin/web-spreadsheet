@@ -99,3 +99,5 @@ const action = KeyboardHandler.next('z', range, false, true); // Cmd+Z
 ```
 
 签名：`next(key, range, shiftKey?, metaKey?, ctrlKey?): KeyboardAction | null`。`KeyboardAction` 的 `type` 取值：`move`、`moveEdge`、`jump`、`page`（翻屏，附带 `pageDir: -1 | 1`，由调用方按视口行数解析）、`edit`、`backspace`、`insertDate`、`fill`、`clear`、`cancel`、`copy`、`paste`、`cut`、`type`、`menu`、`selectColumn`、`selectRow`。
+
+| `Ctrl/Cmd` + 单击（超链接单元格） | 打开超链接（外链或表内引用）；插入用菜单「插入 → 链接…」 |

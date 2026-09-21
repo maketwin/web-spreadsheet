@@ -19,6 +19,7 @@ import { selectionFillBands } from './selectionFill';
 import { hashFillText, usesHashOverflow } from './narrowOverflow';
 import { resolveCellAlign } from '../util/generalAlign';
 import { DEFAULT_FONT_SIZE } from '../util/defaults';
+import { HYPERLINK_COLOR } from '../util/hyperlink';
 import { formatValue } from '../format/NumberFormatter';
 import { ConditionalService } from '../conditional/ConditionalService';
 import { sparklineValues } from '../sparkline/values';
@@ -1111,7 +1112,7 @@ export class CanvasRenderer {
     const wrapping = style?.wrap === true;
 
     // Rich text runs render through the shared layout (formula view stays plain).
-    if (cell.formula === undefined && rawText === cell.text && isRich(cell.richText)) {
+    if (cell.hyperlink === undefined && cell.formula === undefined && rawText === cell.text && isRich(cell.richText)) {
       this.paintRichText(r, c, x, y, cw, rh, theme, style, cell.richText, align, valign, wrapping);
       return;
     }
@@ -1132,7 +1133,9 @@ export class CanvasRenderer {
     this.ctx.clip();
 
     const formatColor = fr?.color;
-    this.ctx.fillStyle = formatColor ?? style?.color ?? theme.text; this.ctx.textBaseline = 'middle'; this.ctx.textAlign = align;
+    const link = cell.hyperlink !== undefined;
+    this.ctx.fillStyle = link ? HYPERLINK_COLOR : (formatColor ?? style?.color ?? theme.text);
+    this.ctx.textBaseline = 'middle'; this.ctx.textAlign = align;
     const fontStr = `${style?.italic === true ? 'italic ' : ''}${style?.bold === true ? 'bold ' : ''}${fontSize}px ${fontFamily}`;
     this.ctx.font = fontStr;
     const indentPx = Math.max(0, Math.min(15, style?.indent ?? 0)) * Math.round(fontSize * 0.9);
@@ -1172,12 +1175,12 @@ export class CanvasRenderer {
       const ly = startY + i * lineH;
       if (ly > y + rh) break;
       this.ctx.fillText(line, tx, ly);
-      if (style?.underline === true || style?.strike === true) {
+      if (link || style?.underline === true || style?.strike === true) {
         const w = this.textMetrics.measure(this.ctx, fontStr, line);
         const sx = paintAlign === 'center' ? tx - w / 2 : paintAlign === 'right' ? tx - w : tx;
         this.ctx.strokeStyle = String(this.ctx.fillStyle);
         this.ctx.lineWidth = 1;
-        if (style?.underline === true) {
+        if (link || style?.underline === true) {
           this.ctx.beginPath();
           this.ctx.moveTo(sx, ly + fontSize * 0.38);
           this.ctx.lineTo(sx + w, ly + fontSize * 0.38);

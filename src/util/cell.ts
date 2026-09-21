@@ -34,6 +34,7 @@ export function cellFromText(oldCell: Cell | undefined, text: string): Cell {
   delete next.value;
   // Excel: replacing a cell's content wholesale drops per-character formatting.
   delete next.richText;
+  delete next.hyperlink;
 
   const formula = formulaText(next);
   if (formula !== undefined) {

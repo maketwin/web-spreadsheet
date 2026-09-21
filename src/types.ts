@@ -23,6 +23,13 @@ export interface RichTextRun {
   style?: RunStyle;
 }
 
+/** Cell hyperlink (Excel-style); comments/notes are intentionally unsupported. */
+export interface CellHyperlink {
+  /** URL, mailto:, or A1 / Sheet!A1 worksheet reference. */
+  readonly target: string;
+  readonly tooltip?: string;
+}
+
 export interface Cell {
   text: string;
   value?: CellValue;
@@ -38,6 +45,8 @@ export interface Cell {
   richText?: RichTextRun[];
   /** Ephemeral HTML-paste cell style; converted to styleId on apply, not serialized. */
   pasteStyle?: Partial<Style>;
+  /** Optional hyperlink; absent means no link. */
+  hyperlink?: CellHyperlink;
 }
 
 export interface RowMeta {

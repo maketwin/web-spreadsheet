@@ -166,3 +166,14 @@ const off = store.subscribe((e) => { /* StoreEvent */ });
 ::: warning
 直接调 `store.setCell` 不会进入撤销历史，也不会触发公式重算的完整链路。应用层的修改应通过 `cmdManager.execute(命令)` 走命令系统（见[命令与撤销](/guide/commands)），Store 直写仅适合初始化或只读场景。
 :::
+
+## 超链接
+
+单元格可选 `hyperlink: { target, tooltip? }`：
+
+- `target`：`http(s)://`、`mailto:`、`A1` 或 `Sheet1!A1`（及 `#Sheet1!A1`）
+- 插入：菜单 **插入 → 链接...**（`Ctrl+K` 若已绑定则同）
+- 打开：选中带链接的单元格后 **Ctrl+单击**（外链新标签；表内跳转）
+- **不做批注/备注**
+- xlsx：尽力通过 SheetJS 的 `l` 字段往返；JSON 工作簿完整保留
+

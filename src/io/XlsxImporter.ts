@@ -274,6 +274,13 @@ function convertSheet(ws: XLSX.WorkSheet, tables: StyleTables, styleIdx: Map<str
 function convertCell(raw: XLSX.CellObject): Cell {
   const cell = convertCellValue(raw);
   if (raw.f !== undefined) cell.formula = `=${raw.f}`;
+  const link = (raw as XLSX.CellObject & { l?: { Target?: string; Tooltip?: string } }).l;
+  if (link?.Target !== undefined && link.Target !== '') {
+    cell.hyperlink = {
+      target: link.Target,
+      ...(link.Tooltip !== undefined && link.Tooltip !== '' ? { tooltip: link.Tooltip } : {}),
+    };
+  }
   return cell;
 }
 

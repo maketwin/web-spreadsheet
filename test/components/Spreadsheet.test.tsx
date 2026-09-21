@@ -160,8 +160,13 @@ describe('Spreadsheet', () => {
       ],
     });
     render(<SpreadsheetComponent store={store} theme={false} />);
+    // Rich cells render the formula bar as a contenteditable with one span per
+    // run — simulate typing 'x' inside the first run's span, then Enter.
     const input = screen.getByLabelText('Formula bar');
-    fireEvent.change(input, { target: { value: '红x蓝' } });
+    const firstRunText = input.querySelector('span')?.firstChild;
+    expect(firstRunText?.textContent).toBe('红');
+    firstRunText!.textContent = '红x';
+    fireEvent.input(input);
     fireEvent.keyDown(input, { key: 'Enter' });
     const cell = store.getCell(0, 0);
     expect(cell?.text).toBe('红x蓝');

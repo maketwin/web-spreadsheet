@@ -18,6 +18,7 @@ export function exportXlsxBuffer(store: Store): ArrayBuffer {
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     applyNumberFormats(ws, cells, store, id);
     applyFormulas(ws, cells);
+    applyHyperlinks(ws, cells);
     applyMerges(ws, store.getMerges(id));
     XLSX.utils.book_append_sheet(wb, ws, name);
   }
@@ -35,6 +36,21 @@ export function exportXlsx(store: Store): Blob {
 }
 
 /** Formula cells export the formula itself (Excel recalculates on open); the cached value rides along. */
+
+/** SheetJS cell hyperlink field `l` (Target / Tooltip). */
+function applyHyperlinks(ws: XLSX.WorkSheet, cells: readonly [string, Cell][]): void {
+  for (const [key, cell] of cells) {
+    if (cell.hyperlink === undefined) continue;
+    const [r, c] = key.split(',').map(Number);
+    const addr = XLSX.utils.encode_cell({ r: r ?? 0, c: c ?? 0 });
+    const existing = (ws[addr] as XLSX.CellObject | undefined) ?? { t: 's', v: cell.text };
+    const link: { Target: string; Tooltip?: string } = { Target: cell.hyperlink.target };
+    if (cell.hyperlink.tooltip !== undefined) link.Tooltip = cell.hyperlink.tooltip;
+    (existing as XLSX.CellObject & { l?: { Target: string; Tooltip?: string } }).l = link;
+    ws[addr] = existing;
+  }
+}
+
 function applyFormulas(ws: XLSX.WorkSheet, cells: readonly [string, Cell][]): void {
   for (const [key, cell] of cells) {
     if (cell.formula === undefined) continue;

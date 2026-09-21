@@ -4,6 +4,16 @@
 
 ### Features (Excel parity)
 
+- **Hyperlinks (no comments)** — `Cell.hyperlink`; 插入 → 链接…; Ctrl+click opens;
+  blue underline paint; SheetJS `l` round-trip best-effort. Comments explicitly out of scope.
+
+- **Phase B data tools** — 数据 → 删除重复项… / 分列… (delimiter mode);
+  undoable commands `RemoveDuplicatesCommand` / `TextToColumnsCommand`.
+
+- **Phase A hot formulas** — `HLOOKUP`, `XLOOKUP` (exact + wildcard, no spill),
+  `AVERAGEIF`/`AVERAGEIFS`, `SUBTOTAL` (skips hidden rows; STDEV/VAR → `#N/A`),
+  `TEXTJOIN`. Plan: `docs/plan/2026-09-20-excel-parity-hot-features.md`.
+
 - **Indent / text rotation / numfmt color** — `Style.indent` + toolbar; `textRotation` select; custom formats `[Red]`/`[>100]` with paint color.
 - **CF cellValue + expanded DV** — 单元格值规则; validation decimal / textLength / custom.
 - **Cross-app HTML paste styles** — `<td>` bold/color/fill → `pasteStyle` → styleId.
