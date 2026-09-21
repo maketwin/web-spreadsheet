@@ -8,6 +8,9 @@ import type { ChartType } from '../../charts/types';
 import type { SparklineType } from '../../sparkline/types';
 import { DeleteColCommand } from '../../commands/impl/DeleteCol';
 import { DeleteRowCommand } from '../../commands/impl/DeleteRow';
+import { RemoveDuplicatesCommand } from '../../commands/impl/RemoveDuplicates';
+import { TextToColumnsCommand } from '../../commands/impl/TextToColumns';
+import { SetHyperlinkCommand } from '../../commands/impl/SetHyperlink';
 import { InsertColCommand } from '../../commands/impl/InsertCol';
 import { InsertRowCommand } from '../../commands/impl/InsertRow';
 import { SetRangeStyleCommand } from '../../commands/impl/SetRangeStyle';
@@ -37,6 +40,9 @@ import { importXlsx } from '../../io/XlsxImporter';
 import { AboutDialog } from './dialogs/AboutDialog';
 import { ChartDialog } from './dialogs/ChartDialog';
 import { DataValidationDialog, type ValidationConfig } from './dialogs/DataValidationDialog';
+import { RemoveDuplicatesDialog } from './dialogs/RemoveDuplicatesDialog';
+import { TextToColumnsDialog } from './dialogs/TextToColumnsDialog';
+import { HyperlinkDialog } from './dialogs/HyperlinkDialog';
 import { FindReplaceDialog } from './dialogs/FindReplaceDialog';
 import { InsertColDialog, type InsertColValues } from './dialogs/InsertColDialog';
 import { InsertRowDialog, type InsertRowValues } from './dialogs/InsertRowDialog';
@@ -173,6 +179,7 @@ function insertItems(): NonNullable<MenuProps['items']> {
   return [
     item('insert:chart', '图表...'),
     item('insert:sparkline', '迷你图...'),
+    item('insert:hyperlink', '链接...'),
     divider('insert:divider:1'),
     item('insert:row', '插入行...'),
     item('insert:col', '插入列...'),
@@ -255,6 +262,9 @@ function dataItems(ctx: MenuBarProps): NonNullable<MenuProps['items']> {
     divider('data:divider:2'),
     item('data:sortAsc', '升序排序'),
     item('data:sortDesc', '降序排序'),
+    divider('data:divider:3'),
+    item('data:removeDuplicates', '删除重复项...'),
+    item('data:textToColumns', '分列...'),
   ];
 }
 
@@ -320,6 +330,7 @@ function runEditAction(key: string, ctx: MenuContext, openDialog: (name: DialogN
 function runInsertAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void): void {
   if (key === 'insert:chart') openDialog('chart');
   if (key === 'insert:sparkline') openDialog('sparkline');
+  if (key === 'insert:hyperlink') openDialog('hyperlink');
   if (key === 'insert:row') openDialog('insertRow');
   if (key === 'insert:col') openDialog('insertCol');
   if (key === 'insert:deleteRow') execute(ctx, new DeleteRowCommand({ r: ctx.selected?.r1 ?? 0, count: selectedRows(ctx.selected) }));
@@ -408,6 +419,8 @@ function freezeActiveCell(ctx: MenuContext): { r: number; c: number } {
 
 function runDataAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void): void {
   if (key === 'data:validation') openDialog('dataValidation');
+  if (key === 'data:removeDuplicates') openDialog('removeDuplicates');
+  if (key === 'data:textToColumns') openDialog('textToColumns');
   if (key === 'data:autoFilter') toggleAutoFilter(ctx);
   if (key === 'data:clearFilter') execute(ctx, new SetAutoFilterCriteriaCommand({ column: 0, mode: 'clearAll' }));
   if (key === 'data:reapplyFilter') reapplyAutoFilter(ctx.store);
@@ -563,6 +576,25 @@ function Dialogs({ dialog, setDialog, props, view, findService: svc }: { readonl
     <HistoryPanel open={dialog === 'history'} onCancel={close} cmdManager={props.cmdManager} />
     <PrintPreview open={dialog === 'printPreview'} onCancel={close} store={props.store} />
     <CfFormulaDialog open={dialog === 'cfFormula'} onCancel={close} onSubmit={(formula) => submitConditionalFormula(formula, props, close)} />
+    <RemoveDuplicatesDialog
+      open={dialog === 'removeDuplicates'}
+      columnLabels={duplicateColumnLabels(props)}
+      onCancel={close}
+      onSubmit={(columns, hasHeader) => submitRemoveDuplicates(columns, hasHeader, props, close)}
+    />
+    <TextToColumnsDialog
+      open={dialog === 'textToColumns'}
+      onCancel={close}
+      onSubmit={(options) => submitTextToColumns(options, props, close)}
+    />
+    <HyperlinkDialog
+      open={dialog === 'hyperlink'}
+      initial={hyperlinkInitial(props)}
+      canRemove={activeCellHasHyperlink(props)}
+      onCancel={close}
+      onSubmit={(values) => submitHyperlink(values, props, close)}
+      onRemove={() => clearHyperlink(props, close)}
+    />
   </>;
 }
 
@@ -728,3 +760,107 @@ function submitValidation(type: ValidationType, config: ValidationConfig, ctx: M
 
 
 export function allSheetRange(): RangeAddress { return { r1: 0, c1: 0, r2: TOTAL_ROWS - 1, c2: TOTAL_COLS - 1 }; }
+
+function colLabel(c: number): string {
+  let n = c;
+  let s = '';
+  do {
+    s = String.fromCharCode(65 + (n % 26)) + s;
+    n = Math.floor(n / 26) - 1;
+  } while (n >= 0);
+  return s;
+}
+
+function resolveDataToolRange(ctx: MenuContext): { r1: number; c1: number; r2: number; c2: number } | null {
+  if (ctx.selected === null) return null;
+  const sel = ctx.selected;
+  if (sel.r1 !== sel.r2 || sel.c1 !== sel.c2) return { r1: sel.r1, c1: sel.c1, r2: sel.r2, c2: sel.c2 };
+  return new FilterService(ctx.store).inferDataRegion(sel);
+}
+
+function rangeHasMerge(store: MenuContext['store'], range: { r1: number; c1: number; r2: number; c2: number }): boolean {
+  return mergesIntersecting(store, range).length > 0;
+}
+
+function duplicateColumnLabels(ctx: MenuContext): string[] {
+  const range = resolveDataToolRange(ctx);
+  if (range === null) return ['列 A'];
+  const labels: string[] = [];
+  for (let c = range.c1; c <= range.c2; c += 1) {
+    const header = ctx.store.getCell(range.r1, c)?.text?.trim();
+    labels.push(header !== undefined && header.length > 0 ? `${colLabel(c)} (${header})` : `列 ${colLabel(c)}`);
+  }
+  return labels;
+}
+
+function submitRemoveDuplicates(columns: readonly number[], hasHeader: boolean, ctx: MenuContext, close: () => void): void {
+  const range = resolveDataToolRange(ctx);
+  if (range === null) { message.warning('请先选择数据区域'); close(); return; }
+  if (rangeHasMerge(ctx.store, range)) { message.warning('不能对合并单元格使用删除重复项'); close(); return; }
+  if (columns.length === 0) { close(); return; }
+  const cmd = new RemoveDuplicatesCommand({ ...range, columns: [...columns], hasHeader });
+  execute(ctx, cmd);
+  const n = cmd.removedCount();
+  message.success(n === 0 ? '未找到重复项' : `已删除 ${n} 个重复值`);
+  close();
+}
+
+function submitTextToColumns(options: { readonly delimiter: 'tab' | 'semicolon' | 'comma' | 'space' | 'custom'; readonly custom?: string; readonly consecutiveAsOne?: boolean }, ctx: MenuContext, close: () => void): void {
+  const range = resolveDataToolRange(ctx);
+  if (range === null) { message.warning('请先选择要分列的单元格'); close(); return; }
+  if (rangeHasMerge(ctx.store, range)) { message.warning('不能对合并单元格使用分列'); close(); return; }
+  execute(ctx, new TextToColumnsCommand({ r1: range.r1, c1: range.c1, r2: range.r2, options }));
+  message.success('分列完成');
+  close();
+}
+
+function activeCellAddr(ctx: MenuContext): { r: number; c: number } | null {
+  if (ctx.selected === null) return null;
+  if (ctx.activeCell !== undefined && ctx.activeCell !== null) return ctx.activeCell;
+  return { r: ctx.selected.r1, c: ctx.selected.c1 };
+}
+
+function activeCellHasHyperlink(ctx: MenuContext): boolean {
+  const addr = activeCellAddr(ctx);
+  if (addr === null) return false;
+  return ctx.store.getCell(addr.r, addr.c)?.hyperlink !== undefined;
+}
+
+function hyperlinkInitial(ctx: MenuContext): { target?: string; text?: string; tooltip?: string } {
+  const addr = activeCellAddr(ctx);
+  if (addr === null) return {};
+  const cell = ctx.store.getCell(addr.r, addr.c);
+  return {
+    target: cell?.hyperlink?.target ?? (cell?.text?.startsWith('http') === true ? cell.text : 'https://'),
+    text: cell?.text ?? '',
+    tooltip: cell?.hyperlink?.tooltip ?? '',
+  };
+}
+
+function submitHyperlink(
+  values: { readonly target: string; readonly text: string; readonly tooltip: string },
+  ctx: MenuContext,
+  close: () => void,
+): void {
+  const addr = activeCellAddr(ctx);
+  if (addr === null) { message.warning('请先选择单元格'); close(); return; }
+  const existing = ctx.store.getCell(addr.r, addr.c);
+  const display = values.text !== '' ? values.text : (existing?.text !== undefined && existing.text !== '' ? existing.text : values.target);
+  const link = {
+    target: values.target,
+    ...(values.tooltip !== '' ? { tooltip: values.tooltip } : {}),
+  };
+  // Write text+link as one cell via command that preserves hyperlink
+  execute(ctx, new SetHyperlinkCommand({ r: addr.r, c: addr.c, hyperlink: link, displayText: display }));
+  message.success('已插入超链接');
+  close();
+}
+
+function clearHyperlink(ctx: MenuContext, close: () => void): void {
+  const addr = activeCellAddr(ctx);
+  if (addr === null) { close(); return; }
+  execute(ctx, new SetHyperlinkCommand({ r: addr.r, c: addr.c, hyperlink: undefined }));
+  message.success('已删除超链接');
+  close();
+}
+
