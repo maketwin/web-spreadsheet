@@ -1175,7 +1175,9 @@ export class CanvasRenderer {
     const fontStr = `${style?.italic === true ? 'italic ' : ''}${style?.bold === true ? 'bold ' : ''}${fontSize}px ${fontFamily}`;
     this.ctx.font = fontStr;
     const indentPx = Math.max(0, Math.min(15, style?.indent ?? 0)) * Math.round(fontSize * 0.9);
-    const maxW = Math.max(4, cw - 6 - indentPx);
+    // Excel icon sets push left-aligned text right of the glyph (icon ≈ 10px + gaps).
+    const iconPad = align === 'left' && this.conditionalService.computeOverlay(this.opts.store, r, c).icon !== undefined ? 14 : 0;
+    const maxW = Math.max(4, cw - 6 - indentPx - iconPad);
     // Excel: numbers/dates that do not fit show ##### instead of overflowing.
     let paintText = text;
     let paintAlign = align;
@@ -1187,7 +1189,7 @@ export class CanvasRenderer {
       }
     }
     this.ctx.textAlign = paintAlign;
-    const tx = paintAlign === 'center' ? x + cw / 2 : paintAlign === 'right' ? x + cw - 3 : x + 3 + indentPx;
+    const tx = paintAlign === 'center' ? x + cw / 2 : paintAlign === 'right' ? x + cw - 3 : x + 3 + indentPx + iconPad;
     const lines = wrapping ? wrapTextLines((t) => this.textMetrics.measure(this.ctx, fontStr, t), paintText, maxW) : [paintText.replace(/\r?\n/g, '')];
     const lineH = fontSize * WRAP_LINE_HEIGHT;
     const contentHeight = lines.length * lineH;

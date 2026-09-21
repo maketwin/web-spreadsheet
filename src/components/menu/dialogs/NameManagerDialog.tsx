@@ -58,11 +58,23 @@ export const NameManagerDialog: FC<NameManagerDialogProps> = ({ open, store, onC
       // 名称登记在活动表上：列表/删除/公式解析（FormulaEngine.nameResolver 读活动表）
       // 都只查活动表的命名表；存到被引用表会导致名称立刻「消失」。
       const ownerSheetId = store.getActiveSheetId();
-      if (editing !== null && editing !== name) svc.remove(store, editing, ownerSheetId);
-      svc.add(store, name, `${r1},${c1}:${r2},${c2}`, ownerSheetId);
-      setEditOpen(false);
-      refresh();
-      message.success(editing !== null ? '已更新名称' : '已新建名称');
+      const write = (): void => {
+        if (editing !== null && editing !== name) svc.remove(store, editing, ownerSheetId);
+        // 登记在活动表（列表/删除/解析都读活动表），但 def.sheetId 保留被引用表，
+        // 供 FormulaEngine.nameResolver 生成跨表 range 节点。
+        const refSheetId = target.sheetId ?? ownerSheetId;
+        store.setNamedRange(name, { range: `${r1},${c1}:${r2},${c2}`, sheetId: refSheetId }, ownerSheetId);
+        setEditOpen(false);
+        refresh();
+        message.success(editing !== null ? '已更新名称' : '已新建名称');
+      };
+      // Excel: 重命名到已存在的名称需要确认覆盖。
+      const conflict = editing !== name && svc.lookup(store, name, ownerSheetId) !== undefined;
+      if (conflict) {
+        Modal.confirm({ title: `名称 ${name} 已存在`, content: '确定要覆盖现有定义吗？', okText: '覆盖', cancelText: '取消', onOk: write });
+        return;
+      }
+      write();
     }).catch(() => { /* validation error stays */ });
   };
 

@@ -161,12 +161,17 @@ export class FormulaEngine {
     const parts = def.range.split(':');
     const start = parts[0]?.split(',').map(Number) ?? [];
     const end = parts[1]?.split(',').map(Number) ?? start;
+    // 引用其他表时生成带 sheetName 的节点，否则按本表求值（对齐 Excel）。
+    const sheetName = def.sheetId !== undefined && def.sheetId !== this.store.getActiveSheetId()
+      ? this.sheetNameForId(def.sheetId)
+      : undefined;
     return {
       type: 'range',
       x1: start[1] ?? 0,
       y1: start[0] ?? 0,
       x2: end[1] ?? 0,
       y2: end[0] ?? 0,
+      ...(sheetName !== undefined ? { sheetName } : {}),
     };
   };
 }

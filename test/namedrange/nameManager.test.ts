@@ -36,13 +36,17 @@ describe('name manager flows', () => {
   it('cross-sheet refersTo still registers the name on the active sheet', () => {
     const store = new Store();
     store.addSheet('Sheet2');
+    store.activateSheet('sheet-1'); // addSheet 会激活新表，切回用户视角的活动表
     const svc = new NamedRangeService();
     const target = parseNameBoxInput(store, 'Sheet2!A1:B2');
     expect(target).not.toBeNull();
     const { r1, c1, r2, c2 } = target!.range;
     // Dialog path: always register on the active sheet so list/remove/resolve see it.
-    svc.add(store, 'ext', `${r1},${c1}:${r2},${c2}`, store.getActiveSheetId());
-    expect(svc.lookup(store, 'ext')).toBeDefined();
+    const owner = store.getActiveSheetId();
+    store.setNamedRange('ext', { range: `${r1},${c1}:${r2},${c2}`, sheetId: target!.sheetId ?? owner }, owner);
+    const def = svc.lookup(store, 'ext');
+    expect(def).toBeDefined();
+    expect(def!.sheetId).not.toBe(owner); // 被引用表保留在 def 上
     expect(svc.resolveToA1(store, 'ext')).toBe('A1:B2');
   });
 });

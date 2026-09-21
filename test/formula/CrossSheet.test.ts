@@ -70,4 +70,19 @@ describe('Cross-sheet references', () => {
 
     expect(store.getCell(0, 0)?.value).toBe(99);
   });
+
+  it('named range referencing another sheet evaluates cross-sheet', () => {
+    const store = new Store();
+    const sheet2Id = store.addSheet('Sheet2');
+    store.setCell(0, 0, { text: '7', value: 7 }, sheet2Id);
+    store.setCell(1, 0, { text: '8', value: 8 }, sheet2Id);
+
+    store.activateSheet('sheet-1');
+    // Dialog path: name registered on the active sheet, def.sheetId keeps the target sheet.
+    store.setNamedRange('ext', { range: '0,0:1,0', sheetId: sheet2Id }, 'sheet-1');
+
+    const engine = new FormulaEngine(store);
+    engine.setFormula('0,0', '=SUM(ext)', []);
+    expect(store.getCell(0, 0)?.value).toBe(15);
+  });
 });

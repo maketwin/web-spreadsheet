@@ -4,6 +4,11 @@
 
 ### Features (Excel parity)
 
+- **Review fixes (P2/P3)** — icon-set percent stats cached per range (invalidated on
+  store events); left-aligned text pads right of icon glyphs; named ranges keep the
+  referenced sheet in `def.sheetId` so `FormulaEngine.nameResolver` evaluates
+  cross-sheet; name-rename conflicts ask before overwrite.
+
 - **Phase D conditional formatting** — icon sets (3 arrows / 3 traffic lights, percent
   or number thresholds), highlight shortcut dialogs (大于/小于/介于/等于), and
   管理规则… dialog (`SetSheetConditionalRulesCommand`, single-step undo; rules can be
