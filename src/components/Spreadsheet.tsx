@@ -134,6 +134,13 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     setSelectedChartId(null);
   }, []);
   const selectRange = useCallback((range: RangeAddress) => selectSelection(rangeSelection(range)), [selectSelection]);
+  /** Follow a hyperlink: external → window.open; in-sheet/workbook → navigate. */
+  const followHyperlink = useCallback((link: NonNullable<Cell['hyperlink']>) => {
+    openHyperlink(store, link, (r, c, sheetId) => {
+      if (sheetId !== undefined) store.activateSheet(sheetId);
+      selectSelection(snapClickSelection(store, r, c));
+    });
+  }, [store, selectSelection]);
   const onCellClick = useCallback((cell: CellAddress, shift: boolean, ctrl = false) => {
     if (painting && sourceStyle !== undefined) {
       const range = Range.single(cell.r, cell.c).toAddress();
@@ -168,10 +175,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       const link = store.getCell(cell.r, cell.c)?.hyperlink;
       if (link !== undefined) {
         // Excel: Ctrl+click follows the hyperlink (external or in-sheet).
-        openHyperlink(store, link, (r, c, sheetId) => {
-          if (sheetId !== undefined) store.activateSheet(sheetId);
-          selectSelection(snapClickSelection(store, r, c));
-        });
+        followHyperlink(link);
         return;
       }
       // Excel Ctrl+click: keep the existing selection as an extra range, activate the new cell.
@@ -183,7 +187,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     if (!ctrl) setMulti([]);
     // Excel: clicking a merged cell selects the whole merge; shift-extend snaps to merge edges.
     selectSelection(shift && selectedRef.current ? snapRangeSelection(store, extendSelection(selectedRef.current, cell)) : snapClickSelection(store, cell.r, cell.c));
-  }, [painting, sourceStyle, selectSelection, cmdManager, store, setMulti]);
+  }, [painting, sourceStyle, selectSelection, cmdManager, store, setMulti, followHyperlink]);
   const commitEditingRef = useRef<((value: string, runs?: RichTextRun[]) => void) | null>(null);
   const closeCtxMenu = useCallback(() => setCtxMenu(null), []);
   const onAutoFilterClick = useCallback((r: number, c: number, x: number, y: number) => {
@@ -225,7 +229,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const execCmd = useCallback((cmd: Command) => {
     if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store);
   }, [cmdManager, store]);
-  const { canvasRef, rendererRef } = useCanvasRenderer(store, selected, onCellClick, selectSelection, view, setView, cmdManager, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick);
+  const { canvasRef, rendererRef } = useCanvasRenderer(store, selected, onCellClick, selectSelection, view, setView, cmdManager, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick, followHyperlink);
   // Find highlights are sheet-tagged: the renderer only ever sees the active
   // sheet's slice, refreshed whenever either the matches or the sheet change.
   const [findHighlights, setFindHighlights] = useState<{ matches: readonly FindMatch[]; current: number } | null>(null);
@@ -759,17 +763,17 @@ const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editin
   />;
 };
 
-function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick: (cell: CellAddress, shift: boolean, ctrl: boolean) => void, onSelectionChange: (selection: Selection) => void, view: ViewState, setView: Dispatch<SetStateAction<ViewState>>, cmdManager: CommandManager | undefined, onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => void, onCellContextMenu: (cell: CellAddress, x: number, y: number) => void, onAutoFilterClick: (r: number, c: number, x: number, y: number) => void): { canvasRef: RefObject<HTMLCanvasElement>; rendererRef: RefObject<CanvasRenderer | null> } {
+function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick: (cell: CellAddress, shift: boolean, ctrl: boolean) => void, onSelectionChange: (selection: Selection) => void, view: ViewState, setView: Dispatch<SetStateAction<ViewState>>, cmdManager: CommandManager | undefined, onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => void, onCellContextMenu: (cell: CellAddress, x: number, y: number) => void, onAutoFilterClick: (r: number, c: number, x: number, y: number) => void, onHyperlinkClick: (link: NonNullable<Cell['hyperlink']>) => void): { canvasRef: RefObject<HTMLCanvasElement>; rendererRef: RefObject<CanvasRenderer | null> } {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<CanvasRenderer | null>(null);
-  const callbacks = useRef({ onCellClick, onSelectionChange, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick });
+  const callbacks = useRef({ onCellClick, onSelectionChange, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick, onHyperlinkClick });
   const selectedLiveRef = useRef(selected);
-  callbacks.current = { onCellClick, onSelectionChange, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick };
+  callbacks.current = { onCellClick, onSelectionChange, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick, onHyperlinkClick };
   selectedLiveRef.current = selected;
   useEffect(() => {
     if (canvasRef.current === null) return undefined;
     const currentSelection = selectedLiveRef.current;
-    const base = { canvas: canvasRef.current, store, zoom: view.zoom, showFormula: view.showFormula, showGrid: view.showGrid, frozenRows: view.frozenRows, frozenCols: view.frozenCols, onCellClick: (cell: CellAddress, shift?: boolean, ctrl?: boolean) => flushSync(() => callbacks.current.onCellClick(cell, shift === true, ctrl === true)), onSelectionChange: (range: RangeAddress, active?: CellAddress, anchor?: CellAddress) => flushSync(() => callbacks.current.onSelectionChange(snapRangeSelection(store, rangeSelection(range, anchor ?? selectedLiveRef.current?.anchor, active ?? { r: range.r2, c: range.c2 })))), onColumnSelect: (c: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(columnSelection(c, TOTAL_ROWS, shift && current?.kind === 'column' ? current.anchor.c : c)); }), onRowSelect: (r: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(rowSelection(r, TOTAL_COLS, shift && current?.kind === 'row' ? current.anchor.r : r)); }), onSheetSelect: () => flushSync(() => callbacks.current.onSelectionChange(sheetSelection(allSheetRange()))), onRowResize: (r: number, height: number) => { const cmd = new SetRowHeight({ r, height }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColResize: (c: number, width: number) => { const cmd = new SetColWidth({ c, width }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onRowDblClick: (r: number) => { const fit = autoFitRowHeight(store, r); const cmd = new SetRowHeight({ r, height: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColDblClick: (c: number) => { const fit = autoFitColWidth(store, c); const cmd = new SetColWidth({ c, width: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onFill: (source: RangeAddress, target: RangeAddress, ctrlKey: boolean) => { const cmd = new FillRangeCommand({ ctrlKey, source, target }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onMoveRange: (source: RangeAddress, target: RangeAddress, copy?: boolean) => { const op = makeMoveRange({ source, target, copy }); if (cmdManager !== undefined) cmdManager.execute(op); else op.execute(store); }, onZoom: (delta: number) => setView((current) => ({ ...current, zoom: Math.min(200, Math.max(50, current.zoom + delta)) })), onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => callbacks.current.onHeaderContextMenu(info, x, y), onCellContextMenu: (cell: CellAddress, x: number, y: number) => callbacks.current.onCellContextMenu(cell, x, y), onAutoFilterClick: (r: number, c: number, x: number, y: number) => callbacks.current.onAutoFilterClick(r, c, x, y) };
+    const base = { canvas: canvasRef.current, store, zoom: view.zoom, showFormula: view.showFormula, showGrid: view.showGrid, frozenRows: view.frozenRows, frozenCols: view.frozenCols, onCellClick: (cell: CellAddress, shift?: boolean, ctrl?: boolean) => flushSync(() => callbacks.current.onCellClick(cell, shift === true, ctrl === true)), onHyperlinkClick: (cell: CellAddress) => { const link = store.getCell(cell.r, cell.c)?.hyperlink; if (link !== undefined) flushSync(() => callbacks.current.onHyperlinkClick(link)); }, onSelectionChange: (range: RangeAddress, active?: CellAddress, anchor?: CellAddress) => flushSync(() => callbacks.current.onSelectionChange(snapRangeSelection(store, rangeSelection(range, anchor ?? selectedLiveRef.current?.anchor, active ?? { r: range.r2, c: range.c2 })))), onColumnSelect: (c: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(columnSelection(c, TOTAL_ROWS, shift && current?.kind === 'column' ? current.anchor.c : c)); }), onRowSelect: (r: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(rowSelection(r, TOTAL_COLS, shift && current?.kind === 'row' ? current.anchor.r : r)); }), onSheetSelect: () => flushSync(() => callbacks.current.onSelectionChange(sheetSelection(allSheetRange()))), onRowResize: (r: number, height: number) => { const cmd = new SetRowHeight({ r, height }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColResize: (c: number, width: number) => { const cmd = new SetColWidth({ c, width }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onRowDblClick: (r: number) => { const fit = autoFitRowHeight(store, r); const cmd = new SetRowHeight({ r, height: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColDblClick: (c: number) => { const fit = autoFitColWidth(store, c); const cmd = new SetColWidth({ c, width: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onFill: (source: RangeAddress, target: RangeAddress, ctrlKey: boolean) => { const cmd = new FillRangeCommand({ ctrlKey, source, target }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onMoveRange: (source: RangeAddress, target: RangeAddress, copy?: boolean) => { const op = makeMoveRange({ source, target, copy }); if (cmdManager !== undefined) cmdManager.execute(op); else op.execute(store); }, onZoom: (delta: number) => setView((current) => ({ ...current, zoom: Math.min(200, Math.max(50, current.zoom + delta)) })), onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => callbacks.current.onHeaderContextMenu(info, x, y), onCellContextMenu: (cell: CellAddress, x: number, y: number) => callbacks.current.onCellContextMenu(cell, x, y), onAutoFilterClick: (r: number, c: number, x: number, y: number) => callbacks.current.onAutoFilterClick(r, c, x, y) };
     const renderer = new CanvasRenderer(currentSelection === null ? base : { ...base, selectedRange: currentSelection.range, selectionKind: currentSelection.kind, activeCell: currentSelection.active });
     rendererRef.current = renderer;
     // Container resizes and devicePixelRatio changes (window dragged between

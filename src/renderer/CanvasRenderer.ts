@@ -36,6 +36,10 @@ export interface CanvasRendererOptions {
   activeCell?: CellAddress; zoom?: number; showGrid?: boolean; showFormula?: boolean;
   frozenRows?: number; frozenCols?: number;
   onCellClick?: (cell: CellAddress, shiftKey?: boolean, ctrlKey?: boolean) => void;
+  /** Plain (no-modifier) mouseup on a hyperlink cell without a drag — the
+   * Google-Sheets "click the link to open it" gesture. Fires only when the
+   * press and release landed on the same cell. */
+  onHyperlinkClick?: (cell: CellAddress) => void;
   onSelectionChange?: (range: RangeAddress, activeCell?: CellAddress, anchorCell?: CellAddress) => void;
   onColumnSelect?: (c: number, shiftKey: boolean) => void; onRowSelect?: (r: number, shiftKey: boolean) => void;
   onSheetSelect?: () => void; onRowResize?: (r: number, height: number) => void; onColResize?: (c: number, width: number) => void;
@@ -121,6 +125,9 @@ export class CanvasRenderer {
   private clipboardRange: RangeAddress | undefined;
   private antsOffset = 0;
   private antsTimer: number | null = null;
+  /** Press/release tracking for the hyperlink plain-click gesture. */
+  private pressedCell: CellAddress | null = null;
+  private pressedMoved = false;
 
   public constructor(private opts: CanvasRendererOptions) {
     const ctx = opts.canvas.getContext('2d');
@@ -346,12 +353,18 @@ export class CanvasRenderer {
       return;
     }
     this.dragAnchor = { type: 'cell', ...cell }; this.setSelectedCell(cell);
+    this.pressedCell = this.opts.store.getCell(cell.r, cell.c)?.hyperlink !== undefined && ev.shiftKey === false && ev.ctrlKey === false && ev.metaKey === false ? cell : null;
+    this.pressedMoved = false;
     if (ev.shiftKey) this.opts.onCellClick?.(cell, true); else this.opts.onCellClick?.(cell, false, ev.ctrlKey || ev.metaKey);
   };
   private readonly handleMouseMove = (ev: MouseEvent): void => {
     if (this.resizeHandler.isResizing()) { this.resizeHandler.onMouseMove(ev); return; }
     if (this.fillHandle.isDragging()) { this.fillHandle.onMouseMove(ev); return; }
     this.resizeHandler.onMouseMove(ev); this.fillHandle.onMouseMove(ev);
+    if (this.pressedCell !== null) {
+      const cell = this.pointerCell(ev.clientX, ev.clientY);
+      if (cell !== null && (cell.r !== this.pressedCell.r || cell.c !== this.pressedCell.c)) this.pressedMoved = true;
+    }
     if (this.moveDrag !== null) {
       // Excel tracks the Ctrl modifier for the whole drag, not just the press.
       const copy = ev.ctrlKey || ev.metaKey;
@@ -381,8 +394,12 @@ export class CanvasRenderer {
     const range = new Range({ r1: this.dragAnchor.r, c1: this.dragAnchor.c, r2: cell.r, c2: cell.c }).toAddress();
     this.setSelection(range, 'range', cell); this.opts.onSelectionChange?.(range, cell, { r: this.dragAnchor.r, c: this.dragAnchor.c });
   };
-  private readonly handleMouseUp = (): void => { if (this.resizeHandler.isResizing()) { this.resizeHandler.onMouseUp(); return; } if (this.fillHandle.isDragging()) { this.fillHandle.onMouseUp(); return; } if (this.moveDrag !== null) { const d = this.moveDrag; // Dropping back onto the source is a no-op, not a move — MoveRange would clear the cells.
-    if (d.moved && (d.target.r !== d.source.r1 || d.target.c !== d.source.c1)) this.opts.onMoveRange?.(d.source, Range.single(d.target.r, d.target.c).toAddress(), d.copy); this.moveDrag = null; this.opts.canvas.style.cursor = ''; this.invalidateAll(); return; } this.dragAnchor = null; };
+  private readonly handleMouseUp = (): void => { if (this.resizeHandler.isResizing()) { this.resizeHandler.onMouseUp(); this.pressedCell = null; return; } if (this.fillHandle.isDragging()) { this.fillHandle.onMouseUp(); this.pressedCell = null; return; } if (this.moveDrag !== null) { const d = this.moveDrag; // Dropping back onto the source is a no-op, not a move — MoveRange would clear the cells.
+    if (d.moved && (d.target.r !== d.source.r1 || d.target.c !== d.source.c1)) this.opts.onMoveRange?.(d.source, Range.single(d.target.r, d.target.c).toAddress(), d.copy); this.moveDrag = null; this.opts.canvas.style.cursor = ''; this.invalidateAll(); return; } this.dragAnchor = null;
+    const press = this.pressedCell;
+    this.pressedCell = null;
+    if (press !== null && !this.pressedMoved) this.opts.onHyperlinkClick?.(press);
+  };
   private readonly handleDblClick = (ev: MouseEvent): void => {
     if (this.resizeHandler.onDblClick(ev)) { ev.stopPropagation(); return; }
     // Excel: double-clicking the fill handle fills down to match adjacent columns.

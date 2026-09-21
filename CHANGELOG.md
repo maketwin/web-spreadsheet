@@ -49,6 +49,12 @@
 
 ### Bug Fixes (Excel parity, GUI 体验回归)
 
+- **P1 超链接：编辑文本丢链接 / 点击无响应** — `cellFromText` 不再在每次
+  文本提交时删除 `hyperlink`（Excel：编辑链接单元格的显示文字保留链接，
+  仅清空内容才移除；Delete 删格仍走 `clearRange` → 删除链接）。渲染器新增
+  `onHyperlinkClick`：在链接单元格上**普通按下并松开（无拖动）即打开链接**
+  （Google Sheets 习惯），Ctrl/Cmd+click 依旧可用；拖拽扩展选区不触发。
+
 - **P0 跨表撤销数据丢失** — 所有命令（26 处实现 + sheetSnapshot / merge /
   shiftFormulas / chart-anchor 辅助）在执行时捕获所在工作表并在该表上撤销/重做：
   修复"在 Sheet2 编辑 → 切回 Sheet1 → Ctrl+Z 把 Sheet1 同坐标数据清空"的
