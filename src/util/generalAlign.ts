@@ -7,6 +7,11 @@
 
 export type HAlign = 'left' | 'center' | 'right';
 
+/** Excel indent level → pixels: one level ≈ 0.9× the (zoomed) font size, levels clamped to 0..15. */
+export function indentPixels(style: { readonly indent?: number } | undefined, fontSize: number): number {
+  return Math.max(0, Math.min(15, style?.indent ?? 0)) * Math.round(fontSize * 0.9);
+}
+
 export function resolveCellAlign(
   styleAlign: HAlign | undefined,
   value: unknown,

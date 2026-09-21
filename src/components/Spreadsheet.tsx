@@ -27,6 +27,7 @@ import type { FindMatch } from '../find/FindReplaceService';
 import { PluginManager, type Plugin } from '../plugin/PluginManager';
 import { CanvasRenderer, COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS, type CellAddress } from '../renderer/CanvasRenderer';
 import { FillRangeCommand } from '../commands/impl/FillRange';
+import { adjustDecimalPlaces } from '../format/decimalPlaces';
 import { CreateChartCommand } from '../commands/impl/CreateChart';
 import { RemoveChartCommand } from '../commands/impl/RemoveChart';
 import { SetChartAnchorCommand } from '../commands/impl/SetChartAnchor';
@@ -68,7 +69,7 @@ import { loadWorkbook, DEFAULT_ID, saveWorkbook as saveToDB } from '../db/Workbo
 import type { Cell, Style, RichTextRun } from '../types';
 import { WRAP_LINE_HEIGHT, wrappedContentHeight } from '../util/wrapText';
 import { autoFitRowHeight, autofitRowHeights } from '../util/rowAutofit';
-import { resolveCellAlign } from '../util/generalAlign';
+import { indentPixels, resolveCellAlign } from '../util/generalAlign';
 import { DEFAULT_FONT_SIZE } from '../util/defaults';
 import { fillShortcut } from '../fill/fillShortcut';
 import { cycleDollars, endsWithRef, isPointTrigger, refAtCaret, upsertRef } from '../formula/pointMode';
@@ -1123,6 +1124,16 @@ function editorStyle(
     const lineCount = Math.max(1, value.split(/\r?\n/).length);
     height = Math.max(height, wrappedContentHeight(lineCount, fontSize));
   }
+  // Excel: the in-cell editor keeps the cell's indent (left padding for
+  // left-aligned text, right padding for right-aligned) instead of the text
+  // jumping to the cell edge while editing.
+  const editorAlign = resolveCellAlign(style?.align, (() => {
+    const live = store.getCell(cell.r, cell.c);
+    if (live !== undefined && typeof live.value === 'number') return live.value;
+    const n = Number(value);
+    return value.trim() !== '' && Number.isFinite(n) && !value.trim().startsWith('=') ? n : value;
+  })());
+  const indentPx = indentPixels(style, fontSize);
   return {
     left,
     top,
@@ -1139,13 +1150,10 @@ function editorStyle(
       style?.strike === true ? 'line-through' : '',
     ].filter(Boolean).join(' ') || undefined,
     color: style?.color ?? undefined,
-    textAlign: resolveCellAlign(style?.align, (() => {
-      const live = store.getCell(cell.r, cell.c);
-      if (live !== undefined && typeof live.value === 'number') return live.value;
-      const n = Number(value);
-      return value.trim() !== '' && Number.isFinite(n) && !value.trim().startsWith('=') ? n : value;
-    })()),
+    textAlign: editorAlign,
     lineHeight: `${WRAP_LINE_HEIGHT}`,
+    paddingLeft: editorAlign === 'left' ? 3 + indentPx : undefined,
+    paddingRight: editorAlign === 'right' ? 3 + indentPx : undefined,
     paddingTop: valign === 'top'
       ? 0
       : valign === 'middle'
@@ -1448,6 +1456,8 @@ const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly sto
       <Tooltip title="删除线"><Button size="small" type={current?.strike === true ? 'primary' : 'default'} icon={<StrikethroughOutlined />} aria-label="Strikethrough" onClick={() => style({ strike: !(current?.strike === true) })} /></Tooltip>
       <Tooltip title="增加缩进"><Button size="small" aria-label="Increase indent" onClick={() => style({ indent: Math.min(15, (current?.indent ?? 0) + 1) })}>→|</Button></Tooltip>
       <Tooltip title="减少缩进"><Button size="small" aria-label="Decrease indent" onClick={() => style({ indent: Math.max(0, (current?.indent ?? 0) - 1) })}>|←</Button></Tooltip>
+      <Tooltip title="增加小数位数"><Button size="small" aria-label="Increase decimal" onClick={() => { const next = adjustDecimalPlaces(current?.numberFormat, 1); if (next !== null) style({ numberFormat: next }); }}>.0→.00</Button></Tooltip>
+      <Tooltip title="减少小数位数"><Button size="small" aria-label="Decrease decimal" onClick={() => { const next = adjustDecimalPlaces(current?.numberFormat, -1); if (next !== null) style({ numberFormat: next }); }}>.00→.0</Button></Tooltip>
       <Select
         size="small"
         aria-label="Text rotation"

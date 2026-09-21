@@ -169,15 +169,16 @@ export function richContentHeight(lines: readonly RichLine[]): number {
 /**
  * Draw laid-out lines inside the cell rect anchored at `x`/`cw` with the
  * plain paths' alignment conventions (left inset 3px, center/right on the
- * rect). Underline/strike are stroked per segment so mixed styles stay put.
+ * rect; `indentPx` shifts left/right-anchored lines in by the cell indent).
+ * Underline/strike are stroked per segment so mixed styles stay put.
  */
-export function drawRichLines(ctx: CanvasRenderingContext2D, lines: readonly RichLine[], x: number, cw: number, contentTop: number, align: 'left' | 'center' | 'right'): void {
+export function drawRichLines(ctx: CanvasRenderingContext2D, lines: readonly RichLine[], x: number, cw: number, contentTop: number, align: 'left' | 'center' | 'right', indentPx = 0): void {
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
   let lineTop = contentTop;
   for (const line of lines) {
     const baselineY = lineTop + line.lineHeight / 2 + BASELINE_EM * line.maxFontSize;
-    let sx = align === 'center' ? x + cw / 2 - line.width / 2 : align === 'right' ? x + cw - PAD_X - line.width : x + PAD_X;
+    let sx = align === 'center' ? x + cw / 2 - line.width / 2 : align === 'right' ? x + cw - PAD_X - indentPx - line.width : x + PAD_X + indentPx;
     for (const seg of line.segments) {
       const by = baselineY + seg.baselineShift;
       ctx.font = seg.font;

@@ -15,6 +15,7 @@ import { TextMetricsCache } from '../renderer/cache/TextMetricsCache';
 import type { Store } from '../store/Store';
 import type { Style, RichTextRun } from '../types';
 import { parseRange } from '../util/cell';
+import { indentPixels } from '../util/generalAlign';
 import { isRich } from '../util/richText';
 import { WRAP_LINE_HEIGHT, wrapTextLines } from '../util/wrapText';
 import { drawRichLines, layoutRichText, richContentHeight } from '../renderer/richTextLayout';
@@ -303,8 +304,9 @@ export class PrintPainter {
     ctx.textAlign = align;
     const fontStr = `${style?.italic === true ? 'italic ' : ''}${style?.bold === true ? 'bold ' : ''}${fontSize}px ${fontFamily}`;
     ctx.font = fontStr;
-    const tx = align === 'center' ? x + cw / 2 : align === 'right' ? x + cw - 3 : x + 3;
-    const maxW = Math.max(4, cw - 6);
+    const indentPx = indentPixels(style, fontSize);
+    const tx = align === 'center' ? x + cw / 2 : align === 'right' ? x + cw - 3 - indentPx : x + 3 + indentPx;
+    const maxW = Math.max(4, cw - 6 - indentPx);
     const lines = wrapping ? wrapTextLines((t) => this.textMetrics.measure(ctx, fontStr, t), text, maxW) : [text.replace(/\r?\n/g, '')];
     const lineH = fontSize * WRAP_LINE_HEIGHT;
     const contentHeight = lines.length * lineH;
@@ -349,13 +351,14 @@ export class PrintPainter {
     ctx.rect(clipX, clipY, clipW, clipH);
     ctx.clip();
 
+    const indentPx = indentPixels(style, Math.max(8, Math.round(style?.fontSize ?? 11)));
     const lines = layoutRichText({
       runs,
       cellStyle: style,
       fontFamilyFallback: PRINT_FONT_STACK,
       colorFallback: PRINT_TEXT,
       measure: (font, text) => this.textMetrics.measure(ctx, font, text),
-      maxWidth: Math.max(4, cw - 6),
+      maxWidth: Math.max(4, cw - 6 - indentPx),
       wrap: wrapping,
       fontSizeScale: 1,
       fontSizeFloor: 8,
@@ -366,7 +369,7 @@ export class PrintPainter {
       : valign === 'middle'
         ? y + rh / 2 - contentHeight / 2
         : y + rh - 2 - contentHeight;
-    drawRichLines(ctx, lines, x, cw, contentTop, align);
+    drawRichLines(ctx, lines, x, cw, contentTop, align, indentPx);
     ctx.restore();
   }
 

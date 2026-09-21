@@ -1,5 +1,5 @@
 import { DEFAULT_FONT_SIZE } from './defaults';
-import { resolveCellAlign } from './generalAlign';
+import { indentPixels, resolveCellAlign } from './generalAlign';
 import { WRAP_LINE_HEIGHT, wrapTextLines } from './wrapText';
 import type { RichTextRun, Style } from '../types';
 import { isRich } from './richText';
@@ -100,9 +100,10 @@ export function caretOffsetFromLocalPoint(input: CaretHitInput): number {
 
   const align = resolveCellAlign(style?.align, input.value, { showFormula: false, formula: input.formula });
   const pad = 3;
+  const indentPx = indentPixels(style, baseSize);
   const fullW = widthOf(line, offset);
-  let origin = pad;
-  if (align === 'right') origin = input.cellW - pad - fullW;
+  let origin = pad + indentPx;
+  if (align === 'right') origin = input.cellW - pad - indentPx - fullW;
   else if (align === 'center') origin = (input.cellW - fullW) / 2;
   const x = input.localX - origin;
 

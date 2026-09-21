@@ -4,6 +4,10 @@
 
 ### Features (Excel parity)
 
+- **Decimal-places toolbar buttons** — 增加/减少小数位数 (`.0→.00` / `.00→.0`),
+  Excel Number-group behavior via `adjustDecimalPlaces` (general → `0.0`;
+  number/percent lower to custom strings; currency/date/time/scientific no-op).
+
 - **Review fixes (P2/P3)** — icon-set percent stats cached per range (invalidated on
   store events); left-aligned text pads right of icon glyphs; named ranges keep the
   referenced sheet in `def.sheetId` so `FormulaEngine.nameResolver` evaluates

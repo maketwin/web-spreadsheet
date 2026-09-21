@@ -17,7 +17,7 @@ import { parseRange } from '../util/cell';
 import { coveredBySameMerge } from '../util/merge';
 import { selectionFillBands } from './selectionFill';
 import { hashFillText, usesHashOverflow } from './narrowOverflow';
-import { resolveCellAlign } from '../util/generalAlign';
+import { indentPixels, resolveCellAlign } from '../util/generalAlign';
 import { DEFAULT_FONT_SIZE } from '../util/defaults';
 import { HYPERLINK_COLOR } from '../util/hyperlink';
 import { formatValue } from '../format/NumberFormatter';
@@ -1174,7 +1174,7 @@ export class CanvasRenderer {
     this.ctx.textBaseline = 'middle'; this.ctx.textAlign = align;
     const fontStr = `${style?.italic === true ? 'italic ' : ''}${style?.bold === true ? 'bold ' : ''}${fontSize}px ${fontFamily}`;
     this.ctx.font = fontStr;
-    const indentPx = Math.max(0, Math.min(15, style?.indent ?? 0)) * Math.round(fontSize * 0.9);
+    const indentPx = indentPixels(style, fontSize);
     // Excel icon sets push left-aligned text right of the glyph (icon ≈ 10px + gaps).
     const iconPad = align === 'left' && this.conditionalService.computeOverlay(this.opts.store, r, c).icon !== undefined ? 14 : 0;
     const maxW = Math.max(4, cw - 6 - indentPx - iconPad);
@@ -1189,7 +1189,11 @@ export class CanvasRenderer {
       }
     }
     this.ctx.textAlign = paintAlign;
-    const tx = paintAlign === 'center' ? x + cw / 2 : paintAlign === 'right' ? x + cw - 3 : x + 3 + indentPx + iconPad;
+    // Excel: indent shifts left-aligned text in from the left edge, and
+    // right-aligned text in from the right edge. The ##### overflow fill
+    // (paintAlign forced right on a left-aligned cell) stays flush right.
+    const rightIndent = align === 'right' ? indentPx : 0;
+    const tx = paintAlign === 'center' ? x + cw / 2 : paintAlign === 'right' ? x + cw - 3 - rightIndent : x + 3 + indentPx + iconPad;
     const lines = wrapping ? wrapTextLines((t) => this.textMetrics.measure(this.ctx, fontStr, t), paintText, maxW) : [paintText.replace(/\r?\n/g, '')];
     const lineH = fontSize * WRAP_LINE_HEIGHT;
     const contentHeight = lines.length * lineH;
@@ -1252,13 +1256,14 @@ export class CanvasRenderer {
     this.ctx.clip();
 
     const zoom = this.zoom();
+    const indentPx = indentPixels(style, Math.max(8, Math.round((style?.fontSize ?? DEFAULT_FONT_SIZE) * zoom)));
     const lines = layoutRichText({
       runs,
       cellStyle: style,
       fontFamilyFallback: theme.fontFamily,
       colorFallback: theme.text,
       measure: (font, text) => this.textMetrics.measure(this.ctx, font, text),
-      maxWidth: Math.max(4, cw - 6),
+      maxWidth: Math.max(4, cw - 6 - indentPx),
       wrap: wrapping,
       fontSizeScale: zoom,
       fontSizeFloor: 8,
@@ -1269,7 +1274,7 @@ export class CanvasRenderer {
       : valign === 'middle'
         ? y + rh / 2 - contentHeight / 2
         : y + rh - 2 - contentHeight;
-    drawRichLines(this.ctx, lines, x, cw, contentTop, align);
+    drawRichLines(this.ctx, lines, x, cw, contentTop, align, indentPx);
     this.ctx.restore();
   }
 
