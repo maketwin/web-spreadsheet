@@ -33,4 +33,16 @@ describe('name manager flows', () => {
     svc.add(store, 'vals', '0,0:1,0', store.getActiveSheetId());
     expect(svc.resolveFormula(store, '=SUM(vals)')).toBe('=SUM(0,0:1,0)');
   });
+  it('cross-sheet refersTo still registers the name on the active sheet', () => {
+    const store = new Store();
+    store.addSheet('Sheet2');
+    const svc = new NamedRangeService();
+    const target = parseNameBoxInput(store, 'Sheet2!A1:B2');
+    expect(target).not.toBeNull();
+    const { r1, c1, r2, c2 } = target!.range;
+    // Dialog path: always register on the active sheet so list/remove/resolve see it.
+    svc.add(store, 'ext', `${r1},${c1}:${r2},${c2}`, store.getActiveSheetId());
+    expect(svc.lookup(store, 'ext')).toBeDefined();
+    expect(svc.resolveToA1(store, 'ext')).toBe('A1:B2');
+  });
 });

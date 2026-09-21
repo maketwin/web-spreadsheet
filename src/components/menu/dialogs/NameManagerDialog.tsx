@@ -55,9 +55,11 @@ export const NameManagerDialog: FC<NameManagerDialogProps> = ({ open, store, onC
       const target = parseNameBoxInput(store, values.refersTo.trim());
       if (target === null) { message.error('引用无效，示例：A1、B2:D5、Sheet2!A1:B2'); return; }
       const { r1, c1, r2, c2 } = target.range;
-      const sheetId = target.sheetId ?? store.getActiveSheetId();
-      if (editing !== null && editing !== name) svc.remove(store, editing);
-      svc.add(store, name, `${r1},${c1}:${r2},${c2}`, sheetId);
+      // 名称登记在活动表上：列表/删除/公式解析（FormulaEngine.nameResolver 读活动表）
+      // 都只查活动表的命名表；存到被引用表会导致名称立刻「消失」。
+      const ownerSheetId = store.getActiveSheetId();
+      if (editing !== null && editing !== name) svc.remove(store, editing, ownerSheetId);
+      svc.add(store, name, `${r1},${c1}:${r2},${c2}`, ownerSheetId);
       setEditOpen(false);
       refresh();
       message.success(editing !== null ? '已更新名称' : '已新建名称');
