@@ -101,12 +101,21 @@ const ss = new Spreadsheet('app', {
 
 **`Alt + =`（AutoSum）**：在活动单元格生成 `=SUM(...)`——优先取上方连续的数字区域，其次取左侧——并进入编辑模式方便直接回车确认。
 
+## 名称管理器
+
+菜单「公式(M) → 名称管理器…」提供 Excel 同款的命名区域管理（对话框见 `src/components/menu/dialogs/NameManagerDialog.tsx`）：
+
+- **列表**：展示全部命名区域的名称与引用位置（A1 表示）；
+- **新建 / 编辑**：名称不能与单元格引用同形（如 `A1`）、不含空格；引用位置输入 A1 区域（经 `parseNameBoxInput` 解析为内部坐标存储）；
+- **删除**：移除命名后，引用该名称的公式在下次求值时得到 `#NAME?`；
+- 名称管理器操作**不进撤销栈**（与 Excel 一致）；左上角名称框跳转/新建命名的既有入口不受影响。
+
 ## 依赖图与重算
 
 - 每个公式的依赖（`A1`、`Sheet2!B2` 等）注册进 `DependencyGraph`；键为 `sheetId:单元格` 的 scoped key。
 - 某格变更时，`getAffected()` 用 BFS 收集全部下游公式，**只重算受影响的格子**。
 - 跨 sheet 依赖自动按 `SheetName:cellId` 键补查。
-- 循环引用不会死循环（BFS 有 visited 集合），环上公式只重算一次；引擎**没有**显式的循环引用检测或报错。
+- 循环引用有显式检测：`DependencyGraph.wouldCreateCycle` 在写边时拒绝成环，求值栈兜底；环上单元格按 Excel 习惯显示 `0`，不会死循环（BFS 亦有 visited 集合）。
 - 重算过程中的异常会被捕获并 `console.error`，不会导致 UI 崩溃。
 
 ## 已知限制

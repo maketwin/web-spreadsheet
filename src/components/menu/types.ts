@@ -25,7 +25,9 @@ export type DialogName =
   | 'find' | 'replace' | 'insertRow' | 'insertCol' | 'zoom' | 'numberFormat'
   | 'about' | 'shortcuts' | 'options' | 'plugins' | 'chart' | 'history' | 'printPreview'
   | 'dataValidation' | 'sparkline' | 'protectSheet' | 'unprotectSheet' | 'cfFormula'
-  | 'removeDuplicates' | 'textToColumns' | 'hyperlink';
+  | 'removeDuplicates' | 'textToColumns' | 'hyperlink'
+  | 'cfRules' | 'cfHighlightGt' | 'cfHighlightLt' | 'cfHighlightBetween' | 'cfHighlightEq'
+  | 'nameManager';
 
 export interface ViewState {
   readonly zoom: number;

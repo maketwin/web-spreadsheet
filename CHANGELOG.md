@@ -4,6 +4,14 @@
 
 ### Features (Excel parity)
 
+- **Phase D conditional formatting** — icon sets (3 arrows / 3 traffic lights, percent
+  or number thresholds), highlight shortcut dialogs (大于/小于/介于/等于), and
+  管理规则… dialog (`SetSheetConditionalRulesCommand`, single-step undo; rules can be
+  reordered / toggled disabled / deleted).
+
+- **Phase E name manager** — 公式(M) → 名称管理器…: list / create / edit / delete
+  named ranges (A1 input via `parseNameBoxInput`); not undoable, matching Excel.
+
 - **Hyperlinks (no comments)** — `Cell.hyperlink`; 插入 → 链接…; Ctrl+click opens;
   blue underline paint; SheetJS `l` round-trip best-effort. Comments explicitly out of scope.
 

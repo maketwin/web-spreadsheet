@@ -1024,6 +1024,42 @@ export class CanvasRenderer {
     const merged = { ...style, ...overlay.style };
     if (merged.bgcolor !== undefined) { this.ctx.fillStyle = merged.bgcolor; this.ctx.fillRect(x + 1, y + 1, cw - 2, rh - 2); }
     if (overlay.dataBar !== undefined) { this.paintDataBar(x, y, cw, rh, overlay.dataBar.ratio, overlay.dataBar.color); }
+    if (overlay.icon !== undefined) { this.paintIconSetIcon(x, y, rh, overlay.icon.icons, overlay.icon.level); }
+  }
+
+  /** Excel icon-set glyph at the left edge of the cell: arrows3 = ▲►▼, lights3 = ●●●. */
+  private paintIconSetIcon(x: number, y: number, rh: number, icons: 'arrows3' | 'lights3', level: 0 | 1 | 2): void {
+    const size = Math.min(10, rh - 6);
+    if (size <= 2) return;
+    const cx = x + 3 + size / 2;
+    const cy = y + rh / 2;
+    const half = size / 2;
+    this.ctx.save();
+    if (icons === 'lights3') {
+      this.ctx.fillStyle = level === 0 ? '#63BE7B' : level === 1 ? '#FFDD71' : '#F8696B';
+      this.ctx.beginPath();
+      this.ctx.arc(cx, cy, half, 0, Math.PI * 2);
+      this.ctx.fill();
+    } else {
+      this.ctx.fillStyle = level === 0 ? '#63BE7B' : level === 1 ? '#FFDD71' : '#F8696B';
+      this.ctx.beginPath();
+      if (level === 0) { // up triangle
+        this.ctx.moveTo(cx, cy - half);
+        this.ctx.lineTo(cx + half, cy + half);
+        this.ctx.lineTo(cx - half, cy + half);
+      } else if (level === 1) { // right triangle
+        this.ctx.moveTo(cx - half, cy - half);
+        this.ctx.lineTo(cx + half, cy);
+        this.ctx.lineTo(cx - half, cy + half);
+      } else { // down triangle
+        this.ctx.moveTo(cx - half, cy - half);
+        this.ctx.lineTo(cx + half, cy - half);
+        this.ctx.lineTo(cx, cy + half);
+      }
+      this.ctx.closePath();
+      this.ctx.fill();
+    }
+    this.ctx.restore();
   }
 
   /**

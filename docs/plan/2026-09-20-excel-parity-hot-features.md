@@ -123,9 +123,9 @@
 
 | # | 项 | Excel 对齐要点 | 主要落点 | 状态 |
 |---|----|----------------|----------|------|
-| D1 | 图标集 | 3/4/5 档常用套件（先做 3 色箭头或 3 灯）按百分位或数值阈值；canvas 绘图标 | `conditional/*`、`CanvasRenderer`、菜单 | 待办 |
-| D2 | 管理规则对话框 | 列出当前表（或选区）规则、启停、删除、优先级上/下移 | 新 dialog + `ConditionalService` API | 待办 |
-| D3 | 文档与测例 | formatting / data-features 交叉引用 | docs + tests | 待办 |
+| D1 | 图标集 | 3/4/5 档常用套件（先做 3 色箭头或 3 灯）按百分位或数值阈值；canvas 绘图标 | `conditional/*`、`CanvasRenderer`、菜单 | 完成 |
+| D2 | 管理规则对话框 | 列出当前表（或选区）规则、启停、删除、优先级上/下移 | 新 dialog + `ConditionalService` API | 完成 |
+| D3 | 文档与测例 | formatting / data-features 交叉引用 | docs + tests | 完成 |
 
 ### D 验收
 
@@ -143,10 +143,10 @@
 
 | # | 项 | 说明 | 状态 |
 |---|----|------|------|
-| E1 | 名称管理器 | 已有 `namedrange` 服务与名称框跳转；补「公式 → 名称管理器」列表/新建/删除/引用编辑 | 待办 |
-| E2 | 文档纠偏 | `docs/guide/rich-text.md`「已知偏差」已落后于 `37d5310`（公式栏 runs、typing style、混合字号）；改成与现实一致 | 待办 |
-| E3 | `INDIRECT` / `OFFSET`（可选） | 若 A 完成后仍高频被要再开；本轮默认**可选** | 待办（可选） |
-| E4 | CF「突出显示单元格」快捷 | 大于/小于/介于/等于 向导（可复用 cellValue） | 待办（可选） |
+| E1 | 名称管理器 | 已有 `namedrange` 服务与名称框跳转；补「公式 → 名称管理器」列表/新建/删除/引用编辑 | 完成 |
+| E2 | 文档纠偏 | `docs/guide/rich-text.md`「已知偏差」已落后于 `37d5310`（公式栏 runs、typing style、混合字号）；改成与现实一致 | 完成 |
+| E3 | `INDIRECT` / `OFFSET`（可选） | 若 A 完成后仍高频被要再开；本轮默认**可选** | 延期（可选，本轮未开） |
+| E4 | CF「突出显示单元格」快捷 | 大于/小于/介于/等于 向导（可复用 cellValue） | 完成 |
 
 ---
 

@@ -1,4 +1,4 @@
-import { BarChartOutlined, DatabaseOutlined, EditOutlined, FileOutlined, CheckOutlined, FormatPainterOutlined, LockOutlined, QuestionCircleOutlined, TableOutlined } from '@ant-design/icons';
+import { BarChartOutlined, DatabaseOutlined, EditOutlined, FileOutlined, CheckOutlined, FormatPainterOutlined, FunctionOutlined, LockOutlined, QuestionCircleOutlined, TableOutlined } from '@ant-design/icons';
 import { Dropdown, Form, Input, Modal, Switch, message } from 'antd';
 import type { MenuProps } from 'antd';
 import { useMemo, useRef, useState, useEffect, type FC, type ReactElement, type ReactNode } from 'react';
@@ -17,6 +17,9 @@ import { SetRangeStyleCommand } from '../../commands/impl/SetRangeStyle';
 import { SetRangeValues } from '../../commands/impl/SetRangeValues';
 import { SetNumberFormatCommand } from '../../commands/impl/SetNumberFormat';
 import { SetConditionalFormatCommand } from '../../commands/impl/SetConditionalFormat';
+import { ConditionalRulesDialog } from './dialogs/ConditionalRulesDialog';
+import { CfHighlightDialog } from './dialogs/CfHighlightDialog';
+import { NameManagerDialog } from './dialogs/NameManagerDialog';
 import type { ConditionalRule } from '../../conditional/ConditionalRule';
 import type { ValidationRule, ValidationType } from '../../validation/types';
 import { SetValidationCommand } from '../../commands/impl/SetValidation';
@@ -110,6 +113,7 @@ function topMenus(actions: MenuActions, view: ViewState, ctx: MenuBarProps): rea
     { key: 'edit', label: '编辑(E)', icon: <EditOutlined />, items: editItems() },
     { key: 'view', label: '视图(V)', icon: <TableOutlined />, items: viewItems(view) },
     { key: 'insert', label: '插入(I)', icon: <BarChartOutlined />, items: insertItems() },
+    { key: 'formula', label: '公式(M)', icon: <FunctionOutlined />, items: formulaItems() },
     { key: 'format', label: '格式(O)', icon: <FormatPainterOutlined />, items: formatItems(ctx) },
     { key: 'data', label: '数据(D)', icon: <DatabaseOutlined />, items: dataItems(ctx) },
     { key: 'review', label: '审阅(R)', icon: <LockOutlined />, items: reviewItems() },
@@ -245,7 +249,22 @@ function formatItems(ctx: MenuBarProps): NonNullable<MenuProps['items']> {
     divider('format:divider:3'),
     item('format:number', '数字格式...'),
     divider('format:divider:4'),
-    { key: 'format:conditional', label: '条件格式', children: [item('format:cf:dataBar', '数据条'), item('format:cf:colorScale', '色阶'), item('format:cf:cellValue', '单元格值'), item('format:cf:formula', '公式条件')] },
+    { key: 'format:conditional', label: '条件格式', children: [
+      item('format:cf:dataBar', '数据条'),
+      item('format:cf:colorScale', '色阶'),
+      { key: 'format:cf:iconSet', label: '图标集', children: [item('format:cf:iconArrows', '3 色箭头'), item('format:cf:iconLights', '3 灯')] },
+      { key: 'format:cf:highlight', label: '突出显示单元格规则', children: [item('format:cf:hl:gt', '大于...'), item('format:cf:hl:lt', '小于...'), item('format:cf:hl:between', '介于...'), item('format:cf:hl:eq', '等于...')] },
+      item('format:cf:cellValue', '单元格值'),
+      item('format:cf:formula', '公式条件'),
+      divider('format:cf:divider'),
+      item('format:cf:manageRules', '管理规则...'),
+    ] },
+  ];
+}
+
+function formulaItems(): NonNullable<MenuProps['items']> {
+  return [
+    item('formula:nameManager', '名称管理器...'),
   ];
 }
 
@@ -296,6 +315,7 @@ function runMenuAction(key: string, ctx: MenuContext, openDialog: (name: DialogN
   else if (key.startsWith('edit:')) runEditAction(key, ctx, openDialog);
   else if (key.startsWith('insert:')) runInsertAction(key, ctx, openDialog);
   else if (key.startsWith('format:')) runFormatAction(key, ctx, openDialog);
+  else if (key === 'formula:nameManager') openDialog('nameManager');
   else if (key.startsWith('view:')) runViewAction(key, view, openDialog, ctx);
   else if (key.startsWith('data:')) runDataAction(key, ctx, openDialog);
   else if (key.startsWith('review:')) runReviewAction(key, ctx, openDialog);
@@ -347,6 +367,13 @@ function runFormatAction(key: string, ctx: MenuContext, openDialog: (name: Dialo
     }
   }
   else if (key === 'format:cf:dataBar') applyConditionalDataBar(ctx);
+  else if (key === 'format:cf:iconArrows') applyConditionalIconSet(ctx, 'arrows3');
+  else if (key === 'format:cf:iconLights') applyConditionalIconSet(ctx, 'lights3');
+  else if (key === 'format:cf:manageRules') openDialog('cfRules');
+  else if (key === 'format:cf:hl:gt') openDialog('cfHighlightGt');
+  else if (key === 'format:cf:hl:lt') openDialog('cfHighlightLt');
+  else if (key === 'format:cf:hl:between') openDialog('cfHighlightBetween');
+  else if (key === 'format:cf:hl:eq') openDialog('cfHighlightEq');
   else if (key === 'format:cf:colorScale') applyConditionalColorScale(ctx);
   else if (key === 'format:cf:cellValue' && ctx.selected !== null) {
     execute(ctx, new SetConditionalFormatCommand({ ...ctx.selected, rules: [{ type: 'cellValue', operator: 'gt', value: 0, style: { bgcolor: '#FFC7CE', color: '#9C0006' } }] }));
@@ -576,6 +603,12 @@ function Dialogs({ dialog, setDialog, props, view, findService: svc }: { readonl
     <HistoryPanel open={dialog === 'history'} onCancel={close} cmdManager={props.cmdManager} />
     <PrintPreview open={dialog === 'printPreview'} onCancel={close} store={props.store} />
     <CfFormulaDialog open={dialog === 'cfFormula'} onCancel={close} onSubmit={(formula) => submitConditionalFormula(formula, props, close)} />
+    <ConditionalRulesDialog open={dialog === 'cfRules'} store={props.store} cmdManager={props.cmdManager} onCancel={close} />
+    <CfHighlightDialog open={dialog === 'cfHighlightGt'} operator="gt" onCancel={close} onSubmit={(v, v2) => submitConditionalHighlight('gt', v, v2, props, close)} />
+    <CfHighlightDialog open={dialog === 'cfHighlightLt'} operator="lt" onCancel={close} onSubmit={(v, v2) => submitConditionalHighlight('lt', v, v2, props, close)} />
+    <CfHighlightDialog open={dialog === 'cfHighlightBetween'} operator="between" onCancel={close} onSubmit={(v, v2) => submitConditionalHighlight('between', v, v2, props, close)} />
+    <CfHighlightDialog open={dialog === 'cfHighlightEq'} operator="eq" onCancel={close} onSubmit={(v, v2) => submitConditionalHighlight('eq', v, v2, props, close)} />
+    <NameManagerDialog open={dialog === 'nameManager'} store={props.store} onCancel={close} />
     <RemoveDuplicatesDialog
       open={dialog === 'removeDuplicates'}
       columnLabels={duplicateColumnLabels(props)}
@@ -683,6 +716,26 @@ function applyConditionalColorScale(ctx: MenuContext): void {
   const sel = ctx.selected ?? Range.single(0, 0).toAddress();
   const barRules: ConditionalRule[] = [{ type: 'colorScale', min: 0, max: 100, minColor: '#FFFFFF', maxColor: '#4A90D9' }];
   applyConditionalRules(ctx, sel, barRules);
+}
+
+/** 图标集：默认 Excel 阈值（百分比 67/33），按选区数值 min..max 分档。 */
+function applyConditionalIconSet(ctx: MenuContext, icons: 'arrows3' | 'lights3'): void {
+  const sel = ctx.selected ?? Range.single(0, 0).toAddress();
+  applyConditionalRules(ctx, sel, [{ type: 'iconSet', icons }]);
+}
+
+/** 突出显示快捷规则：Excel 默认浅红填充深红字。 */
+function submitConditionalHighlight(operator: 'gt' | 'lt' | 'between' | 'eq', value: string, value2: string | undefined, ctx: MenuContext, close: () => void): void {
+  const sel = ctx.selected ?? Range.single(0, 0).toAddress();
+  const num = Number(value);
+  const v: string | number = Number.isFinite(num) && value !== '' ? num : value;
+  const num2 = value2 === undefined ? Number.NaN : Number(value2);
+  const v2: string | number | undefined = value2 === undefined ? undefined : (Number.isFinite(num2) && value2 !== '' ? num2 : value2);
+  const rule: ConditionalRule = v2 === undefined
+    ? { type: 'cellValue', operator, value: v, style: { bgcolor: '#FFC7CE', color: '#9C0006' } }
+    : { type: 'cellValue', operator, value: v, value2: v2, style: { bgcolor: '#FFC7CE', color: '#9C0006' } };
+  applyConditionalRules(ctx, sel, [rule]);
+  close();
 }
 
 /** Shared tail of the data-bar / color-scale menu actions (command dispatch). */

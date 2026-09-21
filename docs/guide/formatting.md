@@ -53,13 +53,19 @@
 
 ## 条件格式
 
-三种规则类型（`ConditionalRule`），挂在范围上：
+五种规则类型（`ConditionalRule`），挂在范围上：
 
 | 类型 | 参数 | 效果 |
 |------|------|------|
 | `dataBar` | `{ min, max, color }` | 按值画数据条，比例 clamp 到 0–1 |
 | `colorScale` | `{ min, max, minColor, maxColor }` | 在两个十六进制颜色间按值线性插值背景色 |
+| `cellValue` | `{ operator, value, value2?, style }` | 大于/小于/介于/等于/包含等命中时应用样式（突出显示快捷规则的底层） |
 | `formula` | `{ formula, style }` | 公式为真时应用样式，公式支持跨 sheet 引用 |
+| `iconSet` | `{ icons, thresholds?, basis? }` | 图标集：`arrows3`（▲►▼）或 `lights3`（●●●），默认按选区 min..max 的百分比 67/33 分档（Excel 默认），`basis: 'num'` 时用字面值阈值 |
+
+菜单入口（格式 → 条件格式）：数据条 / 色阶 / 图标集（3 色箭头、3 灯）/ 突出显示单元格规则（大于、小于、介于、等于——Excel 默认浅红填充深红字）/ 单元格值 / 公式条件 / **管理规则…**。
+
+**管理规则**：列出当前表全部规则（应用范围、类型、规则摘要），支持启用/停用（`disabled`）、删除、同范围内上移/下移优先级；所有改动合并为一次 `SetSheetConditionalRulesCommand`，单步撤销。
 
 ```ts
 import { SetConditionalFormatCommand } from 'web-spreadsheet';
@@ -71,7 +77,7 @@ ss.cmdManager.execute(new SetConditionalFormatCommand(
 ));
 ```
 
-覆盖层（`ConditionalOverlay`）由 `ConditionalService.computeOverlay(store, r, c)` 实时计算，叠加在单元格原有样式之上；公式求值出错时不产生覆盖层。
+覆盖层（`ConditionalOverlay`：`style` / `dataBar` / `icon`）由 `ConditionalService.computeOverlay(store, r, c)` 实时计算，叠加在单元格原有样式之上；公式求值出错时不产生覆盖层。图标绘制在单元格左缘，xlsx 导出时图标集不写入（已知偏差）。
 
 ## 数据验证
 

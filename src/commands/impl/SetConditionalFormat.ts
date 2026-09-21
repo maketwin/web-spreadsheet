@@ -46,3 +46,44 @@ class RestoreConditionalFormat extends Command<RestoreConditionalFormatArgs> {
 function rangeKey(addr: RangeAddress): string {
   return `${addr.r1},${addr.c1}:${addr.r2},${addr.c2}`;
 }
+
+export interface SetSheetConditionalRulesArgs {
+  /** Full replacement: every [rangeKey, rules] entry for the sheet. */
+  readonly entries: ReadonlyArray<readonly [string, ConditionalRule[]]>;
+}
+
+/**
+ * Replace the whole sheet's conditional rules in one undoable step — used by
+ * the 管理规则 dialog (delete / reorder / toggle across multiple ranges).
+ */
+export class SetSheetConditionalRulesCommand extends Command<SetSheetConditionalRulesArgs> {
+  private oldEntries: Array<readonly [string, ConditionalRule[]]> | undefined;
+
+  public execute(store: Store): void {
+    this.oldEntries = store.getConditionalRules().map(([k, rules]) => [k, rules] as const);
+    applyEntries(store, this.args.entries);
+  }
+
+  public getUndo(): Command {
+    return new RestoreSheetConditionalRules({ entries: this.oldEntries ?? [] });
+  }
+}
+
+interface RestoreSheetConditionalRulesArgs {
+  readonly entries: ReadonlyArray<readonly [string, ConditionalRule[]]>;
+}
+
+class RestoreSheetConditionalRules extends Command<RestoreSheetConditionalRulesArgs> {
+  public execute(store: Store): void {
+    applyEntries(store, this.args.entries);
+  }
+
+  public getUndo(): Command {
+    return new SetSheetConditionalRulesCommand({ entries: this.args.entries });
+  }
+}
+
+function applyEntries(store: Store, entries: ReadonlyArray<readonly [string, ConditionalRule[]]>): void {
+  for (const [key] of store.getConditionalRules()) store.removeConditionalRule(key);
+  for (const [key, rules] of entries) store.setConditionalRule(key, rules);
+}

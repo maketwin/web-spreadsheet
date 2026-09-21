@@ -19,6 +19,7 @@ export class ConditionalService {
     const rules = store.getConditionalRules(sheetId);
     let style: Partial<Style> | undefined;
     let dataBar: ConditionalOverlay['dataBar'];
+    let icon: ConditionalOverlay['icon'];
 
     // Excel: a rule only paints cells inside the range it was created for.
     for (const [key, ruleList] of rules) {
@@ -26,20 +27,49 @@ export class ConditionalService {
       if (range === null) continue;
       if (r < range.r1 || r > range.r2 || c < range.c1 || c > range.c2) continue;
       for (const rule of ruleList) {
-        const overlay = this.applyRule(store, r, c, rule, sheetId);
+        if (rule.disabled === true) continue;
+        const overlay = this.applyRule(store, r, c, rule, range, sheetId);
         if (overlay.style !== undefined) style = { ...style, ...overlay.style };
         if (overlay.dataBar !== undefined) dataBar = overlay.dataBar;
+        if (overlay.icon !== undefined) icon = overlay.icon;
       }
     }
 
-    return { style, dataBar };
+    return { style, dataBar, icon };
   }
 
-  private applyRule(store: Store, r: number, c: number, rule: ConditionalRule, sheetId?: string): ConditionalOverlay {
+  private applyRule(store: Store, r: number, c: number, rule: ConditionalRule, range: { r1: number; c1: number; r2: number; c2: number }, sheetId?: string): ConditionalOverlay {
     if (rule.type === 'dataBar') return this.applyDataBar(store, r, c, rule, sheetId);
     if (rule.type === 'colorScale') return this.applyColorScale(store, r, c, rule, sheetId);
     if (rule.type === 'cellValue') return this.applyCellValue(store, r, c, rule, sheetId);
+    if (rule.type === 'iconSet') return this.applyIconSet(store, r, c, rule, range, sheetId);
     return this.applyFormula(store, rule, sheetId);
+  }
+
+  /** Excel icon set: value >= hi → top icon, >= lo → middle, else bottom. */
+  private applyIconSet(store: Store, r: number, c: number, rule: ConditionalRule & { type: 'iconSet' }, range: { r1: number; c1: number; r2: number; c2: number }, sheetId?: string): ConditionalOverlay {
+    const value = cellNumericValue(store.getCell(r, c, sheetId));
+    if (value === null) return {};
+    const [hiIn, loIn] = rule.thresholds ?? [67, 33];
+    let hi = hiIn;
+    let lo = loIn;
+    if ((rule.basis ?? 'percent') === 'percent') {
+      let min = Number.POSITIVE_INFINITY;
+      let max = Number.NEGATIVE_INFINITY;
+      for (let rr = range.r1; rr <= range.r2; rr += 1) {
+        for (let cc = range.c1; cc <= range.c2; cc += 1) {
+          const n = cellNumericValue(store.getCell(rr, cc, sheetId));
+          if (n === null) continue;
+          if (n < min) min = n;
+          if (n > max) max = n;
+        }
+      }
+      if (min > max) return {};
+      hi = min + (hiIn / 100) * (max - min);
+      lo = min + (loIn / 100) * (max - min);
+    }
+    const level = value >= hi ? 0 : value >= lo ? 1 : 2;
+    return { icon: { icons: rule.icons, level } };
   }
 
   private applyCellValue(store: Store, r: number, c: number, rule: ConditionalRule & { type: 'cellValue' }, sheetId?: string): ConditionalOverlay {
