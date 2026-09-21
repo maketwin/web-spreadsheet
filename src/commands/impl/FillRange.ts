@@ -18,28 +18,33 @@ export interface FillRangeArgs {
   readonly copy?: boolean;
   readonly source: RangeAddress;
   readonly target: RangeAddress;
+  /** Target sheet; defaults to the active sheet at execution time. */
+  readonly sheetId?: string;
 }
 
 export class FillRangeCommand extends Command<FillRangeArgs> {
   private oldCells: Array<{ r: number; c: number; cell: ReturnType<Store['getCell']> }> = [];
   private oldMerges: readonly string[] = [];
+  private execSheetId: string | undefined;
 
   public execute(store: Store): void {
     const { source, target } = this.args;
-    this.saveOldCells(store, target);
-    this.oldMerges = store.getMerges().filter((m) => rangesIntersect(parseMerge(m), target));
+    const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
+    this.execSheetId = sid;
+    this.saveOldCells(store, target, sid);
+    this.oldMerges = store.getMerges(sid).filter((m) => rangesIntersect(parseMerge(m), target));
     const ctrl = this.args.ctrlKey === true;
     const vertical = target.r2 > source.r2 || target.r1 < source.r1;
     if (vertical) {
-      for (let c = source.c1; c <= source.c2; c += 1) this.fillLine(store, source, target, c, true, ctrl);
+      for (let c = source.c1; c <= source.c2; c += 1) this.fillLine(store, source, target, c, true, ctrl, sid);
     } else {
-      for (let r = source.r1; r <= source.r2; r += 1) this.fillLine(store, source, target, r, false, ctrl);
+      for (let r = source.r1; r <= source.r2; r += 1) this.fillLine(store, source, target, r, false, ctrl, sid);
     }
-    this.fillMerges(store, source, target);
+    this.fillMerges(store, source, target, sid);
   }
 
   public getUndo(): Command {
-    return new RestoreFillRange({ cells: this.oldCells, merges: this.oldMerges, target: this.args.target });
+    return new RestoreFillRange({ cells: this.oldCells, merges: this.oldMerges, target: this.args.target, ...(this.execSheetId !== undefined ? { sheetId: this.execSheetId } : {}) });
   }
 
   /**
@@ -47,48 +52,48 @@ export class FillRangeCommand extends Command<FillRangeArgs> {
    * the extended area. Mismatched existing merges stay untouched (the fill
    * handle only creates the pattern it can replicate).
    */
-  private fillMerges(store: Store, source: RangeAddress, target: RangeAddress): void {
-    const sourceMerges = store.getMerges().map(parseMerge).filter((m) => rangeContains(source, m));
+  private fillMerges(store: Store, source: RangeAddress, target: RangeAddress, sid: string): void {
+    const sourceMerges = store.getMerges(sid).map(parseMerge).filter((m) => rangeContains(source, m));
     if (sourceMerges.length === 0) return;
     const srcRows = source.r2 - source.r1 + 1;
     const srcCols = source.c2 - source.c1 + 1;
     const rows = target.r2 - target.r1 + 1;
     const cols = target.c2 - target.c1 + 1;
     if (rows % srcRows !== 0 || cols % srcCols !== 0) return;
-    const existing = new Set(store.getMerges());
+    const existing = new Set(store.getMerges(sid));
     store.batch(() => {
       for (let i = 0; i < rows; i += srcRows) {
         for (let j = 0; j < cols; j += srcCols) {
           if (i === 0 && j === 0) continue;
           for (const m of sourceMerges) {
             const name = mergeToString({ r1: target.r1 + i + (m.r1 - source.r1), c1: target.c1 + j + (m.c1 - source.c1), r2: target.r1 + i + (m.r2 - source.r1), c2: target.c1 + j + (m.c2 - source.c1) });
-            if (!existing.has(name)) store.addMerge(name);
+            if (!existing.has(name)) store.addMerge(name, sid);
           }
         }
       }
     });
   }
 
-  private saveOldCells(store: Store, target: RangeAddress): void {
+  private saveOldCells(store: Store, target: RangeAddress, sid: string): void {
     this.oldCells = [];
     for (let r = target.r1; r <= target.r2; r += 1) {
       for (let c = target.c1; c <= target.c2; c += 1) {
-        this.oldCells.push({ r, c, cell: store.getCell(r, c) });
+        this.oldCells.push({ r, c, cell: store.getCell(r, c, sid) });
       }
     }
   }
 
-  private fillLine(store: Store, source: RangeAddress, target: RangeAddress, lineIndex: number, vertical: boolean, ctrl: boolean): void {
+  private fillLine(store: Store, source: RangeAddress, target: RangeAddress, lineIndex: number, vertical: boolean, ctrl: boolean, sid: string): void {
     const srcLen = vertical ? source.r2 - source.r1 + 1 : source.c2 - source.c1 + 1;
     const cellAt = (i: number): ReturnType<Store['getCell']> =>
-      vertical ? store.getCell(source.r1 + i, lineIndex) : store.getCell(lineIndex, source.c1 + i);
+      vertical ? store.getCell(source.r1 + i, lineIndex, sid) : store.getCell(lineIndex, source.c1 + i, sid);
 
     const texts: string[] = [];
     for (let i = 0; i < srcLen; i += 1) texts.push(cellAt(i)?.text ?? '');
 
     const setAt = (i: number, cell: ReturnType<Store['getCell']>): void => {
-      if (vertical) store.setCell(source.r1 + i, lineIndex, cell);
-      else store.setCell(lineIndex, source.c1 + i, cell);
+      if (vertical) store.setCell(source.r1 + i, lineIndex, cell, sid);
+      else store.setCell(lineIndex, source.c1 + i, cell, sid);
     };
 
     const extend = (from: number, count: number, direction: 1 | -1): void => {
@@ -155,16 +160,18 @@ interface RestoreFillRangeArgs {
   readonly cells: ReadonlyArray<{ r: number; c: number; cell: ReturnType<Store['getCell']> }>;
   readonly merges: readonly string[];
   readonly target: RangeAddress;
+  readonly sheetId?: string;
 }
 
 class RestoreFillRange extends Command<RestoreFillRangeArgs> {
   public execute(store: Store): void {
+    const sid = this.args.sheetId ?? store.getActiveSheetId();
     store.batch(() => {
       // Remove merges created by the fill inside the target, restore prior ones.
-      store.getMerges().filter((m) => rangesIntersect(parseMerge(m), this.args.target)).forEach((m) => store.removeMerge(m));
-      this.args.merges.forEach((m) => { if (!store.getMerges().includes(m)) store.addMerge(m); });
+      store.getMerges(sid).filter((m) => rangesIntersect(parseMerge(m), this.args.target)).forEach((m) => store.removeMerge(m, sid));
+      this.args.merges.forEach((m) => { if (!store.getMerges(sid).includes(m)) store.addMerge(m, sid); });
       for (const { r, c, cell } of this.args.cells) {
-        store.setCell(r, c, cell);
+        store.setCell(r, c, cell, sid);
       }
     });
   }

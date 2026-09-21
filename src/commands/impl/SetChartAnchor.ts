@@ -6,6 +6,8 @@ import { sameAnchor } from '../../charts/geometry';
 export interface SetChartAnchorArgs {
   readonly id: string;
   readonly anchor: ChartAnchor;
+  /** Target sheet; defaults to the active sheet at execution time. */
+  readonly sheetId?: string;
 }
 
 /**
@@ -15,14 +17,17 @@ export interface SetChartAnchorArgs {
 export class SetChartAnchorCommand extends Command<SetChartAnchorArgs> {
   private oldAnchor: ChartAnchor | undefined;
   private oldSpec: ChartSpec | undefined;
+  private execSheetId: string | undefined;
 
   public execute(store: Store): void {
-    const spec = store.getCharts().find((chart) => chart.id === this.args.id);
+    const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
+    this.execSheetId = sid;
+    const spec = store.getCharts(sid).find((chart) => chart.id === this.args.id);
     if (spec === undefined) return;
     this.oldSpec = spec;
     this.oldAnchor = spec.anchor;
     if (sameAnchor(spec.anchor, this.args.anchor)) return;
-    store.addChart({ ...spec, anchor: this.args.anchor });
+    store.addChart({ ...spec, anchor: this.args.anchor }, sid);
   }
 
   public override isNoOp(): boolean {
@@ -30,7 +35,7 @@ export class SetChartAnchorCommand extends Command<SetChartAnchorArgs> {
   }
 
   public getUndo(): Command {
-    return new RestoreChartAnchor({ id: this.args.id, spec: this.oldSpec });
+    return new RestoreChartAnchor({ id: this.args.id, spec: this.oldSpec, ...(this.execSheetId !== undefined ? { sheetId: this.execSheetId } : {}) });
   }
 
   public override describe(): string {
@@ -41,11 +46,12 @@ export class SetChartAnchorCommand extends Command<SetChartAnchorArgs> {
 interface RestoreChartAnchorArgs {
   readonly id: string;
   readonly spec: ChartSpec | undefined;
+  readonly sheetId?: string;
 }
 
 class RestoreChartAnchor extends Command<RestoreChartAnchorArgs> {
   public execute(store: Store): void {
-    if (this.args.spec !== undefined) store.addChart(this.args.spec);
+    if (this.args.spec !== undefined) store.addChart(this.args.spec, this.args.sheetId);
   }
 
   public getUndo(): Command {

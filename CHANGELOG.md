@@ -49,6 +49,20 @@
 
 ### Bug Fixes (Excel parity, GUI 体验回归)
 
+- **P0 跨表撤销数据丢失** — 所有命令（26 处实现 + sheetSnapshot / merge /
+  shiftFormulas / chart-anchor 辅助）在执行时捕获所在工作表并在该表上撤销/重做：
+  修复"在 Sheet2 编辑 → 切回 Sheet1 → Ctrl+Z 把 Sheet1 同坐标数据清空"的
+  数据损毁路径（`RestoreSheet` 恢复时也不再误清源表）。
+- **P0 撤销隔离回归测试** — `CrossSheetUndo.test.ts`：单元格 / 样式 / 插入行 /
+  列宽四类命令的跨表 undo/redo 隔离。
+- **F4 重复过期命令** — `CommandManager.clear()` 同时清空 `lastExecuted`，
+  导入新工作簿后 F4 不再重放旧命令。
+- **缩放重建渲染器** — Ctrl+滚轮缩放 / 显示公式 / 网格切换改为
+  `CanvasRenderer.setViewOptions` 就地更新（`AxisIndex`/`VirtualScroller`
+  支持默认行列尺寸更新），不再每步销毁重建渲染器、重绑 DOM 事件。
+- **浮动图表手势监听器** — 组件在手势中途卸载时立即解绑 window
+  pointermove/pointerup（此前要等下一次 pointerup 才移除）。
+
 - **Rich text P0 vs Excel** — Formula-bar edits keep run styles via
   `applyTextChangeToRuns`; collapsed caret Ctrl+B/I/U arms typing style;
   double-click places caret near the click; in-cell paste accepts HTML runs.

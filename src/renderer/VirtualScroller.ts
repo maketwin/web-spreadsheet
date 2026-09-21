@@ -58,6 +58,13 @@ export class VirtualScroller {
     this.opts = { ...this.opts, viewportW: w, viewportH: h };
   }
 
+  /** Update fallback sizes (zoom changes); explicit per-row/col sizes stay. */
+  public setDefaults(defaultRowHeight: number, defaultColWidth: number): void {
+    this.opts = { ...this.opts, defaultRowHeight, defaultColWidth };
+    this.rows.setDefaultSize(defaultRowHeight);
+    this.cols.setDefaultSize(defaultColWidth);
+  }
+
   public getRowHeight(r: number): number {
     return this.rows.getSize(r);
   }

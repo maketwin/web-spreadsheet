@@ -122,7 +122,7 @@ export class CanvasRenderer {
   private antsOffset = 0;
   private antsTimer: number | null = null;
 
-  public constructor(private readonly opts: CanvasRendererOptions) {
+  public constructor(private opts: CanvasRendererOptions) {
     const ctx = opts.canvas.getContext('2d');
     if (ctx === null) throw new Error('Canvas 2D context not available');
     this.ctx = ctx;
@@ -251,6 +251,22 @@ export class CanvasRenderer {
   }
 
   public invalidateAll(): void { this.blitValid = false; this.dirty.invalidateAll(); this.scheduleRender(); }
+
+  /** Zoom / formula-visibility / grid-visibility changes in place — no renderer
+   * teardown, event rebind, or cache loss (the React effect used to rebuild the
+   * whole renderer per Ctrl+scroll step). */
+  public setViewOptions(opts: { readonly zoom?: number; readonly showFormula?: boolean; readonly showGrid?: boolean }): void {
+    const zoomChanged = opts.zoom !== undefined && opts.zoom !== (this.opts.zoom ?? 100);
+    if (opts.zoom !== undefined) this.opts = { ...this.opts, zoom: opts.zoom };
+    if (opts.showFormula !== undefined) this.opts = { ...this.opts, showFormula: opts.showFormula };
+    if (opts.showGrid !== undefined) this.opts = { ...this.opts, showGrid: opts.showGrid };
+    if (zoomChanged) {
+      // Unset rows/cols fall back to the zoom-scaled defaults; explicit sizes
+      // (already stored in the scroller) are untouched.
+      this.scroller.setDefaults(this.defaultRowHeight(), this.defaultColWidth());
+    }
+    this.invalidateAll();
+  }
 
   /** Show/clear the marching-ants border around a copied or cut source range (Excel). */
   public setClipboardRange(range: RangeAddress | undefined): void {
@@ -1826,4 +1842,3 @@ function cssHeaderText(_theme: CanvasTheme): string {
 export function selectionFillColor(theme: CanvasTheme): string {
   return typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && CSS.supports('color', 'color-mix(in srgb, #000 10%, transparent)') ? `color-mix(in srgb, ${theme.accent} 18%, transparent)` : theme.selected;
 }
-

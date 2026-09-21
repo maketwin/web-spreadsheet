@@ -4,15 +4,20 @@ import type { ChartSpec } from '../../charts/types';
 
 export interface RemoveChartArgs {
   readonly id: string;
+  /** Target sheet; defaults to the active sheet at execution time. */
+  readonly sheetId?: string;
 }
 
 /** Delete a chart from the active sheet (undo restores it). */
 export class RemoveChartCommand extends Command<RemoveChartArgs> {
   private oldChart: ChartSpec | undefined;
+  private execSheetId: string | undefined;
 
   public execute(store: Store): void {
-    this.oldChart = store.getCharts().find((chart) => chart.id === this.args.id);
-    store.removeChart(this.args.id);
+    const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
+    this.execSheetId = sid;
+    this.oldChart = store.getCharts(sid).find((chart) => chart.id === this.args.id);
+    store.removeChart(this.args.id, sid);
   }
 
   /** Removing an id that no longer exists changed nothing — keep it out of history. */
@@ -21,7 +26,7 @@ export class RemoveChartCommand extends Command<RemoveChartArgs> {
   }
 
   public getUndo(): Command {
-    return new RestoreRemovedChart({ chart: this.oldChart });
+    return new RestoreRemovedChart({ chart: this.oldChart, ...(this.execSheetId !== undefined ? { sheetId: this.execSheetId } : {}) });
   }
 
   public override describe(): string {
@@ -31,11 +36,12 @@ export class RemoveChartCommand extends Command<RemoveChartArgs> {
 
 interface RestoreRemovedChartArgs {
   readonly chart: ChartSpec | undefined;
+  readonly sheetId?: string;
 }
 
 class RestoreRemovedChart extends Command<RestoreRemovedChartArgs> {
   public execute(store: Store): void {
-    if (this.args.chart !== undefined) store.addChart(this.args.chart);
+    if (this.args.chart !== undefined) store.addChart(this.args.chart, this.args.sheetId);
   }
 
   public getUndo(): Command {

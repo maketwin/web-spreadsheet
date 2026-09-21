@@ -11,7 +11,7 @@
 export class AxisIndex {
   private sizes: Float64Array;
   private prefix: Float64Array | null = null;
-  private readonly defaultSize: () => number;
+  private defaultSize: () => number;
 
   public constructor(private count: number, defaultSize: number) {
     this.sizes = new Float64Array(count);
@@ -27,6 +27,12 @@ export class AxisIndex {
     if (count > this.count) next.fill(Number.NaN, this.count);
     this.sizes = next;
     this.count = count;
+    this.prefix = null;
+  }
+
+  /** Update the fallback size for unset indexes (e.g. zoom changes) and drop cached prefixes. */
+  public setDefaultSize(size: number): void {
+    this.defaultSize = () => size;
     this.prefix = null;
   }
 

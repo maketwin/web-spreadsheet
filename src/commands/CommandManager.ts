@@ -80,5 +80,8 @@ export class CommandManager {
   public clear(): void {
     this.undoStack = [];
     this.redoStack = [];
+    // A cleared history must not leave a stale F4 repeat target — repeating a
+    // command from a replaced workbook would corrupt the new document.
+    this.lastExecuted = undefined;
   }
 }

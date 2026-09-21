@@ -26,8 +26,8 @@ export interface SheetSnapshot {
   readonly autoFilters?: ReadonlyArray<readonly [string, AutoFilterState]>;
 }
 
-export function captureSheet(store: Store): SheetSnapshot {
-  const activeId = store.getActiveSheetId();
+export function captureSheet(store: Store, sheetId?: string): SheetSnapshot {
+  const activeId = sheetId ?? store.getActiveSheetId();
   const otherCells: Array<readonly [string, number, number, Cell]> = [];
   for (const { id } of store.getSheets()) {
     if (id === activeId) continue;
@@ -48,9 +48,9 @@ export function captureSheet(store: Store): SheetSnapshot {
     if (af !== undefined) autoFilters.push([id, af]);
   }
   return {
-    cells: store.getCells().map(([key, cell]) => [...parseKey(key), cell] as const),
-    rows: collectRows(store),
-    cols: collectCols(store),
+    cells: store.getCells(activeId).map(([key, cell]) => [...parseKey(key), cell] as const),
+    rows: collectRows(store, activeId),
+    cols: collectCols(store, activeId),
     merges: store.getMerges(),
     charts: store.getCharts(),
     otherCells,
@@ -61,27 +61,28 @@ export function captureSheet(store: Store): SheetSnapshot {
   };
 }
 
-export function restoreSheet(store: Store, snapshot: SheetSnapshot): void {
-  store.getCells().forEach(([key]) => {
+export function restoreSheet(store: Store, snapshot: SheetSnapshot, sheetId?: string): void {
+  const sid = sheetId ?? store.getActiveSheetId();
+  store.getCells(sid).forEach(([key]) => {
     const [r, c] = parseKey(key);
-    store.setCell(r, c, undefined);
+    store.setCell(r, c, undefined, sid);
   });
-  for (let r = 0; r < TOTAL_ROWS; r += 1) store.setRow(r, undefined);
-  for (let c = 0; c < TOTAL_COLS; c += 1) store.setCol(c, undefined);
-  store.getMerges().forEach((range) => store.removeMerge(range));
-  snapshot.cells.forEach(([r, c, cell]) => store.setCell(r, c, cell));
-  snapshot.rows.forEach(([r, meta]) => store.setRow(r, meta));
-  snapshot.cols.forEach(([c, meta]) => store.setCol(c, meta));
-  snapshot.merges.forEach((range) => store.addMerge(range));
-  restoreCharts(store, snapshot.charts ?? []);
-  restoreOtherCells(store, snapshot.otherCells ?? []);
+  for (let r = 0; r < TOTAL_ROWS; r += 1) store.setRow(r, undefined, sid);
+  for (let c = 0; c < TOTAL_COLS; c += 1) store.setCol(c, undefined, sid);
+  store.getMerges(sid).forEach((range) => store.removeMerge(range, sid));
+  snapshot.cells.forEach(([r, c, cell]) => store.setCell(r, c, cell, sid));
+  snapshot.rows.forEach(([r, meta]) => store.setRow(r, meta, sid));
+  snapshot.cols.forEach(([c, meta]) => store.setCol(c, meta, sid));
+  snapshot.merges.forEach((range) => store.addMerge(range, sid));
+  restoreCharts(store, snapshot.charts ?? [], sid);
+  restoreOtherCells(store, snapshot.otherCells ?? [], sid);
   restoreStructures(store, snapshot);
 }
 
 /** Reset the active sheet's floating charts to the snapshot (anchor-shift undo). */
-function restoreCharts(store: Store, charts: ReadonlyArray<ChartSpec>): void {
-  store.getCharts().forEach((chart) => store.removeChart(chart.id));
-  charts.forEach((chart) => store.addChart(chart));
+function restoreCharts(store: Store, charts: ReadonlyArray<ChartSpec>, sheetId: string): void {
+  store.getCharts(sheetId).forEach((chart) => store.removeChart(chart.id, sheetId));
+  charts.forEach((chart) => store.addChart(chart, sheetId));
 }
 
 /** Reset named ranges / conditional formats / validation / autofilters to the snapshot. */
@@ -102,8 +103,10 @@ function restoreStructures(store: Store, snapshot: SheetSnapshot): void {
   autoFilters.forEach(([id, state]) => store.setAutoFilter(state, id));
 }
 
-/** Reset every other sheet's cells back to the snapshotted set. */
-export function restoreOtherCells(store: Store, cells: ReadonlyArray<readonly [string, number, number, Cell]>): void {
+/** Reset every other sheet's cells back to the snapshotted set. `originSheetId`
+ * is the sheet the snapshot itself restores — never wipe it here, even when
+ * undo runs while a different sheet is active. */
+export function restoreOtherCells(store: Store, cells: ReadonlyArray<readonly [string, number, number, Cell]>, originSheetId?: string): void {
   const activeId = store.getActiveSheetId();
   const snapshotted = new Set<string>();
   for (const [sheetId, r, c, cell] of cells) {
@@ -112,6 +115,7 @@ export function restoreOtherCells(store: Store, cells: ReadonlyArray<readonly [s
   }
   for (const { id } of store.getSheets()) {
     if (id === activeId) continue; // the active sheet is restored by the snapshot itself
+    if (originSheetId !== undefined && id === originSheetId) continue; // the origin sheet too (may differ from active)
     for (const [key] of store.getCells(id)) {
       if (snapshotted.has(`${id}:${key}`)) continue;
       const [r, c] = parseKey(key);
@@ -126,19 +130,19 @@ export function parseKey(key: string): readonly [number, number] {
   return [Number.parseInt(row, 10), Number.parseInt(col, 10)];
 }
 
-function collectRows(store: Store): ReadonlyArray<readonly [number, RowMeta]> {
+function collectRows(store: Store, sheetId: string): ReadonlyArray<readonly [number, RowMeta]> {
   const rows: Array<readonly [number, RowMeta]> = [];
   for (let r = 0; r < TOTAL_ROWS; r += 1) {
-    const meta = store.getRow(r);
+    const meta = store.getRow(r, sheetId);
     if (meta !== undefined) rows.push([r, meta]);
   }
   return rows;
 }
 
-function collectCols(store: Store): ReadonlyArray<readonly [number, ColMeta]> {
+function collectCols(store: Store, sheetId: string): ReadonlyArray<readonly [number, ColMeta]> {
   const cols: Array<readonly [number, ColMeta]> = [];
   for (let c = 0; c < TOTAL_COLS; c += 1) {
-    const meta = store.getCol(c);
+    const meta = store.getCol(c, sheetId);
     if (meta !== undefined) cols.push([c, meta]);
   }
   return cols;

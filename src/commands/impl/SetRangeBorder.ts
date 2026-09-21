@@ -9,6 +9,8 @@ export type BorderLine = 'solid' | 'dashed' | 'dotted' | 'thick' | 'none';
 export interface SetRangeBorderArgs extends RangeAddress {
   readonly preset: BorderPreset;
   readonly line: BorderLine;
+  /** Target sheet; defaults to the active sheet at execution time. */
+  readonly sheetId?: string;
 }
 
 type BorderMap = NonNullable<Style['border']>;
@@ -75,16 +77,19 @@ function cleanBorder(border: BorderMap): BorderMap | undefined {
 
 export class SetRangeBorderCommand extends Command<SetRangeBorderArgs> {
   private snapshots: CellBorderSnapshot[] = [];
+  private execSheetId: string | undefined;
 
   public execute(store: Store): void {
     this.snapshots = [];
     const { preset, line, r1, c1, r2, c2 } = this.args;
     const range = { r1, c1, r2, c2 };
+    const target = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
+    this.execSheetId = target;
 
     for (let r = r1; r <= r2; r += 1) {
       for (let c = c1; c <= c2; c += 1) {
-        const cell = store.getCell(r, c);
-        const oldStyle = cell?.styleId === undefined ? undefined : store.getStyle(cell.styleId);
+        const cell = store.getCell(r, c, target);
+        const oldStyle = cell?.styleId === undefined ? undefined : store.getStyle(cell.styleId, target);
         this.snapshots.push({ r, c, cell, style: oldStyle, styleId: cell?.styleId });
 
         const touched = edgesForPreset(preset, r, c, range);
@@ -93,8 +98,8 @@ export class SetRangeBorderCommand extends Command<SetRangeBorderArgs> {
           const styleId = cell?.styleId ?? `cell-${r}-${c}`;
           const base: Style = { ...(oldStyle ?? {}) };
           delete base.border;
-          store.setStyle(styleId, base);
-          store.setCell(r, c, { ...cell, text: cell?.text ?? '', styleId });
+          store.setStyle(styleId, base, target);
+          store.setCell(r, c, { ...cell, text: cell?.text ?? '', styleId }, target);
           continue;
         }
 
@@ -110,26 +115,32 @@ export class SetRangeBorderCommand extends Command<SetRangeBorderArgs> {
         const nextStyle: Style = { ...(oldStyle ?? {}) };
         if (nextBorder === undefined) delete nextStyle.border;
         else nextStyle.border = nextBorder;
-        store.setStyle(styleId, nextStyle);
-        store.setCell(r, c, { ...cell, text: cell?.text ?? '', styleId });
+        store.setStyle(styleId, nextStyle, target);
+        store.setCell(r, c, { ...cell, text: cell?.text ?? '', styleId }, target);
       }
     }
   }
 
   public getUndo(): Command {
-    return new RestoreRangeBorder(this.snapshots);
+    return new RestoreRangeBorder({ snapshots: this.snapshots, ...(this.execSheetId !== undefined ? { sheetId: this.execSheetId } : {}) });
   }
 }
 
-class RestoreRangeBorder extends Command<readonly CellBorderSnapshot[]> {
+interface RestoreRangeBorderArgs {
+  readonly snapshots: readonly CellBorderSnapshot[];
+  readonly sheetId?: string;
+}
+
+class RestoreRangeBorder extends Command<RestoreRangeBorderArgs> {
   public execute(store: Store): void {
-    this.args.forEach((item) => {
-      store.setCell(item.r, item.c, item.cell);
-      if (item.styleId !== undefined) store.setStyle(item.styleId, item.style);
+    const target = this.args.sheetId ?? store.getActiveSheetId();
+    this.args.snapshots.forEach((item) => {
+      store.setCell(item.r, item.c, item.cell, target);
+      if (item.styleId !== undefined) store.setStyle(item.styleId, item.style, target);
     });
   }
 
   public getUndo(): Command {
-    return new RestoreRangeBorder(this.args);
+    return this;
   }
 }

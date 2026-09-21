@@ -9,6 +9,8 @@ export interface MoveRangeArgs {
   readonly target: RangeAddress;
   /** Excel Ctrl+drag: duplicate instead of move — the source cells stay. */
   readonly copy?: boolean;
+  /** Target sheet; defaults to the active sheet at execution time. */
+  readonly sheetId?: string;
 }
 
 type CellMatrix = readonly (readonly (Cell | undefined)[])[];
@@ -19,26 +21,29 @@ export class MoveRange extends Command<MoveRangeArgs> {
   private sourceMerges: string[] = [];
   private targetMerges: string[] = [];
   private movedMerges: string[] = [];
+  private execSheetId: string | undefined;
 
   public execute(store: Store): void {
     const { source, target } = this.args;
+    const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
+    this.execSheetId = sid;
     const srcRows = source.r2 - source.r1 + 1;
     const srcCols = source.c2 - source.c1 + 1;
 
     // Snapshot source cells
-    this.sourceSnapshot = snapshotRange(store, source);
+    this.sourceSnapshot = snapshotRange(store, source, sid);
     // Snapshot target cells (for undo)
     const targetEnd = {
       r1: target.r1, c1: target.c1,
       r2: target.r1 + srcRows - 1, c2: target.c1 + srcCols - 1,
     };
-    this.targetSnapshot = snapshotRange(store, targetEnd);
+    this.targetSnapshot = snapshotRange(store, targetEnd, sid);
 
     // Write source cells to target location
     for (let r = 0; r < srcRows; r += 1) {
       for (let c = 0; c < srcCols; c += 1) {
         const cell = this.sourceSnapshot[r]?.[c];
-        store.setCell(target.r1 + r, target.c1 + c, cell);
+        store.setCell(target.r1 + r, target.c1 + c, cell, sid);
       }
     }
 
@@ -46,16 +51,16 @@ export class MoveRange extends Command<MoveRangeArgs> {
     if (this.args.copy !== true) {
       for (let r = source.r1; r <= source.r2; r += 1) {
         for (let c = source.c1; c <= source.c2; c += 1) {
-          store.setCell(r, c, undefined);
+          store.setCell(r, c, undefined, sid);
         }
       }
     }
 
     // Excel: merges fully inside the moved block travel with it.
     this.sourceMerges = [];
-    this.targetMerges = store.getMerges().filter((m) => rangesIntersect(parseMerge(m), targetEnd));
+    this.targetMerges = store.getMerges(sid).filter((m) => rangesIntersect(parseMerge(m), targetEnd));
     const moved: string[] = [];
-    for (const m of store.getMerges()) {
+    for (const m of store.getMerges(sid)) {
       const a = parseMerge(m);
       if (rangeContains(source, a)) {
         this.sourceMerges.push(m);
@@ -67,9 +72,9 @@ export class MoveRange extends Command<MoveRangeArgs> {
       // Drop merges the block overwrites at the target; relocate source merges.
       // The guard is checked after the removals so a copy onto its own merge
       // (target overlaps source) re-adds it instead of losing it.
-      this.targetMerges.forEach((m) => store.removeMerge(m));
-      if (this.args.copy !== true) this.sourceMerges.forEach((m) => store.removeMerge(m));
-      moved.forEach((m) => { if (!store.getMerges().includes(m)) store.addMerge(m); });
+      this.targetMerges.forEach((m) => store.removeMerge(m, sid));
+      if (this.args.copy !== true) this.sourceMerges.forEach((m) => store.removeMerge(m, sid));
+      moved.forEach((m) => { if (!store.getMerges(sid).includes(m)) store.addMerge(m, sid); });
     });
   }
 
@@ -87,6 +92,7 @@ export class MoveRange extends Command<MoveRangeArgs> {
       targetMerges: this.targetMerges,
       movedMerges: this.movedMerges,
       copy: this.args.copy === true,
+      ...(this.execSheetId !== undefined ? { sheetId: this.execSheetId } : {}),
     });
   }
 
@@ -106,11 +112,13 @@ interface RestoreMoveRangeArgs {
   readonly sourceMerges: readonly string[];
   readonly targetMerges: readonly string[];
   readonly movedMerges: readonly string[];
+  readonly sheetId?: string;
 }
 
 class RestoreMoveRange extends Command<RestoreMoveRangeArgs> {
   public execute(store: Store): void {
     const { source, target, sourceSnapshot, targetSnapshot } = this.args;
+    const sid = this.args.sheetId ?? store.getActiveSheetId();
     const srcRows = source.r2 - source.r1 + 1;
     const srcCols = source.c2 - source.c1 + 1;
 
@@ -118,7 +126,7 @@ class RestoreMoveRange extends Command<RestoreMoveRangeArgs> {
     for (let r = 0; r < srcRows; r += 1) {
       for (let c = 0; c < srcCols; c += 1) {
         const cell = targetSnapshot[r]?.[c];
-        store.setCell(target.r1 + r, target.c1 + c, cell);
+        store.setCell(target.r1 + r, target.c1 + c, cell, sid);
       }
     }
 
@@ -127,15 +135,15 @@ class RestoreMoveRange extends Command<RestoreMoveRangeArgs> {
       for (let r = 0; r < srcRows; r += 1) {
         for (let c = 0; c < srcCols; c += 1) {
           const cell = sourceSnapshot[r]?.[c];
-          store.setCell(source.r1 + r, source.c1 + c, cell);
+          store.setCell(source.r1 + r, source.c1 + c, cell, sid);
         }
       }
     }
 
     // Restore merge structure: drop relocated merges, bring back the prior ones.
     store.batch(() => {
-      this.args.movedMerges.forEach((m) => { if (store.getMerges().includes(m)) store.removeMerge(m); });
-      [...this.args.sourceMerges, ...this.args.targetMerges].forEach((m) => { if (!store.getMerges().includes(m)) store.addMerge(m); });
+      this.args.movedMerges.forEach((m) => { if (store.getMerges(sid).includes(m)) store.removeMerge(m, sid); });
+      [...this.args.sourceMerges, ...this.args.targetMerges].forEach((m) => { if (!store.getMerges(sid).includes(m)) store.addMerge(m, sid); });
     });
   }
 
@@ -143,17 +151,18 @@ class RestoreMoveRange extends Command<RestoreMoveRangeArgs> {
     return new MoveRange({
       source: this.args.source,
       target: this.args.target,
-      copy: this.args.copy,
+      ...(this.args.copy ? { copy: this.args.copy } : {}),
+      ...(this.args.sheetId !== undefined ? { sheetId: this.args.sheetId } : {}),
     });
   }
 }
 
-function snapshotRange(store: Store, range: RangeAddress): CellMatrix {
+function snapshotRange(store: Store, range: RangeAddress, sheetId: string): CellMatrix {
   const rows: (Cell | undefined)[][] = [];
   for (let r = range.r1; r <= range.r2; r += 1) {
     const row: (Cell | undefined)[] = [];
     for (let c = range.c1; c <= range.c2; c += 1) {
-      row.push(store.getCell(r, c));
+      row.push(store.getCell(r, c, sheetId));
     }
     rows.push(row);
   }

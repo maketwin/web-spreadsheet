@@ -10,46 +10,60 @@ import type { Store } from '../../store/Store';
 export interface DeleteRowArgs {
   readonly r: number;
   readonly count?: number;
+  /** Target sheet; defaults to the active sheet at execution time. */
+  readonly sheetId?: string;
 }
 
 export class DeleteRowCommand extends Command<DeleteRowArgs> {
   private oldSheet: SheetSnapshot | undefined;
+  private execSheetId: string | undefined;
 
   public execute(store: Store): void {
-    this.oldSheet = captureSheet(store);
+    const target = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
+    this.execSheetId = target;
+    this.oldSheet = captureSheet(store, target);
     const count = normalizeCount(this.args.count);
     const start = this.args.r;
-    store.getCells().forEach(([key]) => {
+    store.getCells(target).forEach(([key]) => {
       const [r, c] = parseKey(key);
-      if (r >= start && r < start + count) store.setCell(r, c, undefined);
+      if (r >= start && r < start + count) store.setCell(r, c, undefined, target);
     });
-    shiftCellsUp(store, start, count);
-    for (let r = start; r < TOTAL_ROWS; r += 1) store.setRow(r, store.getRow(r + count));
-    replaceMerges(store, shiftMergesForDelete(store.getMerges(), start, start + count - 1, 'row'));
-    shiftSheetFormulas(store, 'row', start, -count);
+    shiftCellsUp(store, start, count, target);
+    for (let r = start; r < TOTAL_ROWS; r += 1) store.setRow(r, store.getRow(r + count, target), target);
+    replaceMerges(store, shiftMergesForDelete(store.getMerges(target), start, start + count - 1, 'row'), target);
+    shiftSheetFormulas(store, 'row', start, -count, target);
     shiftSheetChartAnchors(store, 'delete', 'row', start, count);
   }
 
   public getUndo(): Command {
-    return new RestoreSheetCommand(this.oldSheet);
+    return new RestoreSheetCommand(this.oldSheet, this.execSheetId);
   }
 }
 
-class RestoreSheetCommand extends Command<SheetSnapshot | undefined> {
+interface RestoreSheetArgs {
+  readonly snapshot: SheetSnapshot | undefined;
+  readonly sheetId?: string;
+}
+
+class RestoreSheetCommand extends Command<RestoreSheetArgs> {
+  public constructor(snapshot: SheetSnapshot | undefined, sheetId?: string) {
+    super({ snapshot, ...(sheetId !== undefined ? { sheetId } : {}) });
+  }
+
   public execute(store: Store): void {
-    if (this.args !== undefined) restoreSheet(store, this.args);
+    if (this.args.snapshot !== undefined) restoreSheet(store, this.args.snapshot, this.args.sheetId);
   }
 
   public getUndo(): Command {
-    return new DeleteRowCommand({ r: 0 });
+    return new DeleteRowCommand({ r: 0, ...(this.args.sheetId !== undefined ? { sheetId: this.args.sheetId } : {}) });
   }
 }
 
-function shiftCellsUp(store: Store, start: number, count: number): void {
-  const cells = store.getCells().map(([key, cell]) => [...parseKey(key), cell] as const);
+function shiftCellsUp(store: Store, start: number, count: number, target: string): void {
+  const cells = store.getCells(target).map(([key, cell]) => [...parseKey(key), cell] as const);
   cells.filter(([r]) => r >= start + count).sort((a, b) => a[0] - b[0]).forEach(([r, c, cell]) => {
-    store.setCell(r, c, undefined);
-    store.setCell(r - count, c, cell);
+    store.setCell(r, c, undefined, target);
+    store.setCell(r - count, c, cell, target);
   });
 }
 

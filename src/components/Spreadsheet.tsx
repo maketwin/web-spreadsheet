@@ -791,7 +791,13 @@ function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick
       renderer.destroy();
       rendererRef.current = null;
     };
-  }, [store, view.zoom, view.showFormula, view.showGrid]);
+  // Create the renderer once per store. Zoom / formula / grid toggles flow
+  // through setViewOptions below instead of tearing the renderer down (which
+  // re-bound every DOM listener and dropped text-metric caches per zoom step).
+  }, [store]);
+  useEffect(() => rendererRef.current?.setViewOptions({ zoom: view.zoom }), [view.zoom]);
+  useEffect(() => rendererRef.current?.setViewOptions({ showFormula: view.showFormula }), [view.showFormula]);
+  useEffect(() => rendererRef.current?.setViewOptions({ showGrid: view.showGrid }), [view.showGrid]);
   useEffect(() => rendererRef.current?.setSelection(selected?.range, selected?.kind, selected?.active), [selected]);
   useEffect(() => rendererRef.current?.setFreeze(view.frozenRows, view.frozenCols), [view.frozenRows, view.frozenCols]);
   return { canvasRef, rendererRef };
@@ -1456,8 +1462,8 @@ const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly sto
       <Tooltip title="删除线"><Button size="small" type={current?.strike === true ? 'primary' : 'default'} icon={<StrikethroughOutlined />} aria-label="Strikethrough" onClick={() => style({ strike: !(current?.strike === true) })} /></Tooltip>
       <Tooltip title="增加缩进"><Button size="small" aria-label="Increase indent" onClick={() => style({ indent: Math.min(15, (current?.indent ?? 0) + 1) })}>→|</Button></Tooltip>
       <Tooltip title="减少缩进"><Button size="small" aria-label="Decrease indent" onClick={() => style({ indent: Math.max(0, (current?.indent ?? 0) - 1) })}>|←</Button></Tooltip>
-      <Tooltip title="增加小数位数"><Button size="small" aria-label="Increase decimal" onClick={() => { const next = adjustDecimalPlaces(current?.numberFormat, 1); if (next !== null) style({ numberFormat: next }); }}>.0→.00</Button></Tooltip>
-      <Tooltip title="减少小数位数"><Button size="small" aria-label="Decrease decimal" onClick={() => { const next = adjustDecimalPlaces(current?.numberFormat, -1); if (next !== null) style({ numberFormat: next }); }}>.00→.0</Button></Tooltip>
+      <Tooltip title="增加小数位数"><Button size="small" className="ss-decimal-btn" aria-label="Increase decimal" onClick={() => { const next = adjustDecimalPlaces(current?.numberFormat, 1); if (next !== null) style({ numberFormat: next }); }}>.0→.00</Button></Tooltip>
+      <Tooltip title="减少小数位数"><Button size="small" className="ss-decimal-btn" aria-label="Decrease decimal" onClick={() => { const next = adjustDecimalPlaces(current?.numberFormat, -1); if (next !== null) style({ numberFormat: next }); }}>.00→.0</Button></Tooltip>
       <Select
         size="small"
         aria-label="Text rotation"

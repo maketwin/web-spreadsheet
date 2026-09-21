@@ -41,10 +41,11 @@ export function coveredBySameMerge(merges: readonly RangeAddress[], rA: number, 
 }
 
 /** Swap the sheet's merge set wholesale (row/col insert/delete shifting). */
-export function replaceMerges(store: Store, next: readonly string[]): void {
+export function replaceMerges(store: Store, next: readonly string[], sheetId?: string): void {
   store.batch(() => {
-    store.getMerges().forEach((m) => store.removeMerge(m));
-    next.forEach((m) => store.addMerge(m));
+    const sid = sheetId ?? store.getActiveSheetId();
+    store.getMerges(sid).forEach((m) => store.removeMerge(m, sid));
+    next.forEach((m) => store.addMerge(m, sid));
   });
 }
 

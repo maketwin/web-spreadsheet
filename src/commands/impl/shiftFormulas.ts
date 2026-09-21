@@ -15,8 +15,8 @@ import type { AutoFilterCriteria } from '../../types';
  * formats, validation rules, and autofilter range. A structure whose range
  * is fully deleted is removed, matching Excel dropping the definition.
  */
-export function shiftSheetFormulas(store: Store, axis: 'row' | 'col', start: number, count: number): void {
-  const targetId = store.getActiveSheetId();
+export function shiftSheetFormulas(store: Store, axis: 'row' | 'col', start: number, count: number, sheetId?: string): void {
+  const targetId = sheetId ?? store.getActiveSheetId();
   const targetName = store.getSheets().find((sheet) => sheet.id === targetId)?.name;
   if (targetName === undefined) return;
   for (const { id } of store.getSheets()) {

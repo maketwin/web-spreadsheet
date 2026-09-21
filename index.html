@@ -24,9 +24,11 @@
     /* Ribbon / formatting toolbar under menu */
     .ss-interaction-toolbar { min-height: 42px; display: flex; align-items: center; gap: 2px; padding: 4px 8px; background: linear-gradient(#fafafa, #f0f0f0); border-bottom: 1px solid var(--ss-border); box-sizing: border-box; }
     .ss-interaction-toolbar .ant-btn-sm { width: 26px; height: 26px; padding-inline: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 2px; border-color: transparent; background: transparent; color: var(--ss-text); }
+    /* Text-glyph buttons (decimal step .0→.00) need more room than the 26px icon cells. */
+    .ss-interaction-toolbar .ant-btn-sm.ss-decimal-btn { width: 48px; font-size: 10px; }
     .ss-interaction-toolbar .ant-btn-sm:hover { background: #e6e6e6; border-color: #c6c6c6; color: var(--ss-text); }
     .ss-interaction-toolbar .ant-btn-sm.ant-btn-primary { background: #c6e0b4; border-color: #8ab87a; color: #1f1f1f; }
-    .ss-interaction-toolbar .ant-divider-vertical { height: 22px; margin-inline: 6px; border-color: #c8c8c8; }
+    .ss-interaction-toolbar .ant-divider-vertical { height: 22px; margin-inline: 4px; border-color: #c8c8c8; }
     .ss-toolbar-toggle { display: inline-flex; align-items: center; gap: 6px; height: 26px; color: var(--ss-text-light); font-size: 12px; white-space: nowrap; margin-left: 4px; }
 
     /* Formula bar like Excel */

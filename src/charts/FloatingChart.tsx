@@ -122,6 +122,16 @@ export const FloatingChart: FC<FloatingChartProps> = ({ spec, store, renderer, s
     onGeometry(spec.id, commitAnchor(renderer, liveRectRef.current ?? g.startRect));
   };
 
+  // If the component unmounts mid-gesture, drop the window listeners instead
+  // of leaving them alive until the next pointerup.
+  useEffect(() => {
+    return () => {
+      window.removeEventListener('pointermove', onGestureMove);
+      window.removeEventListener('pointerup', onGestureUp);
+      gestureRef.current = null;
+    };
+  });
+
   const beginGesture = (e: ReactPointerEvent<HTMLElement>, mode: Gesture['mode']): void => {
     if (renderer === null || e.button !== 0) return;
     e.stopPropagation();
