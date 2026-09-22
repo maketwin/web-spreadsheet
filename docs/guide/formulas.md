@@ -28,17 +28,19 @@ const ss = new Spreadsheet('app', {
 | 一元负号 | 结果层支持取负 | |
 | 函数调用 | `SUM(A1:A5)` | 函数名大小写不敏感 |
 
-## 内置函数（28 个）
+## 内置函数（82 个）
 
 ### 数学
 
 | 函数 | 参数 | 说明 |
 |------|------|------|
 | `SUM` | 1–255 | 求和（区域展开） |
+| `SUMPRODUCT` | 1–255 | 对应元素相乘再求和；文本/空按 0，比较结果 TRUE/FALSE 按 1/0 |
 | `ROUND` | 1–2 | 四舍五入，可指定小数位 |
 | `ABS` | 1 | 绝对值 |
 | `INT` | 1 | 向下取整 |
 | `MOD` | 2 | 取模 |
+| `POWER` / `SQRT` / `PI` | — | 幂 / 平方根 / 圆周率 |
 
 ### 统计
 
@@ -49,6 +51,15 @@ const ss = new Spreadsheet('app', {
 | `COUNT` | 1–255 | 数值个数 |
 | `COUNTA` | 1–255 | 非空个数 |
 | `COUNTIF` | 2 | 条件计数 |
+| `COUNTIFS` | 2n | 多条件计数 |
+| `AVERAGEIF` / `AVERAGEIFS` | 2–3 / 3+ | 条件平均 |
+| `MEDIAN` | 1–255 | 中位数 |
+| `LARGE` / `SMALL` | 2 | 第 k 大 / 第 k 小 |
+| `RANK.EQ` / `RANK` | 2–3 | 排名（并列取最优名次；第 3 参非 0 为升序） |
+| `STDEV.S` / `STDEV` | 1–255 | 样本标准差（n−1） |
+| `STDEV.P` / `STDEVP` | 1–255 | 总体标准差（n） |
+| `MAXIFS` / `MINIFS` | 3+ | 多条件最大 / 最小；无匹配返回 0 |
+| `SUBTOTAL` | 2+ | 分类汇总（功能号 1–11 / 101–111，忽略筛选隐藏行） |
 
 ### 逻辑
 
@@ -57,6 +68,9 @@ const ss = new Spreadsheet('app', {
 | `IF` | 2–3 | 条件分支，第三参（假值）可省略 |
 | `AND` / `OR` | 1–255 | 逻辑与 / 或 |
 | `NOT` | 1 | 逻辑非 |
+| `IFERROR` / `IFNA` | 2 | 错误兜底（`#N/A` 专用见 `IFNA`） |
+| `ISBLANK` / `ISNUMBER` / `ISTEXT` / `ISERROR` / `ISNA` | 1 | 信息判断 |
+| `TRUE` / `FALSE` | 0 | 布尔常量 |
 
 ### 文本
 
@@ -68,6 +82,13 @@ const ss = new Spreadsheet('app', {
 | `LEN` | 1 | 长度 |
 | `UPPER` / `LOWER` | 1 | 大小写转换 |
 | `TRIM` | 1 | 去首尾空格 |
+| `TEXTJOIN` | 3+ | 分隔符拼接，可忽略空值 |
+| `FIND` | 2–3 | 区分大小写查找子串位置（1 起）；未找到 `#VALUE!` |
+| `SEARCH` | 2–3 | 不区分大小写，支持 `*` `?` 通配（`~` 转义） |
+| `SUBSTITUTE` | 3–4 | 替换所有 / 指定第 n 个匹配 |
+| `REPLACE` | 4 | 按位置拼接替换 |
+| `EXACT` | 2 | 区分大小写比较 |
+| `TEXT` / `VALUE` / `CONCATENATE` | — | 格式化 / 转数值 / 拼接 |
 
 ### 查找
 
@@ -76,6 +97,10 @@ const ss = new Spreadsheet('app', {
 | `INDEX` | 2–3 | 按行列号取值 |
 | `MATCH` | 2–3 | 查找位置 |
 | `VLOOKUP` | 3–4 | 首列查找并返回同行指定列；第 4 参为 `0`/`FALSE` 时精确匹配（文本不区分大小写），省略时为近似匹配（假设首列升序，取不大于查找值的最大键）；未命中返回 `#N/A` |
+| `HLOOKUP` | 3–4 | 首行查找（与 `VLOOKUP` 对称） |
+| `XLOOKUP` | 3–6 | 精确 + 通配匹配、`if_not_found`、首尾搜索方向 |
+| `ROW` / `COLUMN` | 0–1 | 无参返回公式所在行 / 列；带引用返回其行 / 列号 |
+| `ROWS` / `COLUMNS` | 1 | 区域行数 / 列数 |
 
 ### 日期时间
 
@@ -85,6 +110,9 @@ const ss = new Spreadsheet('app', {
 | `TODAY` | 0 | 当前日期（`yyyy-mm-dd` 字符串） |
 | `YEAR` / `MONTH` / `DAY` | 1 | 从日期值取年 / 月 / 日 |
 | `HOUR` | 1 | 从日期值取小时 |
+| `DATE` | 3 | 构造日期（月/日溢出自动进位），返回 `yyyy-mm-dd` |
+| `TIME` | 3 | 构造时间（超过 24h 回绕），返回 `HH:mm:ss` |
+| `DATEDIF` | 3 | 日期间隔，单位 `Y` / `M` / `D` / `YM` / `YD` / `MD`；起期晚于终期返回 `#NUM!` |
 
 ## point 模式与引用编辑
 

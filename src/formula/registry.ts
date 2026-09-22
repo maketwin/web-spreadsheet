@@ -90,10 +90,34 @@ registry.register('ISNA', { minArgs: 1, maxArgs: 1, evaluate: ([v]) => first(v) 
 
 registry.register('NOW', { minArgs: 0, maxArgs: 0, evaluate: () => new Date() });
 registry.register('TODAY', { minArgs: 0, maxArgs: 0, evaluate: () => new Date().toISOString().slice(0, 10) });
+registry.register('DATE', { minArgs: 3, maxArgs: 3, evaluate: ([y, m, d]) => dateOf(first(y), first(m), first(d)) });
+registry.register('TIME', { minArgs: 3, maxArgs: 3, evaluate: ([h, m, s]) => timeOf(first(h), first(m), first(s)) });
+registry.register('DATEDIF', { minArgs: 3, maxArgs: 3, evaluate: ([a, b, unit]) => dateDif(first(a), first(b), text(first(unit))) });
 registry.register('YEAR', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => toDate(first(d)).getFullYear() });
 registry.register('MONTH', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => toDate(first(d)).getMonth() + 1 });
 registry.register('DAY', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => toDate(first(d)).getDate() });
 registry.register('HOUR', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => toDate(first(d)).getHours() });
+
+// ——— Text positions / replacement ———
+registry.register('FIND', { minArgs: 2, maxArgs: 3, evaluate: ([needle, hay, start]) => findText(text(first(needle)), text(first(hay)), first(start), false) });
+registry.register('SEARCH', { minArgs: 2, maxArgs: 3, evaluate: ([needle, hay, start]) => findText(text(first(needle)), text(first(hay)), first(start), true) });
+registry.register('SUBSTITUTE', { minArgs: 3, maxArgs: 4, evaluate: ([s, old, rep, instance]) => substitute(text(first(s)), text(first(old)), text(first(rep)), first(instance)) });
+registry.register('REPLACE', { minArgs: 4, maxArgs: 4, evaluate: ([s, start, len, rep]) => replaceAt(text(first(s)), Number(first(start)), Number(first(len)), text(first(rep))) });
+registry.register('EXACT', { minArgs: 2, maxArgs: 2, evaluate: ([a, b]) => text(first(a)) === text(first(b)) });
+
+// ——— Conditional / statistical aggregates ———
+registry.register('SUMPRODUCT', { minArgs: 1, maxArgs: 255, evaluate: (args) => sumProduct(args) });
+registry.register('MEDIAN', { minArgs: 1, maxArgs: 255, evaluate: (args) => median(numbers(args)) });
+registry.register('LARGE', { minArgs: 2, maxArgs: 2, evaluate: ([arr, k]) => largeSmall(numbers([arr!]), Number(first(k)), 'large') });
+registry.register('SMALL', { minArgs: 2, maxArgs: 2, evaluate: ([arr, k]) => largeSmall(numbers([arr!]), Number(first(k)), 'small') });
+registry.register('STDEV.P', { minArgs: 1, maxArgs: 255, evaluate: (args) => stdev(numbers(args), 'population') });
+registry.register('STDEVP', { minArgs: 1, maxArgs: 255, evaluate: (args) => stdev(numbers(args), 'population') });
+registry.register('STDEV.S', { minArgs: 1, maxArgs: 255, evaluate: (args) => stdev(numbers(args), 'sample') });
+registry.register('STDEV', { minArgs: 1, maxArgs: 255, evaluate: (args) => stdev(numbers(args), 'sample') });
+registry.register('RANK.EQ', { minArgs: 2, maxArgs: 3, evaluate: ([v, arr, order]) => rankEq(first(v), arr, first(order)) });
+registry.register('RANK', { minArgs: 2, maxArgs: 3, evaluate: ([v, arr, order]) => rankEq(first(v), arr, first(order)) });
+registry.register('MAXIFS', { minArgs: 3, maxArgs: 255, evaluate: (args) => maxMinIfs(args, 'max') });
+registry.register('MINIFS', { minArgs: 3, maxArgs: 255, evaluate: (args) => maxMinIfs(args, 'min') });
 
 function sum(values: FormulaValue[]): number {
   // Excel SUM ignores real text and empty cells inside ranges (errors already
@@ -357,6 +381,206 @@ function textFormat(v: FormulaValue | undefined, fmt: FormulaValue | undefined):
 
 function toDate(value: FormulaValue | undefined): Date {
   if (value instanceof Date) return value;
+  // Bare time strings ("13:30") don't parse in every engine — anchor them.
+  if (typeof value === 'string' && /^\d{1,2}:\d{2}(:\d{2})?$/.test(value.trim())) return new Date(`1970-01-01T${value.trim()}`);
   if (typeof value === 'string' || typeof value === 'number') return new Date(value);
   return new Date('');
+}
+
+/** DATE(y, m, d): Excel normalizes month/day overflow via calendar arithmetic. */
+function dateOf(y: FormulaValue | undefined, m: FormulaValue | undefined, d: FormulaValue | undefined): FormulaArgument {
+  const year = Number(y);
+  const month = Number(m);
+  const day = Number(d);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return '#VALUE!';
+  const dt = new Date(Date.UTC(year, month - 1, day));
+  if (dt.getUTCFullYear() < 0 || dt.getUTCFullYear() > 9999) return '#NUM!';
+  return dt.toISOString().slice(0, 10);
+}
+
+/** TIME(h, m, s): normalized "HH:mm:ss" (values wrap around midnight, Excel-style). */
+function timeOf(h: FormulaValue | undefined, m: FormulaValue | undefined, s: FormulaValue | undefined): FormulaArgument {
+  const H = Number(h);
+  const M = Number(m);
+  const S = Number(s);
+  if (!Number.isFinite(H) || !Number.isFinite(M) || !Number.isFinite(S)) return '#VALUE!';
+  const total = ((Math.trunc(H) * 3600 + Math.trunc(M) * 60 + Math.trunc(S)) % 86400 + 86400) % 86400;
+  const hh = String(Math.floor(total / 3600)).padStart(2, '0');
+  const mm = String(Math.floor((total % 3600) / 60)).padStart(2, '0');
+  const ss = String(total % 60).padStart(2, '0');
+  return `${hh}:${mm}:${ss}`;
+}
+
+/** DATEDIF(start, end, unit) with Excel's Y/M/D/YM/YD/MD boundaries. */
+function dateDif(startV: FormulaValue | undefined, endV: FormulaValue | undefined, unit: string): FormulaArgument {
+  const start = toDate(startV);
+  const end = toDate(endV);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return '#VALUE!';
+  if (end.getTime() < start.getTime()) return '#NUM!';
+  const sameDay = (a: Date, b: Date): boolean => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  const years = end.getFullYear() - start.getFullYear();
+  const months = (years * 12) + (end.getMonth() - start.getMonth());
+  switch (unit.toUpperCase()) {
+    case 'Y': {
+      const anniversary = new Date(start); anniversary.setFullYear(end.getFullYear());
+      return sameDay(anniversary, end) || anniversary < end ? years : years - 1;
+    }
+    case 'M': {
+      const anchor = new Date(start); anchor.setMonth(start.getMonth() + months);
+      return sameDay(anchor, end) || anchor <= end ? months : months - 1;
+    }
+    case 'D':
+      return Math.round((end.getTime() - start.getTime()) / 86400000);
+    case 'YM': {
+      const anchor = new Date(start); anchor.setFullYear(end.getFullYear());
+      const mm = end.getMonth() - start.getMonth() + (sameDay(anchor, end) || anchor <= end ? 0 : -1);
+      return ((mm % 12) + 12) % 12;
+    }
+    case 'YD': {
+      const anchor = new Date(start); anchor.setFullYear(end.getFullYear());
+      const base = sameDay(anchor, end) || anchor <= end ? anchor : new Date(anchor.setFullYear(end.getFullYear() - 1));
+      return Math.round((end.getTime() - base.getTime()) / 86400000);
+    }
+    case 'MD': {
+      const anchor = new Date(end); anchor.setDate(start.getDate());
+      return sameDay(anchor, end) || anchor <= end
+        ? Math.round((end.getTime() - anchor.getTime()) / 86400000)
+        : (() => {
+          const prev = new Date(end); prev.setDate(0); // last day of previous month
+          const borrow = new Date(prev); borrow.setDate(start.getDate());
+          return Math.round((end.getTime() - borrow.getTime()) / 86400000) + 1;
+        })();
+    }
+    default:
+      return '#VALUE!';
+  }
+}
+
+/** FIND (case-sensitive, literal) / SEARCH (case-insensitive, * ? wildcards, ~ escape). */
+function findText(needle: string, hay: string, startV: FormulaValue | undefined, wildcard: boolean): FormulaArgument {
+  const start = startV === undefined ? 1 : Number(startV);
+  if (!Number.isInteger(start) || start < 1 || start > hay.length + 1) return '#VALUE!';
+  if (needle === '') return start;
+  const from = start - 1;
+  if (!wildcard) {
+    const at = hay.indexOf(needle, from);
+    return at === -1 ? '#VALUE!' : at + 1;
+  }
+  const lower = hay.toLowerCase();
+  const pattern = wildcardToRegExp(needle.toLowerCase(), 'g');
+  pattern.lastIndex = from;
+  const m = pattern.exec(lower);
+  return m === null ? '#VALUE!' : m.index + 1;
+}
+
+/** Excel SEARCH wildcards: * (any run), ? (one char), ~ escapes the next one. */
+function wildcardToRegExp(pattern: string, flags: string): RegExp {
+  let out = '';
+  for (let i = 0; i < pattern.length; i += 1) {
+    const ch = pattern[i]!;
+    if (ch === '~' && i + 1 < pattern.length) {
+      const next = pattern[i + 1]!;
+      out += /[.*+?^${}()|[\]\\]/.test(next) ? `\\${next}` : next;
+      i += 1;
+      continue;
+    }
+    if (ch === '*') { out += '.*'; continue; }
+    if (ch === '?') { out += '.'; continue; }
+    out += /[.*+?^${}()|[\]\\]/.test(ch) ? `\\${ch}` : ch;
+  }
+  return new RegExp(out, flags);
+}
+
+/** SUBSTITUTE(text, old, new, [instance]): instance is 1-based; empty old is a no-op. */
+function substitute(s: string, oldText: string, rep: string, instanceV: FormulaValue | undefined): FormulaArgument {
+  if (oldText === '') return s;
+  if (instanceV === undefined) return s.split(oldText).join(rep);
+  const instance = Number(instanceV);
+  if (!Number.isInteger(instance) || instance < 1) return '#VALUE!';
+  let idx = -1;
+  for (let n = 0; n < instance; n += 1) {
+    idx = s.indexOf(oldText, idx + 1);
+    if (idx === -1) return s;
+  }
+  return s.slice(0, idx) + rep + s.slice(idx + oldText.length);
+}
+
+/** REPLACE(old, start, numChars, new): splice by 1-based position. */
+function replaceAt(s: string, start: number, numChars: number, rep: string): FormulaArgument {
+  if (!Number.isInteger(start) || start < 1 || !Number.isInteger(numChars) || numChars < 0) return '#VALUE!';
+  return s.slice(0, start - 1) + rep + s.slice(start - 1 + numChars);
+}
+
+/** SUMPRODUCT: element-wise product over equal-length lists; text/blank → 0, booleans → 1/0. */
+function sumProduct(args: FormulaArgument[]): FormulaArgument {
+  const lists = args.map((a) => flatten([a]).map(productTerm));
+  const len = lists[0]?.length ?? 0;
+  if (lists.some((l) => l.length !== len)) return '#VALUE!';
+  let total = 0;
+  for (let i = 0; i < len; i += 1) {
+    let product = 1;
+    for (const list of lists) product *= list[i] ?? 0;
+    total += product;
+  }
+  return total;
+}
+
+function productTerm(v: FormulaValue | null | undefined): number {
+  if (typeof v === 'boolean') return v ? 1 : 0;
+  if (v instanceof Date) return 0;
+  return numericOf(v) ?? 0;
+}
+
+function median(values: number[]): FormulaArgument {
+  if (values.length === 0) return '#NUM!';
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
+}
+
+function largeSmall(values: number[], k: number, which: 'large' | 'small'): FormulaArgument {
+  if (!Number.isInteger(k) || k < 1 || k > values.length) return '#NUM!';
+  const sorted = [...values].sort((a, b) => (which === 'large' ? b - a : a - b));
+  return sorted[k - 1]!;
+}
+
+/** STDEV.S/STDEV (sample, n-1) vs STDEV.P/STDEVP (population, n). */
+function stdev(values: number[], kind: 'sample' | 'population'): FormulaArgument {
+  const n = values.length;
+  if (n === 0 || (kind === 'sample' && n < 2)) return '#DIV/0!';
+  const mean = values.reduce((a, b) => a + b, 0) / n;
+  const variance = values.reduce((acc, v) => acc + (v - mean) ** 2, 0) / (kind === 'sample' ? n - 1 : n);
+  return Math.sqrt(variance);
+}
+
+/** RANK.EQ / RANK: best (lowest) rank on ties; order 0/omitted = descending. */
+function rankEq(value: FormulaValue | undefined, listV: FormulaArgument | undefined, orderV: FormulaValue | undefined): FormulaArgument {
+  const n = numericOf(value);
+  if (n === undefined) return '#N/A';
+  const values = flatten(listV === undefined ? [] : [listV]).flatMap((v) => {
+    const num = numericOf(v);
+    return num === undefined ? [] : [num];
+  });
+  if (!values.some((v) => v === n)) return '#N/A';
+  const descending = orderV === undefined || Number(orderV) === 0;
+  const better = descending ? values.filter((v) => v > n).length : values.filter((v) => v < n).length;
+  return better + 1;
+}
+
+/** MAXIFS / MINIFS(range, critRange1, crit1, …) — 0 when nothing matches (Excel). */
+function maxMinIfs(args: FormulaArgument[], which: 'max' | 'min'): FormulaArgument {
+  if (args.length < 3 || args.length % 2 === 0) return 0;
+  const vals = flatten([args[0]!]);
+  const pairs: { keys: FormulaValue[]; crit: FormulaValue | undefined }[] = [];
+  for (let i = 1; i + 1 < args.length; i += 2) {
+    pairs.push({ keys: flatten([args[i]!]), crit: first(args[i + 1]) });
+  }
+  let best: number | undefined;
+  for (let i = 0; i < vals.length; i += 1) {
+    if (!pairs.every((p) => matchesCriteria(p.keys[i] ?? null, p.crit))) continue;
+    const n = numericOf(vals[i] ?? null);
+    if (n === undefined) continue;
+    best = best === undefined ? n : (which === 'max' ? Math.max(best, n) : Math.min(best, n));
+  }
+  return best ?? 0;
 }

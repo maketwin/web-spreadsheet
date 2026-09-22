@@ -133,7 +133,8 @@ export class FormulaParser {
   }
 
   private parseFunction(expr: string): AstNode | null {
-    const match = expr.match(/^([A-Za-z][A-Za-z0-9_]*)\((.*)\)$/);
+    // Dotted function names (RANK.EQ / STDEV.P) parse as functions too.
+    const match = expr.match(/^([A-Za-z][A-Za-z0-9_.]*)\((.*)\)$/);
     const name = match?.[1];
     const argsText = match?.[2];
     if (name === undefined || argsText === undefined) return null;

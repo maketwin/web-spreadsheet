@@ -4,6 +4,13 @@
 
 ### Features (Excel parity)
 
+- **Tier-1 热门公式补齐（+24 个，总数 82）** — `SUMPRODUCT`；`FIND`（区分
+  大小写）/ `SEARCH`（不区分大小写 + `*` `?` 通配）；`SUBSTITUTE` / `REPLACE` /
+  `EXACT`；`DATE` / `TIME` / `DATEDIF`（Y/M/D/YM/YD/MD）；`LARGE` / `SMALL` /
+  `MEDIAN`；`RANK.EQ` / `RANK`（并列最优名次）；`STDEV.S` / `STDEV.P`（含
+  `STDEV` / `STDEVP` 别名）；`MAXIFS` / `MINIFS`；`ROW` / `COLUMN`（无参返回
+  公式所在行列）/ `ROWS` / `COLUMNS`。parser 支持带点函数名（`RANK.EQ`）。
+
 - **Decimal-places toolbar buttons** — 增加/减少小数位数 (`.0→.00` / `.00→.0`),
   Excel Number-group behavior via `adjustDecimalPlaces` (general → `0.0`;
   number/percent lower to custom strings; currency/date/time/scientific no-op).

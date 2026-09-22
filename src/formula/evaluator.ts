@@ -6,6 +6,8 @@ export type NamedRangeResolver = (name: string) => AstNode | null;
 /** Optional evaluation context (row visibility for SUBTOTAL, etc.). */
 export interface EvalContext {
   readonly isRowHidden?: (row: number, sheetName?: string) => boolean;
+  /** The cell the formula lives in — ROW()/COLUMN() without args (Excel). */
+  readonly currentCell?: { readonly r: number; readonly c: number };
 }
 
 export function evaluate(
@@ -58,6 +60,9 @@ function evaluateFunction(
   if (node.name === 'HLOOKUP') return hlookup(node, resolve, resolveName, ctx);
   if (node.name === 'XLOOKUP') return xlookup(node, resolve, resolveName, ctx);
   if (node.name === 'SUBTOTAL') return subtotal(node, resolve, resolveName, ctx);
+  if (node.name === 'ROW' || node.name === 'COLUMN' || node.name === 'ROWS' || node.name === 'COLUMNS') {
+    return positionInfo(node, resolveName, ctx);
+  }
   // IF is lazy in Excel: an error in the not-taken branch does not propagate.
   if (node.name === 'IF') return ifLazy(node, resolve, resolveName, ctx);
   // IFERROR / IFNA must see the error value instead of short-circuit propagation.
@@ -73,6 +78,46 @@ function evaluateFunction(
     }
   }
   return guardNumeric(spec.evaluate(args));
+}
+
+/** ROW([ref]) / COLUMN([ref]) / ROWS(ref) / COLUMNS(ref) — ref-aware, so they
+ * see the raw range shape instead of the flattened value list. */
+function positionInfo(
+  node: Extract<AstNode, { type: 'func' }>,
+  resolveName?: NamedRangeResolver,
+  ctx?: EvalContext,
+): FormulaValue {
+  const arg = node.args[0];
+  const resolved: AstNode | null = arg === undefined
+    ? null
+    : arg.type === 'name' && resolveName !== undefined
+      ? resolveName(arg.value)
+      : arg;
+  const noRef = resolved === null || resolved === undefined;
+  switch (node.name) {
+    case 'ROW':
+      if (noRef) return (ctx?.currentCell?.r ?? 0) + 1;
+      if (resolved!.type === 'cell') return resolved!.y + 1;
+      if (resolved!.type === 'range') return Math.min(resolved!.y1, resolved!.y2) + 1;
+      return 1;
+    case 'COLUMN':
+      if (noRef) return (ctx?.currentCell?.c ?? 0) + 1;
+      if (resolved!.type === 'cell') return resolved!.x + 1;
+      if (resolved!.type === 'range') return Math.min(resolved!.x1, resolved!.x2) + 1;
+      return 1;
+    case 'ROWS':
+      if (resolved === null || resolved === undefined) return 1;
+      if (resolved.type === 'cell') return 1;
+      if (resolved.type === 'range') return Math.abs(resolved.y2 - resolved.y1) + 1;
+      return 1;
+    case 'COLUMNS':
+      if (resolved === null || resolved === undefined) return 1;
+      if (resolved.type === 'cell') return 1;
+      if (resolved.type === 'range') return Math.abs(resolved.x2 - resolved.x1) + 1;
+      return 1;
+    default:
+      return null;
+  }
 }
 
 /** Excel IF(cond, then, [else]): evaluates only the taken branch. */

@@ -69,6 +69,7 @@ export class FormulaEngine {
         (x, y, sheetName) => this.resolveCell(x, y, sheetName, sheetId),
         this.nameResolver,
         {
+          currentCell: { r, c },
           isRowHidden: (row, sheetName) => {
             let sid = sheetId;
             if (sheetName !== undefined) {
