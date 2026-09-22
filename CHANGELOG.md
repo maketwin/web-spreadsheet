@@ -56,6 +56,13 @@
 
 ### Bug Fixes (Excel parity, GUI 体验回归)
 
+- **公式数组运算 + 三处新函数修正（review 跟进）** — 二元运算符升级为
+  数组感知（任一侧为数组即逐元素求值、标量广播）：`SUMPRODUCT((区域="x")*区域)`
+  等经典条件求和模式从"只取首元素"静默出错变为正确结果；`DATEDIF` 改用
+  EDATE 式钳位月加法（1月31日+1月=2月29日而非3月2日，`M`/`MD`/`YM`/`YD`
+  月末行为对齐 Excel）；`SUBSTITUTE` 第 n 个实例改为非重叠计数
+  （`SUBSTITUTE("aaa","aa","x",2)` 保持原文，与 Excel 一致）。
+
 - **P1 超链接：编辑文本丢链接 / 点击无响应** — `cellFromText` 不再在每次
   文本提交时删除 `hyperlink`（Excel：编辑链接单元格的显示文字保留链接，
   仅清空内容才移除；Delete 删格仍走 `clearRange` → 删除链接）。渲染器新增

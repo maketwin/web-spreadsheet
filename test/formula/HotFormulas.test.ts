@@ -29,7 +29,16 @@ describe('hot formulas (tier 1)', () => {
   it('SUMPRODUCT multiplies element-wise and sums (booleans from comparisons count as 1/0)', () => {
     expect(runWith({ '0,0': 2, '1,0': 3, '0,1': 10, '1,1': 20 }, '=SUMPRODUCT(A1:A2,B1:B2)')).toBe(2 * 10 + 3 * 20);
     expect(run('=SUMPRODUCT((9>5)*(2),(3))')).toBe(6);
-    expect(run('=SUMPRODUCT(A1:A2,B1:B2)')).toBe(0); // empty single cells: 0-length → 0? (both 1-length blanks multiply to 0)
+    expect(run('=SUMPRODUCT(A1:A2,B1:B2)')).toBe(0); // blanks are 0 terms
+  });
+
+  it('SUMPRODUCT conditional pattern — binary ops map element-wise over ranges', () => {
+    // A1:A3 = 数量, B1:B3 = 组别: a 组合计 = 2 + 4 = 6
+    const vals = { '0,0': 2, '0,1': 'a', '1,0': 3, '1,1': 'b', '2,0': 4, '2,1': 'a' };
+    expect(runWith(vals, '=SUMPRODUCT((B1:B3="a")*(A1:A3))')).toBe(6);
+    expect(runWith(vals, '=SUMPRODUCT((B1:B3="a")*1,A1:A3)')).toBe(6);
+    // mismatched lengths → #VALUE!
+    expect(run('=SUMPRODUCT(A1:A2,B1:B3)')).toBe('#VALUE!');
   });
 
   it('FIND is case-sensitive, SEARCH is case-insensitive with wildcards', () => {
@@ -46,6 +55,9 @@ describe('hot formulas (tier 1)', () => {
     expect(run('=SUBSTITUTE("a-b-a","a","z")')).toBe('z-b-z');
     expect(run('=SUBSTITUTE("a-b-a","a","z",2)')).toBe('a-b-z');
     expect(run('=SUBSTITUTE("abc","","z")')).toBe('abc');
+    // Excel counts instances non-overlapping: "aaa" has ONE "aa" instance.
+    expect(run('=SUBSTITUTE("aaa","aa","x",2)')).toBe('aaa');
+    expect(run('=SUBSTITUTE("aaa","aa","x",1)')).toBe('xa');
     expect(run('=REPLACE("abcdef",2,3,"X")')).toBe('aXef');
     expect(run('=EXACT("a","a")')).toBe(true);
     expect(run('=EXACT("a","A")')).toBe(false);
@@ -69,6 +81,14 @@ describe('hot formulas (tier 1)', () => {
     expect(run('=DATEDIF("2026-01-15","2026-09-22","YD")')).toBe(250);
     expect(run('=DATEDIF("2026-09-22","2026-01-01","Y")')).toBe('#NUM!');
     expect(run('=DATEDIF("2026-01-01","2026-09-22","Q")')).toBe('#VALUE!');
+  });
+
+  it('DATEDIF clamps month-end anchors (Jan 31 + 1M = Feb 29, never Mar 2)', () => {
+    expect(run('=DATEDIF("2020-01-31","2020-03-01","M")')).toBe(1);
+    expect(run('=DATEDIF("2020-01-31","2020-03-01","MD")')).toBe(1);
+    expect(run('=DATEDIF("2020-01-31","2020-03-01","YM")')).toBe(1);
+    expect(run('=DATEDIF("2020-01-31","2020-03-29","M")')).toBe(1); // Feb 29 ≤ Mar 29, Mar 31 > Mar 29
+    expect(run('=DATEDIF("2020-01-31","2020-02-29","MD")')).toBe(0); // anniversary day
   });
 
   it('LARGE / SMALL / MEDIAN over ranges', () => {

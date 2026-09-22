@@ -350,17 +350,39 @@ function subtotal(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolve
   }
 }
 
-function evaluateBinary(node: Extract<AstNode, { type: 'binary' }>, resolve: CellResolver, resolveName?: NamedRangeResolver, ctx?: EvalContext): FormulaValue {
-  const left = scalar(evaluate(node.left, resolve, resolveName, ctx));
-  const right = scalar(evaluate(node.right, resolve, resolveName, ctx));
+function evaluateBinary(node: Extract<AstNode, { type: 'binary' }>, resolve: CellResolver, resolveName?: NamedRangeResolver, ctx?: EvalContext): FormulaArgument {
+  const left = evaluate(node.left, resolve, resolveName, ctx);
+  const right = evaluate(node.right, resolve, resolveName, ctx);
 
+  // Excel array math: when either operand is a range/array, the operator maps
+  // element-wise (SUMPRODUCT((B1:B3="a")*(A1:A3)) and friends). A scalar side
+  // broadcasts to every element; two lists of different lengths run to the
+  // longer one with blanks (null) filling the shorter side.
+  if (isFormulaList(left) || isFormulaList(right)) {
+    const l = isFormulaList(left);
+    const r = isFormulaList(right);
+    const lList = l ? left : ([] as unknown as readonly FormulaValue[]);
+    const rList = r ? right : ([] as unknown as readonly FormulaValue[]);
+    const len = Math.max(l ? left.length : 1, r ? right.length : 1);
+    const out: FormulaValue[] = new Array(len);
+    for (let i = 0; i < len; i += 1) {
+      const lv = (l ? lList[i] ?? null : left) as FormulaValue;
+      const rv = (r ? rList[i] ?? null : right) as FormulaValue;
+      out[i] = binaryScalar(node.op, lv, rv);
+    }
+    return out;
+  }
+  return binaryScalar(node.op, left, right);
+}
+
+function binaryScalar(op: string, left: FormulaValue, right: FormulaValue): FormulaValue {
   // Excel error values ('#DIV/0!', '#N/A', …) propagate through arithmetic.
   const leftError = errorValueOf(left);
   if (leftError !== undefined) return leftError;
   const rightError = errorValueOf(right);
   if (rightError !== undefined) return rightError;
 
-  switch (node.op) {
+  switch (op) {
     case '+':
       return finiteOrError(Number(left) + Number(right));
     case '-':

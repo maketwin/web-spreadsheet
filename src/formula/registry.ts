@@ -417,40 +417,32 @@ function dateDif(startV: FormulaValue | undefined, endV: FormulaValue | undefine
   const end = toDate(endV);
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return '#VALUE!';
   if (end.getTime() < start.getTime()) return '#NUM!';
-  const sameDay = (a: Date, b: Date): boolean => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-  const years = end.getFullYear() - start.getFullYear();
-  const months = (years * 12) + (end.getMonth() - start.getMonth());
+  /** EDATE-style month add: day clamps to the target month's length
+   * (Jan 31 + 1 month → Feb 29, never Mar 2). Excel counts DATEDIF
+   * months/anniversaries with this clamping. */
+  const monthAdd = (base: Date, months: number): Date => {
+    const target = new Date(base.getFullYear(), base.getMonth() + months, 1);
+    const lastDay = new Date(base.getFullYear(), base.getMonth() + months + 1, 0).getDate();
+    target.setDate(Math.min(base.getDate(), lastDay));
+    return target;
+  };
+  // Largest n with monthAdd(start, n) <= end (start itself counts as n = 0).
+  let fullMonths = 0;
+  while (monthAdd(start, fullMonths + 1) <= end) fullMonths += 1;
+  const daysBetween = (a: Date, b: Date): number => Math.round((b.getTime() - a.getTime()) / 86400000);
   switch (unit.toUpperCase()) {
-    case 'Y': {
-      const anniversary = new Date(start); anniversary.setFullYear(end.getFullYear());
-      return sameDay(anniversary, end) || anniversary < end ? years : years - 1;
-    }
-    case 'M': {
-      const anchor = new Date(start); anchor.setMonth(start.getMonth() + months);
-      return sameDay(anchor, end) || anchor <= end ? months : months - 1;
-    }
+    case 'Y':
+      return Math.floor(fullMonths / 12);
+    case 'M':
+      return fullMonths;
     case 'D':
-      return Math.round((end.getTime() - start.getTime()) / 86400000);
-    case 'YM': {
-      const anchor = new Date(start); anchor.setFullYear(end.getFullYear());
-      const mm = end.getMonth() - start.getMonth() + (sameDay(anchor, end) || anchor <= end ? 0 : -1);
-      return ((mm % 12) + 12) % 12;
-    }
-    case 'YD': {
-      const anchor = new Date(start); anchor.setFullYear(end.getFullYear());
-      const base = sameDay(anchor, end) || anchor <= end ? anchor : new Date(anchor.setFullYear(end.getFullYear() - 1));
-      return Math.round((end.getTime() - base.getTime()) / 86400000);
-    }
-    case 'MD': {
-      const anchor = new Date(end); anchor.setDate(start.getDate());
-      return sameDay(anchor, end) || anchor <= end
-        ? Math.round((end.getTime() - anchor.getTime()) / 86400000)
-        : (() => {
-          const prev = new Date(end); prev.setDate(0); // last day of previous month
-          const borrow = new Date(prev); borrow.setDate(start.getDate());
-          return Math.round((end.getTime() - borrow.getTime()) / 86400000) + 1;
-        })();
-    }
+      return daysBetween(start, end);
+    case 'YM':
+      return fullMonths % 12;
+    case 'YD':
+      return daysBetween(monthAdd(start, 12 * Math.floor(fullMonths / 12)), end);
+    case 'MD':
+      return daysBetween(monthAdd(start, fullMonths), end);
     default:
       return '#VALUE!';
   }
@@ -497,10 +489,13 @@ function substitute(s: string, oldText: string, rep: string, instanceV: FormulaV
   if (instanceV === undefined) return s.split(oldText).join(rep);
   const instance = Number(instanceV);
   if (!Number.isInteger(instance) || instance < 1) return '#VALUE!';
+  // Excel counts instances non-overlapping: "aaa" has ONE "aa" instance.
   let idx = -1;
+  let searchFrom = 0;
   for (let n = 0; n < instance; n += 1) {
-    idx = s.indexOf(oldText, idx + 1);
+    idx = s.indexOf(oldText, searchFrom);
     if (idx === -1) return s;
+    searchFrom = idx + oldText.length;
   }
   return s.slice(0, idx) + rep + s.slice(idx + oldText.length);
 }
