@@ -139,7 +139,8 @@ export class FormulaEngine {
     }
     const v = cell.value ?? cell.text;
     if (typeof v === 'string' && v.startsWith('#')) return v; // keep error literals
-    return v as FormulaValue;
+    // CellValue ⊆ FormulaValue; only undefined needs normalizing to null.
+    return v ?? null;
   }
 
   private sheetIdForName(name: string): string | undefined {

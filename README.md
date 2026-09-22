@@ -26,7 +26,7 @@ ss.mount();
 ## Features
 
 **Grid & editing**
-- Canvas renderer with virtual scrolling (1000 × 26, smooth at 10k-row benchmarks) and dirty-region repainting
+- Canvas renderer with virtual scrolling (1000 × 26 default grid, O(log n) coordinate lookups; the scroller is benchmarked smooth at 10k+ rows) and dirty-region repainting
 - Excel-style chrome: menu bar, toolbar, formula bar, status bar, sheet tabs, context menu
 - Cell editing with IME (Chinese input) support, find & replace, freeze panes
 - Find & replace: case/whole-cell/regex matching, sheet or workbook scope, find-all list with cross-sheet jumps, single-undo replace-all, yellow highlights with an orange current-match outline

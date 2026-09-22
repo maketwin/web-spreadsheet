@@ -150,8 +150,16 @@ function sheetStyleIndexes(xml: string): Map<string, number> {
   return out;
 }
 
+/** attr() is called per XML tag during import — cache one RegExp per name. */
+const attrRegexCache = new Map<string, RegExp>();
+
 function attr(tag: string, name: string): string | undefined {
-  const m = tag.match(new RegExp(`(?:^|\\s)${name.replace(':', '\\:')}=(?:"([^"]*)"|'([^']*)')`));
+  let re = attrRegexCache.get(name);
+  if (re === undefined) {
+    re = new RegExp(`(?:^|\\s)${name.replace(':', '\\:')}=(?:"([^"]*)"|'([^']*)')`);
+    attrRegexCache.set(name, re);
+  }
+  const m = tag.match(re);
   return m?.[1] ?? m?.[2];
 }
 
