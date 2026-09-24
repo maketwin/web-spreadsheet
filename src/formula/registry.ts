@@ -93,10 +93,10 @@ registry.register('TODAY', { minArgs: 0, maxArgs: 0, evaluate: () => new Date().
 registry.register('DATE', { minArgs: 3, maxArgs: 3, evaluate: ([y, m, d]) => dateOf(first(y), first(m), first(d)) });
 registry.register('TIME', { minArgs: 3, maxArgs: 3, evaluate: ([h, m, s]) => timeOf(first(h), first(m), first(s)) });
 registry.register('DATEDIF', { minArgs: 3, maxArgs: 3, evaluate: ([a, b, unit]) => dateDif(first(a), first(b), text(first(unit))) });
-registry.register('YEAR', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => toDate(first(d)).getFullYear() });
-registry.register('MONTH', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => toDate(first(d)).getMonth() + 1 });
-registry.register('DAY', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => toDate(first(d)).getDate() });
-registry.register('HOUR', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => toDate(first(d)).getHours() });
+registry.register('YEAR', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => toDate(first(d)).getUTCFullYear() });
+registry.register('MONTH', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => toDate(first(d)).getUTCMonth() + 1 });
+registry.register('DAY', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => toDate(first(d)).getUTCDate() });
+registry.register('HOUR', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => toDate(first(d)).getUTCHours() });
 
 // ——— Text positions / replacement ———
 registry.register('FIND', { minArgs: 2, maxArgs: 3, evaluate: ([needle, hay, start]) => findText(text(first(needle)), text(first(hay)), first(start), false) });
@@ -187,12 +187,12 @@ function round(n: FormulaValue | undefined, d: FormulaValue | undefined): number
 }
 
 function right(s: FormulaValue | undefined, n: FormulaValue | undefined): string {
-  return String(s).slice(-(n !== undefined ? Number(n) : 1));
+  return text(s).slice(-(n !== undefined ? Number(n) : 1));
 }
 
 function mid(s: FormulaValue | undefined, start: FormulaValue | undefined, len: FormulaValue | undefined): string {
   const from = Number(start) - 1;
-  return String(s).slice(from, len !== undefined ? from + Number(len) : undefined);
+  return text(s).slice(from, len !== undefined ? from + Number(len) : undefined);
 }
 
 function valueAt(value: FormulaArgument | undefined, index: number): FormulaValue {
@@ -379,11 +379,25 @@ function textFormat(v: FormulaValue | undefined, fmt: FormulaValue | undefined):
 }
 
 
+/** Excel serial 1 = 1900-01-01, with the 1900 leap-year bug. Same epoch as NumberFormatter.serialToDate. */
+const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
+
+function serialToDate(serial: number): Date {
+  return new Date(EXCEL_EPOCH_MS + Math.round(serial * 86_400_000));
+}
+
 function toDate(value: FormulaValue | undefined): Date {
   if (value instanceof Date) return value;
-  // Bare time strings ("13:30") don't parse in every engine — anchor them.
-  if (typeof value === 'string' && /^\d{1,2}:\d{2}(:\d{2})?$/.test(value.trim())) return new Date(`1970-01-01T${value.trim()}`);
-  if (typeof value === 'string' || typeof value === 'number') return new Date(value);
+  if (typeof value === 'number' && Number.isFinite(value)) return serialToDate(value);
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    // Bare time strings ("13:30") don't parse in every engine — anchor them at UTC.
+    if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(trimmed)) return new Date(`1970-01-01T${trimmed.length === 5 ? `${trimmed}:00` : trimmed}Z`);
+    // DATE() returns YYYY-MM-DD. Parse as a calendar day, not a local instant.
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return new Date(`${trimmed}T00:00:00Z`);
+    if (/^-?\d+(\.\d+)?$/.test(trimmed)) return serialToDate(Number(trimmed));
+    return new Date(trimmed);
+  }
   return new Date('');
 }
 
@@ -421,10 +435,10 @@ function dateDif(startV: FormulaValue | undefined, endV: FormulaValue | undefine
    * (Jan 31 + 1 month → Feb 29, never Mar 2). Excel counts DATEDIF
    * months/anniversaries with this clamping. */
   const monthAdd = (base: Date, months: number): Date => {
-    const target = new Date(base.getFullYear(), base.getMonth() + months, 1);
-    const lastDay = new Date(base.getFullYear(), base.getMonth() + months + 1, 0).getDate();
-    target.setDate(Math.min(base.getDate(), lastDay));
-    return target;
+    const year = base.getUTCFullYear();
+    const month = base.getUTCMonth() + months;
+    const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+    return new Date(Date.UTC(year, month, Math.min(base.getUTCDate(), lastDay)));
   };
   // Largest n with monthAdd(start, n) <= end (start itself counts as n = 0).
   let fullMonths = 0;
@@ -579,3 +593,97 @@ function maxMinIfs(args: FormulaArgument[], which: 'max' | 'min'): FormulaArgume
   }
   return best ?? 0;
 }
+
+// --- Dynamic-array functions (FILTER / UNIQUE / SORT / SEQUENCE) ---
+// These return arrays for nesting inside aggregates (SUM(UNIQUE(…)), …);
+// top-level spill-into-neighbours is not modelled in this build.
+
+function flat1(value: FormulaArgument | undefined): FormulaValue[] {
+  if (value === undefined) return [];
+  if (Array.isArray(value)) return [...value];
+  return [value as FormulaValue];
+}
+
+function includeTruthy(v: FormulaValue): boolean {
+  return !(v === false || v === 0 || v === null || v === '');
+}
+
+/** Case-insensitive, type-aware key so UNIQUE matches like excelEquals. */
+function uniqueKey(v: FormulaValue): string {
+  if (typeof v === 'string') return `s:${v.toUpperCase()}`;
+  if (typeof v === 'number') return `n:${v}`;
+  if (typeof v === 'boolean') return `b:${v}`;
+  if (v === null) return 'e';
+  return `t:${String(v)}`;
+}
+
+function uniqueOf(values: FormulaValue[]): FormulaValue[] {
+  const seen = new Set<string>();
+  const out: FormulaValue[] = [];
+  for (const v of values) {
+    const key = uniqueKey(v);
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(v);
+    }
+  }
+  return out;
+}
+
+function sortOf(values: FormulaValue[], order: FormulaArgument | undefined): FormulaArgument {
+  const direction = order === undefined ? 1 : Number(Array.isArray(order) ? order[0] : order);
+  if (direction !== 1 && direction !== -1) return '#VALUE!';
+  const rank = (v: FormulaValue): number => {
+    if (typeof v === 'number') return 0;
+    if (typeof v === 'string') return 1;
+    if (typeof v === 'boolean') return 2;
+    return 3;
+  };
+  const sorted = [...values].sort((a, b) => {
+    const ra = rank(a);
+    const rb = rank(b);
+    if (ra !== rb) return ra - rb;
+    if (typeof a === 'number' && typeof b === 'number') return a - b;
+    const ta = a === null ? '' : String(a);
+    const tb = b === null ? '' : String(b);
+    return ta.localeCompare(tb, 'zh-Hans-CN', { sensitivity: 'base' });
+  });
+  return direction === -1 ? sorted.reverse() : sorted;
+}
+
+function filterOf(data: FormulaArgument | undefined, mask: FormulaArgument | undefined, ifEmpty: FormulaArgument | undefined): FormulaArgument {
+  const list = flat1(data);
+  const flags = flat1(mask);
+  if (flags.length === 0) return ifEmpty !== undefined ? (Array.isArray(ifEmpty) ? ifEmpty : first(ifEmpty) ?? '') : '#CALC!';
+  const picked = list.filter((_, i) => includeTruthy(flags[i] ?? false));
+  if (picked.length === 0) return ifEmpty !== undefined ? (Array.isArray(ifEmpty) ? ifEmpty : first(ifEmpty) ?? '') : '#CALC!';
+  return picked;
+}
+
+function sequenceOf(args: FormulaArgument[]): FormulaArgument {
+  const num = (value: FormulaArgument | undefined, fallback: number): number | undefined => {
+    if (value === undefined) return fallback;
+    const n = Number(Array.isArray(value) ? first(value) : value);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  const rows = num(args[0], 1);
+  const cols = num(args[1], 1);
+  const start = num(args[2], 1);
+  const step = num(args[3], 1);
+  if (rows === undefined || cols === undefined || start === undefined || step === undefined) return '#VALUE!';
+  if (!Number.isInteger(rows) || !Number.isInteger(cols) || rows < 1 || cols < 1) return '#VALUE!';
+  const out: number[] = [];
+  let current = start;
+  for (let y = 0; y < rows; y += 1) {
+    for (let x = 0; x < cols; x += 1) {
+      out.push(current);
+      current += step;
+    }
+  }
+  return out;
+}
+
+registry.register('UNIQUE', { minArgs: 1, maxArgs: 1, evaluate: (args) => uniqueOf(flat1(args[0])) });
+registry.register('SORT', { minArgs: 1, maxArgs: 2, evaluate: (args) => sortOf(flat1(args[0]), args[1]) });
+registry.register('FILTER', { minArgs: 2, maxArgs: 3, evaluate: (args) => filterOf(args[0], args[1], args[2]) });
+registry.register('SEQUENCE', { minArgs: 1, maxArgs: 4, evaluate: (args) => sequenceOf(args) });
