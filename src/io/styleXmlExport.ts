@@ -1,4 +1,5 @@
-import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
+import { zipSync, strFromU8, strToU8 } from 'fflate';
+import { safeUnzip } from './safeUnzip';
 import * as XLSX from 'xlsx';
 import type { Store } from '../store/Store';
 import type { RichTextRun } from '../types';
@@ -60,7 +61,7 @@ export function appendStylesToXlsx(buf: ArrayBuffer, store: Store, sheetIds: rea
   const hasStyles = tables.xfs.length > 1 || tables.richCells.size > 0;
   if (!hasStyles) return buf;
 
-  const files = unzipSync(new Uint8Array(buf));
+  const files = safeUnzip(new Uint8Array(buf));
   files['xl/styles.xml'] = strToU8(buildStylesXml(tables));
   for (const [index, sheetId] of sheetIds.entries()) {
     const sheetPath = `xl/worksheets/sheet${index + 1}.xml`;

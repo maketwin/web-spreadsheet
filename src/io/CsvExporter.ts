@@ -5,7 +5,17 @@ import { displayTextOf } from '../util/cell';
 
 /** RFC 4180: quote a field containing the separator, a quote, CR or LF; double embedded quotes. */
 export function csvQuote(value: string): string {
-  return /[",\r\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
+  // Excel treats a leading = + - @ as a formula when it opens a CSV.
+  const guarded = formulaInjectionPrefix(value) + value;
+  return /[",\r\n]/.test(guarded) ? `"${guarded.replaceAll('"', '""')}"` : guarded;
+}
+
+function formulaInjectionPrefix(value: string): string {
+  if (value.length === 0) return '';
+  const head = value[0];
+  if (head === '=' || head === '+' || head === '@' || head === '\t' || head === '\r') return "'";
+  if (head === '-' && !/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(value)) return "'";
+  return '';
 }
 
 /**

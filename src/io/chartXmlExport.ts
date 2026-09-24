@@ -1,4 +1,5 @@
-import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
+import { zipSync, strFromU8, strToU8 } from 'fflate';
+import { safeUnzip } from './safeUnzip';
 import { num2alpha } from '../util/alphabet';
 import type { Store } from '../store/Store';
 import type { ChartSpec } from '../charts/types';
@@ -31,7 +32,7 @@ export function appendChartsToXlsx(buf: ArrayBuffer, store: Store, sheetIds: rea
     .filter((sheet) => sheet.charts.length > 0);
   if (withCharts.length === 0) return buf;
 
-  const files = unzipSync(new Uint8Array(buf));
+  const files = safeUnzip(new Uint8Array(buf));
   let drawingNo = 0;
   let chartNo = 0;
   const newParts: Record<string, Uint8Array> = {};

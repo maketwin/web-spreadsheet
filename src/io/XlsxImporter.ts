@@ -1,11 +1,12 @@
 import * as XLSX from 'xlsx';
-import { unzipSync } from 'fflate';
+import { safeUnzip } from './safeUnzip';
 import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
 import type { Cell, Style, RichTextRun } from '../types';
 import type { SerializedStore } from '../store/Store';
 import type { SerializedSheetData } from '../store/SheetData';
 import type { ChartSpec } from '../charts/types';
 import { importChartsForSheet } from './chartXmlImport';
+import { importCommentsForSheet } from './commentXmlImport';
 import { parseSharedStrings, sheetStringCells, type SharedStringEntry } from './sharedStrings';
 
 /**
@@ -57,8 +58,7 @@ const ALIGN_MAP: Readonly<Record<string, NonNullable<Style['align']>>> = { left:
 const VALIGN_MAP: Readonly<Record<string, NonNullable<Style['valign']>>> = { top: 'top', center: 'middle', bottom: 'bottom' };
 
 /** Empty worksheets still occupy a slot in SheetNames. */
-export function importXlsx(buffer: ArrayBuffer): SerializedStore {
-  const wb = XLSX.read(buffer, {
+export function importXlsx(buffer: ArrayBuffer): SerializedStore {  const wb = XLSX.read(buffer, {
     type: 'array',
     cellNF: true,
     cellStyles: true,
@@ -79,7 +79,12 @@ export function importXlsx(buffer: ArrayBuffer): SerializedStore {
       : convertSheet(ws, tables, sheetStyleIndexes(sheetXml), sheetStringCells(sheetXml), sst);
     // Floating chart objects: geometry from the drawing part, type/range/title from the chart part.
     const sheetPath = sheetPaths.get(name);
-    if (sheetPath !== undefined) (data.charts as ChartSpec[]).push(...importChartsForSheet(files, sheetPath));
+    if (sheetPath !== undefined) {
+      (data.charts as ChartSpec[]).push(...importChartsForSheet(files, sheetPath));
+      // Comments (notes): parsed from xl/commentsN.xml via the sheet rels —
+      // SheetJS's own comment reader mangles non-ASCII authors.
+      importCommentsForSheet(files, sheetPath, data);
+    }
     return { id: `sheet-${index + 1}`, name, data };
   });
   if (sheets.length === 0) sheets.push({ id: 'sheet-1', name: 'Sheet1', data: emptySheetData() });
@@ -89,7 +94,8 @@ export function importXlsx(buffer: ArrayBuffer): SerializedStore {
 function emptySheetData(): SerializedSheetData {
   return {
     cells: [], rows: [], cols: [], styles: [], merges: [],
-    conditionalRules: [], charts: [], validationRules: [], sparklines: [], namedRanges: [],
+    conditionalRules: [], charts: [], images: [], validationRules: [], sparklines: [], namedRanges: [],
+    rowGroups: [],
   };
 }
 
@@ -105,7 +111,7 @@ function readStyleTables(wb: XLSX.WorkBook): StyleTables {
  * which also makes styled-but-empty cell xml visible to sheetStyleIndexes.
  */
 function readZipEntries(buffer: ArrayBuffer): Map<string, string> {
-  const entries = unzipSync(new Uint8Array(buffer));
+  const entries = safeUnzip(new Uint8Array(buffer));
   const decoder = new TextDecoder();
   const out = new Map<string, string>();
   for (const [path, data] of Object.entries(entries)) {

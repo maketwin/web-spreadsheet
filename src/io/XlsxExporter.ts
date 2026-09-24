@@ -4,6 +4,7 @@ import type { Store } from '../store/Store';
 import type { Cell } from '../types';
 import { parseRange } from '../util/cell';
 import { appendChartsToXlsx } from './chartXmlExport';
+import { appendCommentsToXlsx } from './commentXmlExport';
 import { appendStylesToXlsx } from './styleXmlExport';
 
 export function exportXlsxBuffer(store: Store): ArrayBuffer {
@@ -26,8 +27,9 @@ export function exportXlsxBuffer(store: Store): ArrayBuffer {
   const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;
   const sheetIds = store.getSheets().map(({ id }) => id);
   // SheetJS writes no cell styles: fonts/fills/alignment/numFmt xfs and rich
-  // runs ride in via zip post-processing, then chart parts are appended.
-  return appendChartsToXlsx(appendStylesToXlsx(buf, store, sheetIds), store, sheetIds);
+  // runs ride in via zip post-processing, then chart parts and comment parts
+  // are appended.
+  return appendCommentsToXlsx(appendChartsToXlsx(appendStylesToXlsx(buf, store, sheetIds), store, sheetIds), store, sheetIds);
 }
 
 export function exportXlsx(store: Store): Blob {
