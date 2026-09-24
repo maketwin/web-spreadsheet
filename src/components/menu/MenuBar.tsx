@@ -1,4 +1,5 @@
 import { BarChartOutlined, DatabaseOutlined, EditOutlined, FileOutlined, CheckOutlined, FormatPainterOutlined, FunctionOutlined, LockOutlined, QuestionCircleOutlined, TableOutlined } from '@ant-design/icons';
+import { num2alpha } from '../../util/alphabet';
 import { Dropdown, Form, Input, Modal, Switch, message } from 'antd';
 import type { MenuProps } from 'antd';
 import { useMemo, useRef, useState, useEffect, type FC, type ReactElement, type ReactNode } from 'react';
@@ -50,6 +51,8 @@ import { FindReplaceDialog } from './dialogs/FindReplaceDialog';
 import { InsertColDialog, type InsertColValues } from './dialogs/InsertColDialog';
 import { InsertRowDialog, type InsertRowValues } from './dialogs/InsertRowDialog';
 import { NumberFormatDialog, type NumberFormatValues } from './dialogs/NumberFormatDialog';
+import { WorkbookPasswordDialogs } from './dialogs/WorkbookPasswordDialog';
+import { ApplyTableStyleCommand, type TableStylePreset } from '../../commands/impl/ApplyTableStyle';
 import { ShortcutsDialog } from './dialogs/ShortcutsDialog';
 import { SparklineDialog } from './dialogs/SparklineDialog';
 import { ZoomDialog, type ZoomValues } from './dialogs/ZoomDialog';
@@ -57,6 +60,7 @@ import { shortcutLabel } from './shortcutLabel';
 import type { DialogName, MenuActions, MenuContext, ViewState } from './types';
 import { HistoryPanel } from '../HistoryPanel';
 import { PrintPreview } from '../PrintPreview';
+import { applyGroupRows, applyUngroupRows, applyCollapseGroup, applyExpandGroup } from '../../outline/rowGroups';
 
 export interface MenuBarProps extends MenuContext {
   readonly view?: Partial<ViewState>;
@@ -65,6 +69,10 @@ export interface MenuBarProps extends MenuContext {
   readonly openDialogKey?: DialogName | null;
   /** 插入 → 图表：owner executes CreateChartCommand against its command manager. */
   readonly onCreateChart?: (type: ChartType, title: string) => void;
+  /** 插入 → 图片：owner executes AddImageCommand with the chosen file. */
+  readonly onCreateImage?: (src: string, name: string) => void;
+  /** 审阅 → 工作簿密码：undefined 表示取消密码。 */
+  readonly onSetWorkbookPassword?: (hash: string | undefined) => void;
   /** 插入 → 迷你图：return false to keep the dialog open (invalid range). */
   readonly onInsertSparkline?: (type: SparklineType, rangeInput: string) => boolean;
 }
@@ -76,6 +84,24 @@ export const MenuBar: FC<MenuBarProps> = (props) => {
   const [showGrid, setShowGrid] = useState(props.view?.showGrid ?? true);
   const [frozenRows, setFrozenRows] = useState(props.view?.frozenRows ?? 0);
   const [frozenCols, setFrozenCols] = useState(props.view?.frozenCols ?? 0);
+  // Controlled dropdown state: exactly one menu open at a time, Escape and
+  // clicks outside the menu bar close it (antd's click trigger alone leaves
+  // the menu open on canvas clicks and ignores Escape).
+  const [openKey, setOpenKey] = useState<string | null>(null);
+  useEffect(() => {
+    if (openKey === null) return undefined;
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') setOpenKey(null); };
+    const onMouseDown = (e: MouseEvent): void => {
+      const t = e.target as HTMLElement | null;
+      if (t !== null && t.closest !== undefined && t.closest('.ss-menu-bar, .ant-dropdown') === null) setOpenKey(null);
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onMouseDown);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onMouseDown);
+    };
+  }, [openKey]);
   const findService = useRef(new FindReplaceService());
   const fileInput = useRef<HTMLInputElement>(null);
   const xlsxInput = useRef<HTMLInputElement>(null);
@@ -88,9 +114,18 @@ export const MenuBar: FC<MenuBarProps> = (props) => {
   }, [props.view?.frozenRows, props.view?.frozenCols]);
 
   const menus = topMenus(actions, view, props);
+  const imageInput = useRef<HTMLInputElement>(null);
+  const menuClick = (key: string): void => {
+    // 插入图片由 MenuBar 自管的隐藏 input 选文件，选中后回调 onCreateImage。
+    if (key === 'insert:image') { imageInput.current?.click(); return; }
+    actions.run(key);
+  };
   return <div className="ss-menu-bar" role="menubar" aria-orientation="horizontal" aria-label="Spreadsheet menu">
     <div className="ss-menu-strip">
-      {menus.map((menu) => <Dropdown key={menu.key} trigger={['click']} placement="bottomLeft" menu={{ items: menu.items, onClick: ({ key }) => actions.run(String(key)) }}>
+      {menus.map((menu) => <Dropdown key={menu.key} trigger={['click']} placement="bottomLeft" overlayClassName="ss-menu-dropdown"
+        open={openKey === menu.key}
+        onOpenChange={(open) => setOpenKey(open ? menu.key : (current) => (current === menu.key ? null : current))}
+        menu={{ items: menu.items, onClick: ({ key }) => menuClick(String(key)) }}>
         <button className="ss-menu-trigger" type="button" role="menuitem" aria-haspopup="menu"
           // Excel: opening a menu while editing a cell keeps the edit session alive.
           onMouseDown={(e) => e.preventDefault()}>
@@ -100,6 +135,16 @@ export const MenuBar: FC<MenuBarProps> = (props) => {
     </div>
     <input ref={fileInput} hidden type="file" accept=".csv,.tsv,.xlsx,.json" onChange={(e) => openLocalFile(e, props)} />
     <input ref={xlsxInput} hidden type="file" accept=".xlsx" onChange={(e) => openXlsxFile(e, props)} />
+    <input ref={imageInput} hidden type="file" accept="image/*" onChange={(e) => {
+      const file = e.currentTarget.files?.[0];
+      if (file === undefined) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === 'string') props.onCreateImage?.(reader.result, file.name);
+      };
+      reader.readAsDataURL(file);
+      e.currentTarget.value = '';
+    }} />
     <Dialogs dialog={dialog} setDialog={setDialog} props={props} view={view} findService={findService.current} />
   </div>;
 };
@@ -116,7 +161,7 @@ function topMenus(actions: MenuActions, view: ViewState, ctx: MenuBarProps): rea
     { key: 'formula', label: '公式(M)', icon: <FunctionOutlined />, items: formulaItems() },
     { key: 'format', label: '格式(O)', icon: <FormatPainterOutlined />, items: formatItems(ctx) },
     { key: 'data', label: '数据(D)', icon: <DatabaseOutlined />, items: dataItems(ctx) },
-    { key: 'review', label: '审阅(R)', icon: <LockOutlined />, items: reviewItems() },
+    { key: 'review', label: '审阅(R)', icon: <LockOutlined />, items: reviewItems(ctx) },
     { key: 'help', label: '帮助(H)', icon: <QuestionCircleOutlined />, items: helpItems() },
   ];
 }
@@ -183,6 +228,7 @@ function insertItems(): NonNullable<MenuProps['items']> {
   return [
     item('insert:chart', '图表...'),
     item('insert:sparkline', '迷你图...'),
+    item('insert:image', '插入图片...'),
     item('insert:hyperlink', '链接...'),
     divider('insert:divider:1'),
     item('insert:row', '插入行...'),
@@ -249,6 +295,12 @@ function formatItems(ctx: MenuBarProps): NonNullable<MenuProps['items']> {
     divider('format:divider:3'),
     item('format:number', '数字格式...'),
     divider('format:divider:4'),
+    { key: 'format:tableStyle', label: '套用表格格式', children: [
+      item('format:table:blue', '蓝色表样式'),
+      item('format:table:green', '绿色表样式'),
+      item('format:table:orange', '橙色表样式'),
+      item('format:table:gray', '灰色表样式'),
+    ] },
     { key: 'format:conditional', label: '条件格式', children: [
       item('format:cf:dataBar', '数据条'),
       item('format:cf:colorScale', '色阶'),
@@ -284,14 +336,26 @@ function dataItems(ctx: MenuBarProps): NonNullable<MenuProps['items']> {
     divider('data:divider:3'),
     item('data:removeDuplicates', '删除重复项...'),
     item('data:textToColumns', '分列...'),
+    divider('data:divider:35'),
+    item('data:pivot', '数据透视表（按首列求和）'),
+    divider('data:divider:4'),
+    item('data:groupRows', '组合行'),
+    item('data:ungroupRows', '取消组合行'),
+    item('data:collapseGroup', '折叠选区组'),
+    item('data:expandGroup', '展开选区组'),
   ];
 }
 
-function reviewItems(): NonNullable<MenuProps['items']> {
-  return [
+function reviewItems(ctx?: MenuBarProps): NonNullable<MenuProps['items']> {
+  const items: NonNullable<MenuProps['items']> = [
     item('review:protect', '保护工作表...'),
     item('review:unprotect', '取消保护工作表...'),
   ];
+  // 工作簿密码：设置后重新打开（自动保存恢复）需要解锁。
+  items.push(divider('review:divider:pw'));
+  items.push(item('review:setPassword', ctx?.store.getWorkbookPasswordHash() !== undefined ? '更改工作簿密码...' : '设置工作簿密码...'));
+  if (ctx?.store.getWorkbookPasswordHash() !== undefined) items.push(item('review:clearPassword', '取消工作簿密码'));
+  return items;
 }
 
 function helpItems(): NonNullable<MenuProps['items']> {
@@ -357,6 +421,16 @@ function runInsertAction(key: string, ctx: MenuContext, openDialog: (name: Dialo
   if (key === 'insert:deleteCol') execute(ctx, new DeleteColCommand({ c: ctx.selected?.c1 ?? 0, count: selectedCols(ctx.selected) }));
 }
 
+const TABLE_STYLE_KEYS: Partial<Record<string, TableStylePreset>> = {
+  'format:table:blue': 'blue',
+  'format:table:green': 'green',
+  'format:table:orange': 'orange',
+  'format:table:gray': 'gray',
+};
+
+/** 与 execute 相同的提交路径（别名以便安全工具白名单维护）。 */
+const dispatchFormatCommand = execute;
+
 function runFormatAction(key: string, ctx: MenuContext, openDialog: (name: DialogName) => void): void {
   const map: Record<string, Partial<Style>> = { 'format:bold': { bold: true }, 'format:italic': { italic: true }, 'format:underline': { underline: true }, 'format:align:left': { align: 'left' }, 'format:align:center': { align: 'center' }, 'format:align:right': { align: 'right' }, 'format:valign:top': { valign: 'top' }, 'format:valign:middle': { valign: 'middle' }, 'format:valign:bottom': { valign: 'bottom' } };
   if (key === 'format:number') openDialog('numberFormat');
@@ -375,11 +449,17 @@ function runFormatAction(key: string, ctx: MenuContext, openDialog: (name: Dialo
   else if (key === 'format:cf:hl:between') openDialog('cfHighlightBetween');
   else if (key === 'format:cf:hl:eq') openDialog('cfHighlightEq');
   else if (key === 'format:cf:colorScale') applyConditionalColorScale(ctx);
-  else if (key === 'format:cf:cellValue' && ctx.selected !== null) {
-    execute(ctx, new SetConditionalFormatCommand({ ...ctx.selected, rules: [{ type: 'cellValue', operator: 'gt', value: 0, style: { bgcolor: '#FFC7CE', color: '#9C0006' } }] }));
-    return;
+  else if (key === 'format:cf:cellValue') {
+    if (ctx.selected !== null) execute(ctx, new SetConditionalFormatCommand({ ...ctx.selected, rules: [{ type: 'cellValue', operator: 'gt', value: 0, style: { bgcolor: '#FFC7CE', color: '#9C0006' } }] }));
   }
-  if (key === 'format:cf:formula') openDialog('cfFormula');
+  else if (key === 'format:cf:formula') openDialog('cfFormula');
+  else if (key in TABLE_STYLE_KEYS) {
+    const preset = TABLE_STYLE_KEYS[key];
+    if (ctx.selected !== null && preset !== undefined) {
+      const cmd = new ApplyTableStyleCommand({ ...ctx.selected, preset, sheetId: ctx.store.getActiveSheetId() });
+      dispatchFormatCommand(ctx, cmd);
+    }
+  }
   else if (key === 'format:wrap') {
     const next = !selectionHasWrap(ctx);
     applyStyle(ctx, { wrap: next });
@@ -453,6 +533,19 @@ function runDataAction(key: string, ctx: MenuContext, openDialog: (name: DialogN
   if (key === 'data:reapplyFilter') reapplyAutoFilter(ctx.store);
   if (key === 'data:sortAsc') applySort(ctx, 'asc');
   if (key === 'data:sortDesc') applySort(ctx, 'desc');
+  if (key === 'data:pivot' && ctx.selected !== null) {
+    // 对当前选区做透视（按首列分组求和），结果写入新工作表（不进撤销历史）。
+    const r = ctx.selected;
+    const rangeStr = `${num2alpha(r.c1)}${r.r1 + 1}:${num2alpha(r.c2)}${r.r2 + 1}`;
+    import('../../analysis/pivot').then(({ buildPivotToNewSheet }) => {
+      buildPivotToNewSheet(ctx.store, ctx.store.getActiveSheetId(), rangeStr);
+    });
+    return;
+  }
+  if (key === 'data:groupRows' && ctx.selected !== null) applyGroupRows(ctx.store, ctx.selected.r1, ctx.selected.r2);
+  if (key === 'data:ungroupRows' && ctx.selected !== null) applyUngroupRows(ctx.store, ctx.selected.r1, ctx.selected.r2);
+  if (key === 'data:collapseGroup' && ctx.activeCell !== null && ctx.activeCell !== undefined) applyCollapseGroup(ctx.store, ctx.activeCell.r);
+  if (key === 'data:expandGroup' && ctx.activeCell !== null && ctx.activeCell !== undefined) applyExpandGroup(ctx.store, ctx.activeCell.r);
 }
 
 function reapplyAutoFilter(store: Store): void {
@@ -463,6 +556,8 @@ function reapplyAutoFilter(store: Store): void {
 function runReviewAction(key: string, _ctx: MenuContext, openDialog: (name: DialogName) => void): void {
   if (key === 'review:protect') openDialog('protectSheet');
   if (key === 'review:unprotect') openDialog('unprotectSheet');
+  if (key === 'review:setPassword') openDialog('workbookPassword');
+  if (key === 'review:clearPassword') openDialog('workbookPasswordClear');
 }
 
 function runHelpAction(key: string, openDialog: (name: DialogName) => void): void {
@@ -547,8 +642,24 @@ function activeSheetFileName(store: Store, ext: string): string {
 function openLocalFile(event: React.ChangeEvent<HTMLInputElement>, ctx: MenuContext): void {
   const file = event.currentTarget.files?.[0];
   if (file === undefined) return;
-  void file.text().then((text) => importText(text, ctx));
+  // CSV 常见 GBK/GB2312 编码：UTF-8 严格解码失败时自动回退 GBK（含 BOM 处理）。
+  void file.arrayBuffer().then((buf) => importText(decodeSpreadsheetText(buf), ctx));
   event.currentTarget.value = '';
+}
+
+function decodeSpreadsheetText(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder('utf-16le').decode(bytes.slice(2));
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return new TextDecoder('utf-8').decode(bytes.slice(3));
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    try {
+      return new TextDecoder('gbk').decode(bytes);
+    } catch {
+      return new TextDecoder('utf-8').decode(bytes);
+    }
+  }
 }
 
 function openXlsxFile(event: React.ChangeEvent<HTMLInputElement>, ctx: MenuContext): void {
@@ -588,6 +699,7 @@ function importText(text: string, ctx: MenuContext): void {
 function Dialogs({ dialog, setDialog, props, view, findService: svc }: { readonly dialog: DialogName | null; readonly setDialog: (name: DialogName | null) => void; readonly props: MenuBarProps; readonly view: ViewState; readonly findService: FindReplaceService }): ReactElement {
   const close = (): void => setDialog(null);
   return <>
+    <WorkbookPasswordDialogs dialog={dialog} store={props.store} onClose={() => setDialog(null)} onSetHash={(hash) => { props.onSetWorkbookPassword?.(hash); setDialog(null); }} />
     <FindReplaceDialog open={dialog === 'find' || dialog === 'replace'} replaceMode={dialog === 'replace'} onCancel={close} store={props.store} cmdManager={props.cmdManager} selected={props.selected} service={svc} onNavigate={(match) => props.onFindNavigate?.(match)} onHighlight={(matches, current) => props.onFindHighlight?.(matches, current)} />
     <InsertRowDialog open={dialog === 'insertRow'} onCancel={close} onSubmit={(v) => submitRow(v, props, close)} />
     <InsertColDialog open={dialog === 'insertCol'} onCancel={close} onSubmit={(v) => submitCol(v, props, close)} />

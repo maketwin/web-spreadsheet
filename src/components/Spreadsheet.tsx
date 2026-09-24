@@ -14,6 +14,8 @@ import type { Command } from '../commands/Command';
 import type { DialogName } from './menu/types';
 import { CommandManager } from '../commands/CommandManager';
 import { SetCellText } from '../commands/impl/SetCellText';
+import { SetCellCommentCommand } from '../commands/impl/SetCellComment';
+import { hashPassword } from '../util/passwordHash';
 import { SetRangeStyleCommand } from '../commands/impl/SetRangeStyle';
 import { SetRangeBorderCommand, type BorderPreset, type BorderLine } from '../commands/impl/SetRangeBorder';
 import { SetRangeValues } from '../commands/impl/SetRangeValues';
@@ -25,12 +27,14 @@ import { sameRange, skipHiddenCells } from '../selection/visibleStep';
 import { KeyboardHandler, type MenuShortcutCommand } from '../keys/KeyboardHandler';
 import type { FindMatch } from '../find/FindReplaceService';
 import { PluginManager, type Plugin } from '../plugin/PluginManager';
-import { CanvasRenderer, COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS, type CellAddress } from '../renderer/CanvasRenderer';
+import { CanvasRenderer, COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS, type CellAddress, type FormulaRefHighlight } from '../renderer/CanvasRenderer';
+import { useFormulaAssist, parseFormulaRefs, REF_HIGHLIGHT_PALETTE } from './formulaAssist';
 import { FillRangeCommand } from '../commands/impl/FillRange';
 import { adjustDecimalPlaces } from '../format/decimalPlaces';
 import { CreateChartCommand } from '../commands/impl/CreateChart';
 import { RemoveChartCommand } from '../commands/impl/RemoveChart';
 import { SetChartAnchorCommand } from '../commands/impl/SetChartAnchor';
+import { AddImageCommand, RemoveImageCommand, SetImageAnchorCommand } from '../commands/impl/ImageObject';
 import { SetRowsHiddenCommand, SetColsHiddenCommand } from '../commands/impl/SetHidden';
 import { SetSparklineCommand } from '../commands/impl/SetSparkline';
 import { makeMoveRange } from '../commands/commandFactories';
@@ -60,6 +64,7 @@ import { excelSelectAll, edgeJump, currentRegion } from '../selection/currentReg
 import { parseNameBoxInput } from '../selection/nameBox';
 import { toggleAutoFilterCommand } from '../filter/toggleFilter';
 import { FloatingChart } from '../charts/FloatingChart';
+import { FloatingImage } from '../charts/FloatingImage';
 import { CHART_DEFAULT_H, CHART_DEFAULT_W, CHART_MIN_H, CHART_MIN_W, type ChartAnchor, type ChartType } from '../charts/types';
 import { normalizeAnchor } from '../charts/geometry';
 import type { SparklineType } from '../sparkline/types';
@@ -88,9 +93,11 @@ interface FilterPopupState { readonly r: number; readonly c: number; readonly x:
 /** Module-level hook the active instance registers so applyShortcutStyle can offer run-level styling to the open cell editor. */
 const editorRunStyleIntercept: { current: ((style: Partial<Style>) => boolean) | null } = { current: null };
 type SpreadsheetContextMenu =
-  | { readonly kind: 'cell'; readonly x: number; readonly y: number }
+  | { readonly kind: 'cell'; readonly x: number; readonly y: number; readonly r: number; readonly c: number; readonly hasComment: boolean }
   | { readonly kind: 'row'; readonly index: number; readonly count: number; readonly x: number; readonly y: number }
   | { readonly kind: 'column'; readonly index: number; readonly count: number; readonly x: number; readonly y: number };
+
+interface CommentDraft { readonly r: number; readonly c: number; readonly text: string; readonly isNew: boolean }
 
 export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, formulaEngine, theme, onClose }) => {
   const [selected, setSelected] = useState<Selection | null>(cellSelection(0, 0));
@@ -100,7 +107,18 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const [view, setView] = useState<ViewState>({ zoom: 100, showFormula: false, showGrid: true, frozenRows: 0, frozenCols: 0 });
   const [findDialogOpen, setFindDialogOpen] = useState<DialogName | null>(null);
   const [ctxMenu, setCtxMenu] = useState<SpreadsheetContextMenu | null>(null);
+  const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
   const [protectOpen, setProtectOpen] = useState(false);
+  /** 工作簿密码锁定：恢复的自动保存带密码时，需解锁才能操作。 */
+  const [workbookLocked, setWorkbookLocked] = useState(store.getWorkbookPasswordHash() !== undefined);
+  const [workbookUnlocked, setWorkbookUnlocked] = useState(false);
+  const [unlockInput, setUnlockInput] = useState('');
+  useEffect(() => {
+    const update = (): void => setWorkbookLocked(store.getWorkbookPasswordHash() !== undefined && !workbookUnlocked);
+    const off = store.subscribe(update);
+    update();
+    return off;
+  }, [store, workbookUnlocked]);
   /** Add/rename sheet prompt: window.prompt is suppressed in embedded browsers, so use an in-app modal. */
   const [moveOrCopySheetId, setMoveOrCopySheetId] = useState<string | null>(null);
   const [sheetPrompt, setSheetPrompt] = useState<{ readonly mode: 'add' | 'rename'; readonly id?: string; readonly value: string } | null>(null);
@@ -111,6 +129,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const [filterPopup, setFilterPopup] = useState<FilterPopupState | null>(null);
   /** Selected floating chart object (Excel: charts are selectable drawing objects). */
   const [selectedChartId, setSelectedChartId] = useState<string | null>(null);
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const formulaInputRef = useRef<HTMLInputElement>(null);
   const formulaBarHandleRef = useRef<FormulaBarHandle | null>(null);
@@ -208,6 +227,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     }
   }, [selectSelection]);
   const onCellContextMenu = useCallback((cell: CellAddress, x: number, y: number) => {
+    const cellMenu = (): SpreadsheetContextMenu => ({ kind: 'cell', x, y, r: cell.r, c: cell.c, hasComment: store.getCell(cell.r, cell.c)?.comment !== undefined });
     const cur = selectedRef.current;
     // Excel: right-click inside selection keeps it; outside selects that cell.
     // Full row/col selection keeps kind and opens the matching header-style menu.
@@ -220,16 +240,22 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
         setCtxMenu({ kind: 'column', index: cur.range.c1, count: cur.range.c2 - cur.range.c1 + 1, x, y });
         return;
       }
-      setCtxMenu({ kind: 'cell', x, y });
+      setCtxMenu(cellMenu());
       return;
     }
     flushSync(() => selectSelection(cellSelection(cell.r, cell.c)));
-    setCtxMenu({ kind: 'cell', x, y });
-  }, [selectSelection]);
+    setCtxMenu(cellMenu());
+  }, [selectSelection, store]);
   const execCmd = useCallback((cmd: Command) => {
     if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store);
   }, [cmdManager, store]);
-  const { canvasRef, rendererRef } = useCanvasRenderer(store, selected, onCellClick, selectSelection, view, setView, cmdManager, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick, followHyperlink);
+  const { canvasRef, rendererRef } = useCanvasRenderer(store, selected, onCellClick, selectSelection, view, setView, cmdManager, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick, followHyperlink, editingRef);
+  const handleRefHighlights = useCallback((ranges: readonly FormulaRefHighlight[] | null) => { rendererRef.current?.setFormulaRefHighlights(ranges); }, []);
+  // The renderer refuses to steal canvas focus (which would blur-commit the
+  // cell editor) only while its editing flag is set — keep it in sync.
+  useEffect(() => {
+    rendererRef.current?.setEditing(editing !== null);
+  }, [editing, rendererRef]);
   // Find highlights are sheet-tagged: the renderer only ever sees the active
   // sheet's slice, refreshed whenever either the matches or the sheet change.
   const [findHighlights, setFindHighlights] = useState<{ matches: readonly FindMatch[]; current: number } | null>(null);
@@ -292,7 +318,12 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       if (rule !== undefined) {
         const svc = new DataValidationService();
         const result = svc.validate(value, rule);
-        if (!result.valid) { message.warning(result.message ?? '输入值不符合验证规则'); }
+        if (!result.valid) {
+          message.warning(result.message ?? '输入值不符合验证规则');
+          editingRef.current = ed;
+          setEditing(ed);
+          return;
+        }
       }
       const selRange = fillSelection ? selectedRef.current?.range : undefined;
       const fillAll = selRange !== undefined && (selRange.r1 !== selRange.r2 || selRange.c1 !== selRange.c2);
@@ -316,6 +347,9 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
         selectRange(next);
       }
     }
+    // Excel: the editor unmounts on commit — put keyboard focus back on the
+    // grid, or arrows/undo stay dead until the user clicks a cell.
+    canvasRef.current?.focus();
     setEditing(null);
   };
   commitEditingRef.current = (value: string, runs?: RichTextRun[]) => commitEditing(value, undefined, false, runs);
@@ -475,9 +509,52 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   }, [editing]);
 
   return <ErrorBoundary><div className="ss-root">
-    <MenuBar {...menuBarProps(store, cmdManager, selected, selectRange, () => selectSelection(sheetSelection(allSheetRange())), onClose, applyRunStyleToEditor)} view={{ ...view, setZoom: (zoom) => setView((current) => ({ ...current, zoom })), setShowFormula: (showFormula) => setView((current) => ({ ...current, showFormula })), setShowGrid: (showGrid) => setView((current) => ({ ...current, showGrid })), setFreeze: (frozenRows, frozenCols) => setView((current) => ({ ...current, frozenRows, frozenCols })) }} onFindNavigate={(match) => { if (match.sheetId !== store.getActiveSheetId()) store.activateSheet(match.sheetId); selectSelection(cellSelection(match.r, match.c)); }} onFindHighlight={(matches, current) => setFindHighlights(matches.length === 0 ? null : { matches, current })} openDialogKey={findDialogOpen} onCreateChart={(type, title) => submitCreateChart(type, title, store, selected, execCmd, rendererRef.current, setSelectedChartId)} onInsertSparkline={(type, rangeInput) => submitInsertSparkline(type, rangeInput, store, selected, execCmd)} />
+    <MenuBar {...menuBarProps(store, cmdManager, selected, selectRange, () => selectSelection(sheetSelection(allSheetRange())), onClose, applyRunStyleToEditor)} view={{ ...view, setZoom: (zoom) => setView((current) => ({ ...current, zoom })), setShowFormula: (showFormula) => setView((current) => ({ ...current, showFormula })), setShowGrid: (showGrid) => setView((current) => ({ ...current, showGrid })), setFreeze: (frozenRows, frozenCols) => setView((current) => ({ ...current, frozenRows, frozenCols })) }} onFindNavigate={(match) => { if (match.sheetId !== store.getActiveSheetId()) store.activateSheet(match.sheetId); selectSelection(cellSelection(match.r, match.c)); }} onFindHighlight={(matches, current) => setFindHighlights(matches.length === 0 ? null : { matches, current })} openDialogKey={findDialogOpen} onCreateChart={(type, title) => submitCreateChart(type, title, store, selected, execCmd, rendererRef.current, setSelectedChartId)} onCreateImage={(src, name) => submitCreateImage(src, name, selected, execCmd, setSelectedImageId)} onSetWorkbookPassword={(hash) => { store.setWorkbookPasswordHash(hash); void saveToDB(DEFAULT_ID, store.serialize()); }} onInsertSparkline={(type, rangeInput) => submitInsertSparkline(type, rangeInput, store, selected, execCmd)} />
     <InteractionToolbar selected={selected} store={store} cmdManager={cmdManager} view={view} setView={setView} selectAll={() => selectSelection(sheetSelection(allSheetRange()))} painting={painting} onTogglePainter={() => { if (painting) { setPainting(false); setSourceStyle(undefined); } else { const cell = selected?.active; const s = cell === undefined ? undefined : store.getCell(cell.r, cell.c)?.styleId === undefined ? undefined : store.getStyle(store.getCell(cell.r, cell.c)!.styleId!); setSourceStyle(s); setPainting(true); } }} onToggleProtection={() => setProtectOpen(true)} />
     <ProtectionModal open={protectOpen} onClose={() => setProtectOpen(false)} store={store} />
+    {workbookLocked && <Modal
+      title="工作簿已锁定"
+      open
+      closable={false}
+      maskClosable={false}
+      keyboard={false}
+      footer={[
+        <Button key="unlock" type="primary" onClick={() => { if (hashPassword(unlockInput) === store.getWorkbookPasswordHash()) { setWorkbookUnlocked(true); setUnlockInput(''); message.success('已解锁'); } else message.error('密码错误'); }}>解锁</Button>,
+      ]}
+      width={380}
+    >
+      <Input.Password
+        autoFocus
+        placeholder="输入工作簿密码"
+        value={unlockInput}
+        onChange={(e) => setUnlockInput(e.target.value)}
+        onPressEnter={() => { if (hashPassword(unlockInput) === store.getWorkbookPasswordHash()) { setWorkbookUnlocked(true); setUnlockInput(''); } else message.error('密码错误'); }}
+      />
+    </Modal>}
+    <Modal
+      title={commentDraft?.isNew ? '插入批注' : '编辑批注'}
+      open={commentDraft !== null}
+      onCancel={() => setCommentDraft(null)}
+      onOk={() => {
+        if (commentDraft === null) return;
+        const text = commentDraft.text.trim();
+        if (text === '') { setCommentDraft(null); return; }
+        execCmd(new SetCellCommentCommand({ r: commentDraft.r, c: commentDraft.c, comment: { text, author: '我', createdAt: new Date().toISOString() } }));
+        setCommentDraft(null);
+      }}
+      okText="确定"
+      cancelText="取消"
+      width={380}
+      destroyOnHidden
+    >
+      <Input.TextArea
+        autoFocus
+        rows={4}
+        value={commentDraft?.text ?? ''}
+        placeholder="输入批注内容"
+        onChange={(e) => setCommentDraft((current) => current === null ? current : { ...current, text: e.target.value })}
+      />
+    </Modal>
     <Modal
       title={sheetPrompt?.mode === 'rename' ? '重命名工作表' : '新建工作表'}
       open={sheetPrompt !== null}
@@ -539,10 +616,18 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       } else if (formulaRunsRef.current !== undefined) {
         formulaRunsRef.current = applyTextChangeToRuns(formulaRunsRef.current, prev, next);
       }
-    }} onCommit={(committed) => {
+    }} onCommit={(committed, fillSelection) => {
       const value = committed ?? formulaBarHandleRef.current?.getValue() ?? formulaInputRef.current?.value ?? formulaValue;
+      if (store.isSheetProtected()) { message.warning('工作表已保护，无法编辑'); return; }
       const ed = editingRef.current;
-      if (ed !== null) { commitEditing(value, undefined, false, ed.richDraft !== undefined ? normalizeRuns(ed.richDraft) ?? undefined : undefined); return; }
+      if (ed !== null) { commitEditing(value, undefined, fillSelection === true, ed.richDraft !== undefined ? normalizeRuns(ed.richDraft) ?? undefined : undefined); return; }
+      const range = selected?.range;
+      const multi = fillSelection === true && range !== undefined && (range.r1 !== range.r2 || range.c1 !== range.c2);
+      if (multi && range !== undefined && selected !== null) {
+        const active = selected.active ?? { r: range.r1, c: range.c1 };
+        applyMatrix(store, cmdManager, range.r1, range.c1, fillSelectionPatches(range, active, value, formulaRunsRef.current));
+        return;
+      }
       commitFormulaValue(selected, value, store, cmdManager, formulaRunsRef.current);
     }} onCancel={() => {
       if (editingRef.current !== null) { setEditing(null); return; }
@@ -575,8 +660,10 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
         const caret = caretOffsetAtClick(rendererRef.current, store, cell, e.clientX, e.clientY, view.zoom);
         startEditing(cell, undefined, true, caret);
       }} />
-      {editing !== null && <EditorOverlay refEl={inputRef} editingRefSetter={(cell) => { editingRef.current = cell; setEditing(cell); }} editing={editing} setEditing={setEditing} commit={commitEditing} zoom={view.zoom} store={store} richApiRef={richApiRef} onCharStyleKey={applyCharStyleKey} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}
-      <div className="ss-chart-layer">{store.getCharts().map((spec) => <FloatingChart key={spec.id} spec={spec} store={store} renderer={rendererRef.current} selected={selectedChartId === spec.id} onSelect={setSelectedChartId} onGeometry={(id, anchor) => execCmd(new SetChartAnchorCommand({ id, anchor }))} onRemove={(id) => { execCmd(new RemoveChartCommand({ id })); setSelectedChartId((current) => current === id ? null : current); canvasRef.current?.focus(); }} onUndo={() => cmdManager?.undo()} onRedo={() => cmdManager?.redo()} />)}</div></div>
+      {editing !== null && <EditorOverlay refEl={inputRef} editingRefSetter={(cell) => { editingRef.current = cell; setEditing(cell); }} editing={editing} setEditing={setEditing} commit={commitEditing} zoom={view.zoom} store={store} richApiRef={richApiRef} onCharStyleKey={applyCharStyleKey} onRefHighlights={handleRefHighlights} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}
+      <div className="ss-chart-layer">{store.getCharts().map((spec) => <FloatingChart key={spec.id} spec={spec} store={store} renderer={rendererRef.current} selected={selectedChartId === spec.id} onSelect={setSelectedChartId} onGeometry={(id, anchor) => execCmd(new SetChartAnchorCommand({ id, anchor }))} onRemove={(id) => { execCmd(new RemoveChartCommand({ id })); setSelectedChartId((current) => current === id ? null : current); canvasRef.current?.focus(); }} onUndo={() => cmdManager?.undo()} onRedo={() => cmdManager?.redo()} />)}
+        {store.getImages().map((img) => <FloatingImage key={img.id} spec={img} renderer={rendererRef.current} selected={selectedImageId === img.id} onSelect={setSelectedImageId} onGeometry={(id, anchor) => execCmd(new SetImageAnchorCommand({ id, anchor }))} onRemove={(id) => { execCmd(new RemoveImageCommand({ id })); setSelectedImageId((current) => current === id ? null : current); canvasRef.current?.focus(); }} onUndo={() => cmdManager?.undo()} onRedo={() => cmdManager?.redo()} />)}
+      </div></div>
       <PasteSpecialDialog open={pasteSpecialOpen} onOk={(opts) => void applyPasteSpecial(opts)} onCancel={() => setPasteSpecialOpen(false)} />
       {filterPopup !== null && <FilterDropdown store={store} cmdManagerExecutor={execCmd} r={filterPopup.r} c={filterPopup.c} x={filterPopup.x} y={filterPopup.y} onClose={() => setFilterPopup(null)} />}
     <StatusBar store={store} selected={selected?.range ?? null} zoom={view.zoom} />
@@ -602,6 +689,14 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       onDeleteRow={() => { const range = selectedRef.current?.range; if (range === undefined) return; execCmd(new DeleteRowCommand({ r: range.r1, count: range.r2 - range.r1 + 1 })); }}
       onDeleteCol={() => { const range = selectedRef.current?.range; if (range === undefined) return; execCmd(new DeleteColCommand({ c: range.c1, count: range.c2 - range.c1 + 1 })); }}
       onNumberFormat={() => { setFindDialogOpen(null); queueMicrotask(() => setFindDialogOpen('numberFormat')); }}
+      hasComment={ctxMenu.hasComment}
+      onInsertComment={() => setCommentDraft({ r: ctxMenu.r, c: ctxMenu.c, text: '', isNew: true })}
+      onEditComment={() => setCommentDraft((current) => {
+        if (current !== null) return current;
+        const existing = store.getCell(ctxMenu.r, ctxMenu.c)?.comment;
+        return { r: ctxMenu.r, c: ctxMenu.c, text: existing?.text ?? '', isNew: false };
+      })}
+      onDeleteComment={() => execCmd(new SetCellCommentCommand({ r: ctxMenu.r, c: ctxMenu.c }))}
     />}
     {(ctxMenu?.kind === 'row' || ctxMenu?.kind === 'column') && <HeaderContextMenu
       x={ctxMenu.x} y={ctxMenu.y} type={ctxMenu.kind} index={ctxMenu.index} count={ctxMenu.count} onClose={closeCtxMenu}
@@ -647,6 +742,7 @@ export class Spreadsheet {
       // wins — a late restore must not clobber it or wipe fresh undo state.
       if (data === undefined || this.userTouched) return;
       this.store.replaceAll(data);
+      this.store.setWorkbookPasswordHash(data.passwordHash);
       this.cmdManager.clear();
     } catch (err) {
       console.error('Failed to restore workbook from IndexedDB:', err);
@@ -654,9 +750,20 @@ export class Spreadsheet {
   }
 }
 
-interface EditorOverlayProps { readonly refEl: RefObject<HTMLTextAreaElement>; readonly editingRefSetter: (cell: EditingCell) => void; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly commit: (value: string, moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection?: boolean, runs?: RichTextRun[]) => void; readonly zoom: number; readonly store: Store; readonly cellRect?: { x: number; y: number; w: number; h: number }; readonly richApiRef: MutableRefObject<RichEditorApi | null>; readonly onCharStyleKey?: (key: 'bold' | 'italic' | 'underline') => void }
-const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editing, setEditing, commit, zoom, store, cellRect, richApiRef, onCharStyleKey }) => {
+interface EditorOverlayProps { readonly refEl: RefObject<HTMLTextAreaElement>; readonly editingRefSetter: (cell: EditingCell) => void; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly commit: (value: string, moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection?: boolean, runs?: RichTextRun[]) => void; readonly zoom: number; readonly store: Store; readonly cellRect?: { x: number; y: number; w: number; h: number }; readonly richApiRef: MutableRefObject<RichEditorApi | null>; readonly onCharStyleKey?: (key: 'bold' | 'italic' | 'underline') => void; readonly onRefHighlights?: (ranges: readonly FormulaRefHighlight[] | null) => void }
+const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editing, setEditing, commit, zoom, store, cellRect, richApiRef, onCharStyleKey, onRefHighlights }) => {
   const composing = useRef(false);
+  const assist = useFormulaAssist();
+  const editingValue = editing.value;
+  // Excel formula editing: colored boxes over every range the formula references.
+  useEffect(() => {
+    if (onRefHighlights === undefined) return;
+    if (!editingValue.startsWith('=')) { onRefHighlights(null); return; }
+    const refs = parseFormulaRefs(editingValue);
+    const ranges = refs.map((r, i) => ({ ...r, color: REF_HIGHLIGHT_PALETTE[i % REF_HIGHLIGHT_PALETTE.length]! }));
+    onRefHighlights(ranges.length > 0 ? ranges : null);
+  }, [editingValue, onRefHighlights]);
+  useEffect(() => () => { onRefHighlights?.(null); }, [onRefHighlights]);
   const cellStyle = store.getCell(editing.r, editing.c)?.styleId !== undefined
     ? store.getStyle(store.getCell(editing.r, editing.c)!.styleId!)
     : undefined;
@@ -686,30 +793,44 @@ const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editin
         // Toolbar/menu interaction keeps the draft alive so formatting can land
         // in the selection; any other blur (click-away) commits like the textarea.
         const active = document.activeElement as HTMLElement | null;
-        if (active !== null && active.closest('.ss-interaction-toolbar, .ss-menu-bar, .ant-dropdown, .ant-popover') !== null) return;
+        if (active !== null && active.closest('.ss-interaction-toolbar, .ss-menu-bar, .ss-formula-bar, .ant-dropdown, .ant-popover') !== null) return;
         commitRich();
       }}
     />;
   }
-  return <textarea
-    ref={refEl}
-    className={`ss-editor-overlay${wrapping ? ' ss-editor-overlay--wrap' : ''}`}
-    style={editorStyle(store, editing, zoom, cellRect, cellStyle, editing.value)}
-    value={editing.value}
-    rows={1}
-    spellCheck={false}
-    onChange={(e) => setEditing({ ...editing, value: e.target.value })}
+  const editorCss = editorStyle(store, editing, zoom, cellRect, cellStyle, editing.value);
+  const assistSetValue = (value: string, caret: number): void => {
+    setEditing({ ...editing, value });
+    requestAnimationFrame(() => { const t = refEl.current; if (t !== null) { t.selectionStart = caret; t.selectionEnd = caret; } });
+  };
+  const editorTop = typeof editorCss.top === 'number' ? editorCss.top : 0;
+  const editorLeft = typeof editorCss.left === 'number' ? editorCss.left : 0;
+  const editorHeight = typeof editorCss.height === 'number' ? editorCss.height : 24;
+  return <>
+    <textarea
+      ref={refEl}
+      className={`ss-editor-overlay${wrapping ? ' ss-editor-overlay--wrap' : ''}`}
+      style={editorCss}
+      value={editing.value}
+      rows={1}
+      spellCheck={false}
+      onChange={(e) => { const v = e.target.value; setEditing({ ...editing, value: v }); assist.afterChange(v, e.target.selectionStart ?? v.length); }}
     onCompositionStart={() => { composing.current = true; }}
     onCompositionEnd={() => { composing.current = false; }}
     onBlur={() => {
       // Same toolbar/menu guard as the rich editor: formatting from the
       // toolbars must land in the draft, not commit it.
       const active = document.activeElement as HTMLElement | null;
-      if (active !== null && active.closest('.ss-interaction-toolbar, .ss-menu-bar, .ant-dropdown, .ant-popover') !== null) return;
+      if (active !== null && active.closest('.ss-interaction-toolbar, .ss-menu-bar, .ss-formula-bar, .ant-dropdown, .ant-popover') !== null) return;
       commit(refEl.current?.value ?? editing.value);
     }}
     onKeyDown={(e) => {
       if (composing.current) return;
+      // Formula AutoComplete owns the arrow/Tab/Enter keys while its list is open.
+      if (assist.onKeyDown(e.key, refEl.current?.value ?? editing.value, refEl.current?.selectionStart ?? editing.value.length, assistSetValue)) {
+        e.preventDefault();
+        return;
+      }
       // Excel: Ctrl/Cmd+B/I/U while editing formats the selected characters
       // (upgrading the draft to rich runs) instead of doing nothing.
       if ((e.ctrlKey || e.metaKey) && !e.altKey) {
@@ -760,10 +881,35 @@ const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editin
       handleEditorKey(e, refEl, (moveAfter, fillSelection) => commit(refEl.current?.value ?? editing.value, moveAfter, fillSelection), () => setEditing(null), (next) => setEditing({ ...editing, value: next }), editing.editMode === true, () => setEditing({ ...editing, value: refEl.current?.value ?? editing.value, editMode: true }));
     }}
     aria-label="Cell editor"
-  />;
+    />
+    {assist.signature !== null && (
+      <div className="ss-formula-signature" style={{ position: 'absolute', left: editorLeft, top: Math.max(0, editorTop - 34), zIndex: 45 }}>
+        <span className="ss-sig-name">{assist.signature.name}</span>
+        <span className="ss-sig-text">{assist.signature.sig}</span>
+        <div className="ss-sig-desc">{assist.signature.desc} · 第 {assist.signature.argIndex + 1} 个参数</div>
+      </div>
+    )}
+    {assist.suggestions !== null && (
+      <ul className="ss-formula-assist" style={{ position: 'absolute', left: editorLeft, top: editorTop + editorHeight + 4, zIndex: 45 }}>
+        {assist.suggestions.items.map((name, i) => (
+          <li
+            key={name}
+            className={i === assist.suggestions?.active ? 'ss-active' : undefined}
+            onMouseDown={(ev) => {
+              ev.preventDefault();
+              assist.onKeyDown('Enter', refEl.current?.value ?? editing.value, refEl.current?.selectionStart ?? editing.value.length, assistSetValue);
+              refEl.current?.focus();
+            }}
+          >
+            <span className="ss-fn-name">{name}</span>
+          </li>
+        ))}
+      </ul>
+    )}
+  </>;
 };
 
-function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick: (cell: CellAddress, shift: boolean, ctrl: boolean) => void, onSelectionChange: (selection: Selection) => void, view: ViewState, setView: Dispatch<SetStateAction<ViewState>>, cmdManager: CommandManager | undefined, onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => void, onCellContextMenu: (cell: CellAddress, x: number, y: number) => void, onAutoFilterClick: (r: number, c: number, x: number, y: number) => void, onHyperlinkClick: (link: NonNullable<Cell['hyperlink']>) => void): { canvasRef: RefObject<HTMLCanvasElement>; rendererRef: RefObject<CanvasRenderer | null> } {
+function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick: (cell: CellAddress, shift: boolean, ctrl: boolean) => void, onSelectionChange: (selection: Selection) => void, view: ViewState, setView: Dispatch<SetStateAction<ViewState>>, cmdManager: CommandManager | undefined, onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => void, onCellContextMenu: (cell: CellAddress, x: number, y: number) => void, onAutoFilterClick: (r: number, c: number, x: number, y: number) => void, onHyperlinkClick: (link: NonNullable<Cell['hyperlink']>) => void, editingLiveRef: RefObject<EditingCell | null>): { canvasRef: RefObject<HTMLCanvasElement>; rendererRef: RefObject<CanvasRenderer | null> } {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<CanvasRenderer | null>(null);
   const callbacks = useRef({ onCellClick, onSelectionChange, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick, onHyperlinkClick });
@@ -773,9 +919,10 @@ function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick
   useEffect(() => {
     if (canvasRef.current === null) return undefined;
     const currentSelection = selectedLiveRef.current;
-    const base = { canvas: canvasRef.current, store, zoom: view.zoom, showFormula: view.showFormula, showGrid: view.showGrid, frozenRows: view.frozenRows, frozenCols: view.frozenCols, onCellClick: (cell: CellAddress, shift?: boolean, ctrl?: boolean) => flushSync(() => callbacks.current.onCellClick(cell, shift === true, ctrl === true)), onHyperlinkClick: (cell: CellAddress) => { const link = store.getCell(cell.r, cell.c)?.hyperlink; if (link !== undefined) flushSync(() => callbacks.current.onHyperlinkClick(link)); }, onSelectionChange: (range: RangeAddress, active?: CellAddress, anchor?: CellAddress) => flushSync(() => callbacks.current.onSelectionChange(snapRangeSelection(store, rangeSelection(range, anchor ?? selectedLiveRef.current?.anchor, active ?? { r: range.r2, c: range.c2 })))), onColumnSelect: (c: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(columnSelection(c, TOTAL_ROWS, shift && current?.kind === 'column' ? current.anchor.c : c)); }), onRowSelect: (r: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(rowSelection(r, TOTAL_COLS, shift && current?.kind === 'row' ? current.anchor.r : r)); }), onSheetSelect: () => flushSync(() => callbacks.current.onSelectionChange(sheetSelection(allSheetRange()))), onRowResize: (r: number, height: number) => { const cmd = new SetRowHeight({ r, height }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColResize: (c: number, width: number) => { const cmd = new SetColWidth({ c, width }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onRowDblClick: (r: number) => { const fit = autoFitRowHeight(store, r); const cmd = new SetRowHeight({ r, height: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColDblClick: (c: number) => { const fit = autoFitColWidth(store, c); const cmd = new SetColWidth({ c, width: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onFill: (source: RangeAddress, target: RangeAddress, ctrlKey: boolean) => { const cmd = new FillRangeCommand({ ctrlKey, source, target }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onMoveRange: (source: RangeAddress, target: RangeAddress, copy?: boolean) => { const op = makeMoveRange({ source, target, copy }); if (cmdManager !== undefined) cmdManager.execute(op); else op.execute(store); }, onZoom: (delta: number) => setView((current) => ({ ...current, zoom: Math.min(200, Math.max(50, current.zoom + delta)) })), onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => callbacks.current.onHeaderContextMenu(info, x, y), onCellContextMenu: (cell: CellAddress, x: number, y: number) => callbacks.current.onCellContextMenu(cell, x, y), onAutoFilterClick: (r: number, c: number, x: number, y: number) => callbacks.current.onAutoFilterClick(r, c, x, y) };
+    const base = { canvas: canvasRef.current, store, zoom: view.zoom, showFormula: view.showFormula, showGrid: view.showGrid, frozenRows: view.frozenRows, frozenCols: view.frozenCols, onCellClick: (cell: CellAddress, shift?: boolean, ctrl?: boolean) => flushSync(() => callbacks.current.onCellClick(cell, shift === true, ctrl === true)), onHyperlinkClick: (cell: CellAddress) => { const link = store.getCell(cell.r, cell.c)?.hyperlink; if (link !== undefined) flushSync(() => callbacks.current.onHyperlinkClick(link)); }, onSelectionChange: (range: RangeAddress, active?: CellAddress, anchor?: CellAddress) => flushSync(() => callbacks.current.onSelectionChange(snapRangeSelection(store, rangeSelection(range, anchor ?? selectedLiveRef.current?.anchor, active ?? { r: range.r2, c: range.c2 })))), onColumnSelect: (c: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(columnSelection(c, TOTAL_ROWS, shift && current?.kind === 'column' ? current.anchor.c : c)); }), onRowSelect: (r: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(rowSelection(r, TOTAL_COLS, shift && current?.kind === 'row' ? current.anchor.r : r)); }), onSheetSelect: () => flushSync(() => callbacks.current.onSelectionChange(sheetSelection(allSheetRange()))), onRowResize: (r: number, height: number) => { const cmd = new SetRowHeight({ r, height }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColResize: (c: number, width: number) => { const cmd = new SetColWidth({ c, width }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onRowDblClick: (r: number) => { const fit = autoFitRowHeight(store, r); const cmd = new SetRowHeight({ r, height: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColDblClick: (c: number) => { const fit = autoFitColWidth(store, c); const cmd = new SetColWidth({ c, width: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onFill: (source: RangeAddress, target: RangeAddress, ctrlKey: boolean) => { const cmd = new FillRangeCommand({ ctrlKey, source, target }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onMoveRange: (source: RangeAddress, target: RangeAddress, copy?: boolean) => { const op = makeMoveRange({ source, target, copy }); if (cmdManager !== undefined) cmdManager.execute(op); else op.execute(store); }, onZoom: (delta: number) => setView((current) => ({ ...current, zoom: Math.min(200, Math.max(50, current.zoom + delta)) })), onZoomTo: (zoom: number) => setView((current) => ({ ...current, zoom: Math.min(200, Math.max(50, zoom)) })), onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => callbacks.current.onHeaderContextMenu(info, x, y), onCellContextMenu: (cell: CellAddress, x: number, y: number) => callbacks.current.onCellContextMenu(cell, x, y), onAutoFilterClick: (r: number, c: number, x: number, y: number) => callbacks.current.onAutoFilterClick(r, c, x, y) };
     const renderer = new CanvasRenderer(currentSelection === null ? base : { ...base, selectedRange: currentSelection.range, selectionKind: currentSelection.kind, activeCell: currentSelection.active });
     rendererRef.current = renderer;
+    renderer.setEditing(editingLiveRef.current !== null);
     // Container resizes and devicePixelRatio changes (window dragged between
     // monitors) must re-sync the canvas bitmap — nothing else repaints them.
     const repaint = (): void => { renderer.invalidateAll(); };
@@ -1267,7 +1414,8 @@ function switchSheet(store: Store, delta: 1 | -1): void {
 }
 
 function handleMenuShortcut(command: MenuShortcutCommand, store: Store, cmdManager: CommandManager | undefined, selected: RangeAddress, selectRange: (range: RangeAddress) => void, setView: Dispatch<SetStateAction<ViewState>>, setFindDialog: (name: DialogName | null) => void, execCmd: (cmd: Command) => void): void {
-  const map: Record<MenuShortcutCommand, () => void> = { save: () => saveToLocal(store), find: () => setFindDialog('find'), replace: () => setFindDialog('replace'), selectAll: () => selectRange(allSheetRange()), bold: () => applyShortcutStyle(store, cmdManager, selected, { bold: true }), italic: () => applyShortcutStyle(store, cmdManager, selected, { italic: true }), underline: () => applyShortcutStyle(store, cmdManager, selected, { underline: true }), zoom100: () => setView((current) => ({ ...current, zoom: 100 })), zoomIn: () => setView((current) => ({ ...current, zoom: Math.min(200, current.zoom + 10) })), zoomOut: () => setView((current) => ({ ...current, zoom: Math.max(50, current.zoom - 10) })), undo: () => cmdManager?.undo(), redo: () => cmdManager?.redo(), formatCells: () => setFindDialog('numberFormat'), nextSheet: () => switchSheet(store, 1), prevSheet: () => switchSheet(store, -1), toggleFilter: () => { const cmd = toggleAutoFilterCommand(store, selected); if (cmd !== null) execCmd(cmd); } };
+  const openDialog = (name: DialogName): void => { setFindDialog(null); queueMicrotask(() => setFindDialog(name)); };
+  const map: Record<MenuShortcutCommand, () => void> = { save: () => saveToLocal(store), find: () => openDialog('find'), replace: () => openDialog('replace'), selectAll: () => selectRange(allSheetRange()), bold: () => applyShortcutStyle(store, cmdManager, selected, { bold: true }), italic: () => applyShortcutStyle(store, cmdManager, selected, { italic: true }), underline: () => applyShortcutStyle(store, cmdManager, selected, { underline: true }), zoom100: () => setView((current) => ({ ...current, zoom: 100 })), zoomIn: () => setView((current) => ({ ...current, zoom: Math.min(200, current.zoom + 10) })), zoomOut: () => setView((current) => ({ ...current, zoom: Math.max(50, current.zoom - 10) })), undo: () => cmdManager?.undo(), redo: () => cmdManager?.redo(), formatCells: () => openDialog('numberFormat'), nextSheet: () => switchSheet(store, 1), prevSheet: () => switchSheet(store, -1), toggleFilter: () => { const cmd = toggleAutoFilterCommand(store, selected); if (cmd !== null) execCmd(cmd); } };
   map[command]();
 }
 function applyShortcutStyle(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress, style: Partial<Style>): void {
@@ -1283,7 +1431,13 @@ function saveToLocal(store: Store): void { void saveToDB(DEFAULT_ID, store.seria
 function dispatchThemeChanged(): void { window.dispatchEvent(new CustomEvent('ss:theme-changed')); }
 function commitFormulaValue(selected: Selection | null, value: string, store: Store, cmdManager: CommandManager | undefined, runs?: readonly RichTextRun[]): void {
   if (selected === null) return;
+  if (store.isSheetProtected()) { message.warning('工作表已保护，无法编辑'); return; }
   const active = selected.active ?? { r: selected.range.r1, c: selected.range.c1 };
+  const rule = store.getValidationRule(active.r, active.c);
+  if (rule !== undefined) {
+    const result = new DataValidationService().validate(value, rule);
+    if (!result.valid) { message.warning(result.message ?? '输入值不符合验证规则'); return; }
+  }
   if (value.startsWith('=')) {
     setCellText(store, cmdManager, active, value);
     return;
@@ -1322,6 +1476,18 @@ function submitCreateChart(type: ChartType, title: string, store: Store, selecte
   });
   execCmd(cmd);
   selectChart(cmd.chartId);
+}
+
+/** 插入 → 图片: anchored at the active cell, default size 4×6 cells, selected. */
+function submitCreateImage(src: string, name: string, selected: Selection | null, execCmd: (cmd: Command) => void, selectImage: (id: string) => void): void {
+  const active = selected?.active ?? { r: 0, c: 0 };
+  const anchor: ChartAnchor = {
+    from: { r: active.r, c: active.c, offX: 0, offY: 0 },
+    to: { r: Math.min(active.r + 6, TOTAL_ROWS - 1), c: Math.min(active.c + 3, TOTAL_COLS - 1), offX: 0, offY: 0 },
+  };
+  const cmd = new AddImageCommand({ spec: { id: '', name: name === '' ? '图片' : name, src, anchor } });
+  execCmd(cmd);
+  selectImage(cmd.imageId);
 }
 
 /** Excel inserts a new chart centered on the visible grid with the default 15×7.5cm size. */

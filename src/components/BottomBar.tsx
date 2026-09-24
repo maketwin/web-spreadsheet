@@ -1,5 +1,5 @@
 import type { CSSProperties, FC, DragEvent } from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { SheetInfo } from '../store/Store';
 
 export interface BottomBarProps {
@@ -60,6 +60,8 @@ export const BottomBar: FC<BottomBarProps> = ({
 }) => {
   const [menu, setMenu] = useState<SheetMenuState | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
+  const menuRef = useRef<HTMLUListElement | null>(null);
+  const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null);
   useEffect(() => {
     if (menu === null) return undefined;
     const close = (): void => setMenu(null);
@@ -69,6 +71,19 @@ export const BottomBar: FC<BottomBarProps> = ({
       window.removeEventListener('click', close);
       window.removeEventListener('scroll', close, true);
     };
+  }, [menu]);
+  // 视口边界钳制：tab 条贴近视口底部，菜单需向上翻转而非向下弹出
+  useLayoutEffect(() => {
+    if (menu === null) {
+      setMenuPos(null);
+      return;
+    }
+    const el = menuRef.current;
+    const width = el?.offsetWidth ?? 160;
+    const height = el?.offsetHeight ?? 160;
+    const left = Math.max(4, Math.min(menu.x, window.innerWidth - width - 4));
+    const top = Math.max(4, Math.min(menu.y, window.innerHeight - height - 4));
+    setMenuPos({ left, top });
   }, [menu]);
 
   const infos = sheets.map(sheetInfo);
@@ -119,9 +134,10 @@ export const BottomBar: FC<BottomBarProps> = ({
       </button>
       {menu !== null && (
         <ul
+          ref={menuRef}
           className="ss-sheet-tab-menu"
           role="menu"
-          style={{ ...menuStyle, left: menu.x, top: menu.y }}
+          style={{ ...menuStyle, left: menuPos?.left ?? menu.x, top: menuPos?.top ?? menu.y }}
           onClick={(e) => e.stopPropagation()}
         >
           <li role="menuitem">

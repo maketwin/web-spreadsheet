@@ -25,7 +25,7 @@ export const NumberFormatDialog: FC<NumberFormatDialogProps> = ({ open, onCancel
   return <Modal title="数字格式" open={open} onCancel={onCancel} onOk={() => submit(form, onSubmit)}>
     <Form form={form} layout="vertical" initialValues={{ numberFormat: 'general' }}>
       <Form.Item name="numberFormat" label="格式（可选择或直接输入自定义格式串）">
-        <AutoComplete options={OPTIONS} placeholder="如 #,##0.00 或 yyyy-mm-dd" />
+        <AutoComplete options={OPTIONS} placement="topLeft" placeholder="如 #,##0.00 或 yyyy-mm-dd" />
       </Form.Item>
     </Form>
   </Modal>;

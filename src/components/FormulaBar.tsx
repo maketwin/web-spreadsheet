@@ -21,7 +21,7 @@ export interface FormulaBarProps {
   /** Character runs for text constants (Excel formula bar shows formatting). */
   readonly runs?: readonly RichTextRun[] | undefined;
   readonly onChange: (value: string, runs?: readonly RichTextRun[]) => void;
-  readonly onCommit: (value?: string) => void;
+  readonly onCommit: (value?: string, fillSelection?: boolean) => void;
   readonly onGoTo?: (input: string) => void;
   /** Legacy input ref kept for callers that still expect HTMLInputElement; prefer handleRef. */
   readonly inputRef?: MutableRefObject<HTMLInputElement | null>;
@@ -90,7 +90,13 @@ export const FormulaBar: FC<FormulaBarProps> = ({
   };
 
   const keyHandlers = (getVal: () => string) => (event: ReactKeyboardEvent) => {
-    if (event.key === 'Enter') { event.preventDefault(); onCommit(getVal()); }
+    if (event.key === 'Enter') {
+      // IME confirm (keyCode 229) must not commit the pre-composition text.
+      if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+      event.preventDefault();
+      const fill = (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
+      onCommit(getVal(), fill);
+    }
     if (event.key === 'Escape') { event.preventDefault(); onCancel?.(); (event.target as HTMLElement).blur(); }
     if ((event.ctrlKey || event.metaKey) && !event.altKey) {
       const key = event.key.toLowerCase();

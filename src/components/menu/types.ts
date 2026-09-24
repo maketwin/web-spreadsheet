@@ -19,12 +19,15 @@ export interface MenuContext {
    * characters instead of the whole cells. Returns true when handled.
    */
   readonly applyRunStyleToEditor?: (style: Partial<Style>) => boolean;
+  /** 插入 → 图片：owner executes AddImageCommand with the chosen image file. */
+  readonly onCreateImage?: (src: string, name: string) => void;
 }
 
 export type DialogName =
   | 'find' | 'replace' | 'insertRow' | 'insertCol' | 'zoom' | 'numberFormat'
   | 'about' | 'shortcuts' | 'options' | 'plugins' | 'chart' | 'history' | 'printPreview'
   | 'dataValidation' | 'sparkline' | 'protectSheet' | 'unprotectSheet' | 'cfFormula'
+  | 'workbookPassword' | 'workbookPasswordClear'
   | 'removeDuplicates' | 'textToColumns' | 'hyperlink'
   | 'cfRules' | 'cfHighlightGt' | 'cfHighlightLt' | 'cfHighlightBetween' | 'cfHighlightEq'
   | 'nameManager';

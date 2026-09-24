@@ -1,8 +1,9 @@
-import { PrinterOutlined } from '@ant-design/icons';
-import { Button, InputNumber, Modal, Radio, Select, Switch } from 'antd';
+import { PrinterOutlined, FilePdfOutlined } from '@ant-design/icons';
+import { Button, Input, InputNumber, Modal, Radio, Select, Switch } from 'antd';
 import { useEffect, useMemo, useState, type FC } from 'react';
 import { printPages, renderPrintPages } from '../print/PrintPipeline';
 import { DEFAULT_PRINT_SETTINGS, PAPER_MM, type MarginPreset, type Orientation, type PaperSize, type PrintSettings, type ScaleMode } from '../print/types';
+import { exportPagesToPdf } from '../io/pdfExport';
 import type { Store } from '../store/Store';
 
 export interface PrintPreviewProps {
@@ -49,6 +50,23 @@ export const PrintPreview: FC<PrintPreviewProps> = ({ open, onCancel, store }) =
     onCancel();
   };
 
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const handleExportPdf = async (): Promise<void> => {
+    if (result === null || pdfBusy) return;
+    setPdfBusy(true);
+    try {
+      const blob = await exportPagesToPdf(result, settings);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${store.getSheets().find((s) => s.id === store.getActiveSheetId())?.name ?? '工作表'}.pdf`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setPdfBusy(false);
+    }
+  };
+
   return <Modal
     title="打印预览"
     open={open}
@@ -58,6 +76,7 @@ export const PrintPreview: FC<PrintPreviewProps> = ({ open, onCancel, store }) =
     destroyOnHidden
     footer={[
       <Button key="cancel" onClick={onCancel}>取消</Button>,
+      <Button key="pdf" icon={<FilePdfOutlined />} loading={pdfBusy} disabled={totalPages === 0} onClick={() => { void handleExportPdf(); }}>导出 PDF</Button>,
       <Button key="print" type="primary" icon={<PrinterOutlined />} disabled={totalPages === 0} onClick={handlePrint}>打印</Button>,
     ]}
   >
@@ -94,6 +113,18 @@ export const PrintPreview: FC<PrintPreviewProps> = ({ open, onCancel, store }) =
         <div className="ss-print-setting">
           <label htmlFor="ss-print-grid">网格线</label>
           <Switch id="ss-print-grid" size="small" checked={settings.showGrid} onChange={(showGrid) => update('showGrid', showGrid)} />
+        </div>
+        <div className="ss-print-setting">
+          <label htmlFor="ss-print-area">打印区域</label>
+          <Input id="ss-print-area" size="small" placeholder="如 A1:F20，留空为全部" value={settings.printArea ?? ''} onChange={(e) => update('printArea', e.target.value)} />
+        </div>
+        <div className="ss-print-setting">
+          <label htmlFor="ss-print-header">页眉</label>
+          <Input id="ss-print-header" size="small" placeholder="支持 {page} {pages} {sheet}" value={settings.headerText ?? ''} onChange={(e) => update('headerText', e.target.value)} />
+        </div>
+        <div className="ss-print-setting">
+          <label htmlFor="ss-print-footer">页脚</label>
+          <Input id="ss-print-footer" size="small" placeholder="支持 {page} {pages} {sheet}" value={settings.footerText ?? ''} onChange={(e) => update('footerText', e.target.value)} />
         </div>
         <div style={{ marginTop: 16, color: 'var(--ss-text-light)', fontSize: 12, lineHeight: '20px' }}>
           共 {totalPages} 页 · 打印比例 {Math.round((result?.geometry.scale ?? 1) * 100)}%<br />

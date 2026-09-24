@@ -190,6 +190,52 @@
       font-size: 12px;
       white-space: nowrap;
     }
+    /* 菜单显隐严格跟随受控 open：宿主环境（webview/后台标签）动画事件可能
+       被节流，rc-motion 等不到 transitionend 会让菜单视觉上卡在打开态并拦截点击。
+       离场中的弹层立即隐藏，入场不做动画。 */
+    .ss-menu-dropdown.ant-slide-up-leave {
+      display: none !important;
+    }
+    .ss-menu-dropdown .ant-dropdown-menu {
+      transition: none !important;
+      animation: none !important;
+    }
+    /* 触控：画布自己接管触摸手势（选区拖拽/双指缩放），不交给浏览器滚动 */
+    .ss-canvas { touch-action: none; }
+    /* 浮动图片对象 */
+    .ss-image-object { position: absolute; border: 1px dashed transparent; box-sizing: border-box; }
+    .ss-image-object--selected { border-color: #217346; z-index: 5; }
+    /* 公式输入辅助：补全下拉 + 参数提示 */
+    .ss-formula-assist {
+      background: #fff;
+      border: 1px solid #d0d0d0;
+      box-shadow: 0 4px 12px rgba(0,0,0,.18);
+      list-style: none;
+      margin: 0;
+      padding: 2px 0;
+      color: #222;
+      font: 12px/20px "Segoe UI", "Microsoft YaHei", sans-serif;
+      max-height: 190px;
+      overflow-y: auto;
+      min-width: 160px;
+    }
+    .ss-formula-assist li { padding: 1px 10px; cursor: pointer; }
+    .ss-formula-assist li.ss-active { background: #217346; color: #fff; }
+    .ss-formula-assist .ss-fn-name { font-weight: 600; font-family: Consolas, Menlo, monospace; }
+    .ss-formula-signature {
+      background: #fffbe6;
+      border: 1px solid #e8d44d;
+      color: #333;
+      font: 12px/18px "Segoe UI", "Microsoft YaHei", sans-serif;
+      padding: 4px 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.12);
+      max-width: 460px;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+    .ss-formula-signature .ss-sig-name { font-weight: 700; color: #217346; margin-right: 6px; }
+    .ss-formula-signature .ss-sig-text { font-family: Consolas, Menlo, monospace; }
+    .ss-formula-signature .ss-sig-desc { color: #8a6d3b; }
   </style>
 </head>
 <body>

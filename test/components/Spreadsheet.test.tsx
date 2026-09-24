@@ -303,7 +303,7 @@ describe('Spreadsheet', () => {
     expect(screen.getByLabelText('Selected cell')).toHaveValue('A1:B2');
   });
 
-  it('keeps the mouse-down cell as the anchor during reverse dragging', async () => {
+  it('after reverse dragging the active cell is the drag origin and Shift+Arrow pivots on the far end', async () => {
     installCanvasContext();
     render(<SpreadsheetComponent store={new Store()} theme={false} />);
     const canvas = document.querySelector('canvas') as HTMLCanvasElement;
@@ -312,10 +312,19 @@ describe('Spreadsheet', () => {
     fireEvent.mouseDown(canvas, { clientX: 46 + 150, clientY: 25 + 45 });
     fireEvent.mouseMove(window, { clientX: 46 + 5, clientY: 25 + 5 });
     fireEvent.mouseUp(window);
+    await act(async () => undefined);
+
+    // Excel: the mouse-down cell (C3) is the active cell after the drag; the
+    // name box still shows the full range.
+    expect(screen.getByLabelText('Selected cell')).toHaveValue('A1:C3');
+    expect(screen.getByLabelText('Formula bar')).toHaveValue('');
+
     fireEvent.keyDown(canvas, { key: 'ArrowRight', shiftKey: true });
     await act(async () => undefined);
 
-    expect(screen.getByLabelText('Selected cell')).toHaveValue('B1:C3');
+    // Shift+Right extends from the active cell (C3 → D3) keeping the far
+    // corner (A1) fixed — Excel grows the original range.
+    expect(screen.getByLabelText('Selected cell')).toHaveValue('A1:D3');
   });
 
 

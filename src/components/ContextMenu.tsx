@@ -106,11 +106,15 @@ export interface CellContextMenuProps {
   readonly onDeleteRow: () => void;
   readonly onDeleteCol: () => void;
   readonly onNumberFormat: () => void;
+  readonly hasComment?: boolean;
+  readonly onEditComment?: () => void;
+  readonly onDeleteComment?: () => void;
+  readonly onInsertComment?: () => void;
   readonly onClose: () => void;
 }
 
 export const CellContextMenu: FC<CellContextMenuProps> = ({
-  x, y, onCut, onCopy, onPaste, onPasteSpecial, onClear, onInsertRow, onInsertCol, onDeleteRow, onDeleteCol, onNumberFormat, onClose,
+  x, y, onCut, onCopy, onPaste, onPasteSpecial, onClear, onInsertRow, onInsertCol, onDeleteRow, onDeleteCol, onNumberFormat, hasComment = false, onEditComment, onDeleteComment, onInsertComment, onClose,
 }) => {
   const items: MenuEntry[] = [
     { kind: 'item', key: 'cut', label: '剪切', shortcut: 'Ctrl+X' },
@@ -122,6 +126,13 @@ export const CellContextMenu: FC<CellContextMenuProps> = ({
     { kind: 'item', key: 'delete', label: '删除...' },
     { kind: 'item', key: 'clear', label: '清除内容' },
     { kind: 'divider', key: 'd2' },
+    ...(hasComment
+      ? [
+          { kind: 'item' as const, key: 'editComment', label: '编辑批注' },
+          { kind: 'item' as const, key: 'deleteComment', label: '删除批注' },
+        ]
+      : [{ kind: 'item' as const, key: 'insertComment', label: '插入批注' }]),
+    { kind: 'divider', key: 'd3' },
     { kind: 'item', key: 'numberFormat', label: '设置单元格格式...' },
   ];
 
@@ -140,6 +151,9 @@ export const CellContextMenu: FC<CellContextMenuProps> = ({
         else if (key === 'insert') showInsertDialog(onInsertRow, onInsertCol);
         else if (key === 'delete') showDeleteDialog(onDeleteRow, onDeleteCol);
         else if (key === 'numberFormat') onNumberFormat();
+        else if (key === 'insertComment') onInsertComment?.();
+        else if (key === 'editComment') onEditComment?.();
+        else if (key === 'deleteComment') onDeleteComment?.();
         onClose();
       }}
     />
