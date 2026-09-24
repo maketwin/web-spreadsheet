@@ -1,4 +1,5 @@
 import { Command } from '../Command';
+import { styleIdForCell } from './styleIdentity';
 
 import type { Store } from '../../store/Store';
 import type { Cell, Style } from '../../types';
@@ -22,7 +23,7 @@ export class SetCellStyleCommand extends Command<SetCellStyleArgs> {
     const oldCell = store.getCell(this.args.r, this.args.c, target);
     const oldStyle = oldCell?.styleId === undefined ? undefined : store.getStyle(oldCell.styleId, target);
     const nextStyle = { ...oldStyle, ...this.args.style };
-    const styleId = oldCell?.styleId ?? styleIdFor(this.args.r, this.args.c);
+    const styleId = styleIdForCell(store, this.args.r, this.args.c, target, oldCell?.styleId);
     this.oldCell = oldCell;
     this.oldStyle = oldStyle;
     store.setStyle(styleId, nextStyle, target);

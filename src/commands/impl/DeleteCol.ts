@@ -32,7 +32,7 @@ export class DeleteColCommand extends Command<DeleteColArgs> {
     for (let c = start; c < TOTAL_COLS; c += 1) store.setCol(c, store.getCol(c + count, target), target);
     replaceMerges(store, shiftMergesForDelete(store.getMerges(target), start, start + count - 1, 'col'), target);
     shiftSheetFormulas(store, 'col', start, -count, target);
-    shiftSheetChartAnchors(store, 'delete', 'col', start, count);
+    shiftSheetChartAnchors(store, 'delete', 'col', start, count, target);
   }
 
   public getUndo(): Command {

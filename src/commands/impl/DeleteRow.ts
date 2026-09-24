@@ -32,7 +32,7 @@ export class DeleteRowCommand extends Command<DeleteRowArgs> {
     for (let r = start; r < TOTAL_ROWS; r += 1) store.setRow(r, store.getRow(r + count, target), target);
     replaceMerges(store, shiftMergesForDelete(store.getMerges(target), start, start + count - 1, 'row'), target);
     shiftSheetFormulas(store, 'row', start, -count, target);
-    shiftSheetChartAnchors(store, 'delete', 'row', start, count);
+    shiftSheetChartAnchors(store, 'delete', 'row', start, count, target);
   }
 
   public getUndo(): Command {

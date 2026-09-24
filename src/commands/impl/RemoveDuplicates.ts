@@ -89,7 +89,7 @@ function deleteOneRow(store: Store, start: number, sid: string): void {
   for (let r = start; r < TOTAL_ROWS; r += 1) store.setRow(r, store.getRow(r + count, sid), sid);
   replaceMerges(store, shiftMergesForDelete(store.getMerges(sid), start, start + count - 1, 'row'), sid);
   shiftSheetFormulas(store, 'row', start, -count, sid);
-  shiftSheetChartAnchors(store, 'delete', 'row', start, count);
+  shiftSheetChartAnchors(store, 'delete', 'row', start, count, sid);
 }
 
 function shiftCellsUp(store: Store, start: number, count: number, sid: string): void {

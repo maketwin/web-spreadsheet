@@ -37,7 +37,7 @@ export class InsertRowCommand extends Command<InsertRowArgs> {
     }
     replaceMerges(store, shiftMergesForInsert(store.getMerges(target), start, count, 'row'), target);
     shiftSheetFormulas(store, 'row', start, count, target);
-    shiftSheetChartAnchors(store, 'insert', 'row', start, count);
+    shiftSheetChartAnchors(store, 'insert', 'row', start, count, target);
   }
 
   public getUndo(): Command {

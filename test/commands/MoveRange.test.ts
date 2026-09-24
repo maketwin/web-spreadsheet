@@ -30,6 +30,26 @@ describe('MoveRange', () => {
     expect(store.getCell(4, 4)).toMatchObject({ text: 'B2' });
   });
 
+  it('overlapping move keeps the values that land in the intersection', () => {
+    const store = new Store();
+    store.setCell(0, 0, { text: 'a' });
+    store.setCell(1, 0, { text: 'b' });
+    new MoveRange({ source: { r1: 0, c1: 0, r2: 1, c2: 0 }, target: { r1: 1, c1: 0, r2: 1, c2: 0 } }).execute(store);
+    expect(store.getCell(0, 0)).toBeUndefined();
+    expect(store.getCell(1, 0)?.text).toBe('a');
+    expect(store.getCell(2, 0)?.text).toBe('b');
+  });
+
+  it('copy does not share the cell object with the source', () => {
+    const store = new Store();
+    store.setCell(0, 0, { text: 'a', richText: [{ text: 'a' }] });
+    new MoveRange({ source: { r1: 0, c1: 0, r2: 0, c2: 0 }, target: { r1: 2, c1: 2, r2: 2, c2: 2 }, copy: true }).execute(store);
+    const source = store.getCell(0, 0);
+    const copy = store.getCell(2, 2);
+    expect(copy).not.toBe(source);
+    expect(copy?.richText).not.toBe(source?.richText);
+  });
+
   it('undo restores both source and target', () => {
     const store = new Store();
     store.setCell(0, 0, { text: 'hello' });

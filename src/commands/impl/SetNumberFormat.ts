@@ -1,4 +1,5 @@
 import { Command } from '../Command';
+import { styleIdForCell } from './styleIdentity';
 import type { Store } from '../../store/Store';
 import type { RangeAddress } from '../../selection/Range';
 import type { Cell, Style } from '../../types';
@@ -69,7 +70,7 @@ function snapshot(store: Store, r: number, c: number, sheetId: string): CellSnap
 function applyFormat(store: Store, r: number, c: number, numberFormat: NonNullable<Style['numberFormat']>, sheetId: string): void {
   let cell = store.getCell(r, c, sheetId);
   if (cell === undefined) cell = { text: '' };
-  const styleId = cell.styleId ?? `nf-${r}-${c}`;
+  const styleId = styleIdForCell(store, r, c, sheetId, cell.styleId);
   const existing = store.getStyle(styleId, sheetId);
   store.setStyle(styleId, { ...existing, numberFormat }, sheetId);
   store.setCell(r, c, { ...cell, styleId }, sheetId);

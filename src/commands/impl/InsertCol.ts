@@ -37,7 +37,7 @@ export class InsertColCommand extends Command<InsertColArgs> {
     }
     replaceMerges(store, shiftMergesForInsert(store.getMerges(target), start, count, 'col'), target);
     shiftSheetFormulas(store, 'col', start, count, target);
-    shiftSheetChartAnchors(store, 'insert', 'col', start, count);
+    shiftSheetChartAnchors(store, 'insert', 'col', start, count, target);
   }
 
   public getUndo(): Command {

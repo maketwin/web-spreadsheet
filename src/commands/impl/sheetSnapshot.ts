@@ -48,11 +48,13 @@ export function captureSheet(store: Store, sheetId?: string): SheetSnapshot {
     if (af !== undefined) autoFilters.push([id, af]);
   }
   return {
-    cells: store.getCells(activeId).map(([key, cell]) => [...parseKey(key), cell] as const),
+    cells: store.getCells(activeId).map(([key, cell]) => [...parseKey(key), { ...cell }] as const),
     rows: collectRows(store, activeId),
     cols: collectCols(store, activeId),
-    merges: store.getMerges(),
-    charts: store.getCharts(),
+    merges: store.getMerges(activeId),
+    charts: store.getCharts(activeId).map((chart) => chart.anchor === undefined
+      ? { ...chart }
+      : { ...chart, anchor: { from: { ...chart.anchor.from }, to: { ...chart.anchor.to } } }),
     otherCells,
     namedRanges,
     conditionalRules,

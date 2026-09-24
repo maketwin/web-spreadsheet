@@ -1,4 +1,5 @@
 import { Command } from '../Command';
+import { styleIdForCell } from './styleIdentity';
 import type { Store } from '../../store/Store';
 import type { RangeAddress } from '../../selection/Range';
 import type { Cell, Style } from '../../types';
@@ -95,7 +96,7 @@ export class SetRangeBorderCommand extends Command<SetRangeBorderArgs> {
         const touched = edgesForPreset(preset, r, c, range);
         if (touched === null) {
           // Clear every side — Excel "No Border"
-          const styleId = cell?.styleId ?? `cell-${r}-${c}`;
+          const styleId = styleIdForCell(store, r, c, target, cell?.styleId);
           const base: Style = { ...(oldStyle ?? {}) };
           delete base.border;
           store.setStyle(styleId, base, target);
@@ -111,7 +112,7 @@ export class SetRangeBorderCommand extends Command<SetRangeBorderArgs> {
           else existing[edge] = line;
         }
         const nextBorder = cleanBorder(existing);
-        const styleId = cell?.styleId ?? `cell-${r}-${c}`;
+        const styleId = styleIdForCell(store, r, c, target, cell?.styleId);
         const nextStyle: Style = { ...(oldStyle ?? {}) };
         if (nextBorder === undefined) delete nextStyle.border;
         else nextStyle.border = nextBorder;

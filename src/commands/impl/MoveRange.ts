@@ -4,6 +4,15 @@ import type { Store } from '../../store/Store';
 import type { Cell } from '../../types';
 import type { RangeAddress } from '../../selection/Range';
 
+function cloneCell(cell: Cell | undefined): Cell | undefined {
+  if (cell === undefined) return undefined;
+  return {
+    ...cell,
+    ...(cell.richText !== undefined ? { richText: cell.richText.map((run) => ({ ...run, ...(run.style !== undefined ? { style: { ...run.style } } : {}) })) } : {}),
+    ...(cell.hyperlink !== undefined ? { hyperlink: { ...cell.hyperlink } } : {}),
+  };
+}
+
 export interface MoveRangeArgs {
   readonly source: RangeAddress;
   readonly target: RangeAddress;
@@ -42,16 +51,19 @@ export class MoveRange extends Command<MoveRangeArgs> {
     // Write source cells to target location
     for (let r = 0; r < srcRows; r += 1) {
       for (let c = 0; c < srcCols; c += 1) {
-        const cell = this.sourceSnapshot[r]?.[c];
+        const cell = cloneCell(this.sourceSnapshot[r]?.[c]);
         store.setCell(target.r1 + r, target.c1 + c, cell, sid);
       }
     }
 
-    // Clear source cells (Excel Ctrl+drag copy keeps the source)
+    // Clear source cells that are not part of the destination. An overlapping
+    // move (A1:A2 → A2:A3) would otherwise wipe values just written into the
+    // intersection. Ctrl+drag copy keeps the source.
     if (this.args.copy !== true) {
       for (let r = source.r1; r <= source.r2; r += 1) {
         for (let c = source.c1; c <= source.c2; c += 1) {
-          store.setCell(r, c, undefined, sid);
+          const inTarget = r >= targetEnd.r1 && r <= targetEnd.r2 && c >= targetEnd.c1 && c <= targetEnd.c2;
+          if (!inTarget) store.setCell(r, c, undefined, sid);
         }
       }
     }
