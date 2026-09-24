@@ -145,6 +145,14 @@ describe('FindReplaceService', () => {
     expect(store.getCell(0, 0)?.formula).toBe('=SUM(10,20)');
   });
 
+  it('replaces inside a calculated formula, not its cached display text', () => {
+    const store = new Store();
+    store.setCell(0, 0, { text: '5', formula: '=A1+1', value: 5 });
+    new FindReplaceService().replaceAll(store, { findText: 'A1', replaceText: 'B1' });
+    expect(store.getCell(0, 0)?.formula).toBe('=B1+1');
+    expect(store.getCell(0, 0)?.text).toBe('=B1+1');
+  });
+
   it('replace all is a single undo step for a compact match block', () => {
     const store = makeStore();
     const cmd = new CommandManager(store);

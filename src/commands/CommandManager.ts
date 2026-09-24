@@ -23,6 +23,10 @@ export class CommandManager {
   }
 
   public execute(cmd: Command): void {
+    if (this.blockedByProtection(cmd)) {
+      this.events?.emit('command:rejected', { reason: 'protected' });
+      return;
+    }
     cmd.execute(this.store);
     // No-op commands (e.g. unmerge where nothing is merged) never enter history.
     if (cmd.isNoOp()) return;
@@ -42,8 +46,13 @@ export class CommandManager {
   }
 
   public redo(): void {
-    const cmd = this.redoStack.pop();
+    const cmd = this.redoStack[this.redoStack.length - 1];
     if (cmd === undefined) return;
+    if (this.blockedByProtection(cmd)) {
+      this.events?.emit('command:rejected', { reason: 'protected' });
+      return;
+    }
+    this.redoStack.pop();
 
     cmd.execute(this.store);
     this.undoStack.push(cmd);
@@ -75,6 +84,13 @@ export class CommandManager {
     while (this.undoStack.length > targetIndex + 1) {
       this.undo();
     }
+  }
+
+  private blockedByProtection(cmd: Command): boolean {
+    const parts = (cmd as { parts?: () => readonly Command[] }).parts;
+    if (typeof parts === 'function') return parts.call(cmd).some((child) => this.blockedByProtection(child));
+    const sheetId = cmd.targetSheetId() ?? this.store.getActiveSheetId();
+    return this.store.isSheetProtected(sheetId);
   }
 
   public clear(): void {

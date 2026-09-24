@@ -13,6 +13,10 @@ describe('deps after sort', () => {
     expect(formulaDependencies('=SUM(D2:D4)').sort()).toEqual(['1,3', '2,3', '3,3']);
   });
 
+  it('formulaDependencies keeps absolute refs', () => {
+    expect(formulaDependencies('=$A$1+B1').sort()).toEqual(['0,0', '0,1']);
+  });
+
   it('editing D3 after only sort-desc updates 合计 even when it is on top', () => {
     const store = new Store();
     ['产品', 'Q1', 'Q2', 'Q3', 'Q4', '总计'].forEach((t, c) => store.setCell(0, c, { text: t }));

@@ -2,7 +2,8 @@ import type { CellAddress } from '../renderer/coordinate';
 import type { Store, SheetInfo } from '../store/Store';
 import type { CommandManager } from '../commands/CommandManager';
 import type { CellPatch } from '../commands/impl/SetRangeValues';
-import { executeRange } from '../util/rangeValues';
+import { CompositeCommand, executeRange } from '../util/rangeValues';
+import { SetRangeValues } from '../commands/impl/SetRangeValues';
 import { formulaText } from '../util/cell';
 import { flattenRuns, isRich, replaceInRuns } from '../util/richText';
 import type { RichTextRun } from '../types';
@@ -173,20 +174,32 @@ function cellSource(cell: { text: string; formula?: string }): string {
  * splice at the run level so untouched slices keep their formatting; the
  * replacement inherits the style of the first hit character (Excel behavior).
  */
+function spliceRanges(source: string, ranges: ReadonlyArray<{ readonly start: number; readonly end: number; readonly replacement: string }>): string {
+  let next = '';
+  let cursor = 0;
+  for (const range of [...ranges].sort((a, b) => a.start - b.start)) {
+    next += source.slice(cursor, range.start) + range.replacement;
+    cursor = range.end;
+  }
+  return next + source.slice(cursor);
+}
+
 function replacePatch(cell: { text: string; formula?: string; richText?: readonly RichTextRun[] }, ranges: ReadonlyArray<{ readonly start: number; readonly end: number; readonly replacement: string }>): CellPatch {
-  if (cell.formula === undefined && isRich(cell.richText)) {
+  // Hits are measured on the formula source. Splicing them into the cached
+  // display text (`text: '5'` for `=A1+1`) deletes the formula.
+  const formula = cell.formula ?? (cell.text.startsWith('=') ? cell.text : undefined);
+  if (formula !== undefined) {
+    const next = spliceRanges(formula, ranges);
+    return next.startsWith('=')
+      ? { text: next, formula: next, value: undefined }
+      : { text: next, formula: undefined, value: undefined };
+  }
+  if (isRich(cell.richText)) {
     const nextRuns = replaceInRuns(cell.richText, ranges);
     const nextText = flattenRuns(nextRuns);
     return isRich(nextRuns) ? { text: nextText, richText: nextRuns } : { text: nextText };
   }
-  let next = '';
-  let cursor = 0;
-  for (const range of [...ranges].sort((a, b) => a.start - b.start)) {
-    next += cell.text.slice(cursor, range.start) + range.replacement;
-    cursor = range.end;
-  }
-  next += cell.text.slice(cursor);
-  return { text: next };
+  return { text: spliceRanges(cell.text, ranges) };
 }
 
 interface CellWrite {
@@ -321,7 +334,10 @@ export class FindReplaceService {
         }
         executeRange(store, cmdManager, r1, c1, values);
       } else {
-        for (const w of list) executeRange(store, cmdManager, w.r, w.c, [[w.patch]]);
+        const cmds = list.map((w) => new SetRangeValues({ r1: w.r, c1: w.c, r2: w.r, c2: w.c, values: [[w.patch]], sheetId }));
+        const composite = new CompositeCommand(cmds);
+        if (cmdManager === undefined) composite.execute(store);
+        else cmdManager.execute(composite);
       }
     }
     if (store.getActiveSheetId() !== originalSheet) store.activateSheet(originalSheet);

@@ -119,6 +119,10 @@ export function layoutRichText(opts: LayoutRichTextOptions): RichLine[] {
   let current: CharItem[] = [];
   let currentWidth = 0;
 
+  const fallbackSize = pieces[0]?.size ?? Math.max(floor, Math.round((opts.cellStyle?.fontSize ?? 11) * scale));
+  const emptyLine = (): RichLine => ({ segments: [], width: 0, maxFontSize: fallbackSize, lineHeight: Math.max(1, fallbackSize) * WRAP_LINE_HEIGHT });
+  let hardBreak = false;
+
   const pushLine = (): void => {
     if (current.length === 0) return;
     lines.push(coalesceLine(current));
@@ -128,14 +132,20 @@ export function layoutRichText(opts: LayoutRichTextOptions): RichLine[] {
 
   for (const item of chars) {
     if (item.ch === '\n') {
-      pushLine();
+      // A break on an empty line still occupies a row (`a\n\nb`).
+      lines.push(current.length === 0 ? emptyLine() : coalesceLine(current));
+      current = [];
+      currentWidth = 0;
+      hardBreak = true;
       continue;
     }
+    hardBreak = false;
     if (wrapOn && currentWidth > 0 && currentWidth + item.width > opts.maxWidth) pushLine();
     currentWidth += item.width;
     current.push(item);
   }
-  pushLine();
+  if (current.length > 0) pushLine();
+  else if (hardBreak) lines.push(emptyLine());
   return lines;
 }
 

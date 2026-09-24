@@ -40,6 +40,8 @@ interface CompiledSection {
   readonly ampm: boolean;
   readonly color?: string;
   readonly condition?: { readonly op: '>' | '<' | '>=' | '<=' | '=' | '<>'; readonly value: number };
+  /** Excel empty section (`0;;0`): that sign shows nothing. */
+  readonly blank?: boolean;
 }
 
 type Token =
@@ -121,7 +123,7 @@ function splitSections(fmt: string): string[] {
     cur += ch;
   }
   out.push(cur);
-  return out.filter((s, i) => s.length > 0 || i === 0);
+  return out.slice(0, 4);
 }
 
 const NAMED_COLORS: Record<string, string> = {
@@ -135,9 +137,12 @@ const NAMED_COLORS: Record<string, string> = {
   magenta: '#FF00FF',
 };
 
-const DATE_TOKEN = /^(yyyy|yy|mmmm|mmm|mm|dd|hh|ss|AM\/PM|am\/pm)/i;
+const DATE_TOKEN = /^(yyyy|yy|mmmm|mmm|mm|dd|hh|ss|am\/pm|[mdhs](?![a-z]))/i;
 
 function compileSection(src: string, index: number): CompiledSection | undefined {
+  if (src.length === 0) {
+    return { kind: 'number', tokens: [], intMinDigits: 0, intOptional: false, groupThousands: false, fracDigits: 0, fracOptional: 0, percent: false, scientific: false, ampm: false, blank: true };
+  }
   const tokens: Token[] = [];
   let color: string | undefined;
   let condition: CompiledSection['condition'];
@@ -190,14 +195,16 @@ function compileSection(src: string, index: number): CompiledSection | undefined
     const dm = DATE_TOKEN.exec(rest);
     if (dm !== null) {
       flushLit();
-      let tok = dm[1]!;
-      const isAmPm = /^am\/pm$/i.test(tok);
+      let tok = dm[1]!.toLowerCase();
+      const isAmPm = tok === 'am/pm';
       if (isAmPm) { ampm = true; tok = 'AM/PM'; }
       let resolved = tok;
-      if (tok === 'mm') {
-        // minutes when preceded by h or followed by ss
-        const after = src.slice(i + 2).trimStart().toLowerCase();
-        resolved = prevTok === 'hh' || after.startsWith('ss') ? 'min' : 'mm';
+      if (tok === 'mm' || tok === 'm') {
+        // minutes when the neighbor is hours or seconds (`mm:ss`, `h:mm`), not months
+        const after = src.slice(i + tok.length).replace(/^[:\s]+/, '').toLowerCase();
+        const prevIsTime = prevTok === 'hh' || prevTok === 'h' || prevTok === 'ss' || prevTok === 's';
+        const nextIsSec = after.startsWith('ss') || after.startsWith('s');
+        resolved = prevIsTime || nextIsSec ? 'min' : tok;
       }
       tokens.push({ t: 'tok', s: resolved });
       prevTok = resolved;
@@ -256,6 +263,7 @@ function compileSection(src: string, index: number): CompiledSection | undefined
 }
 
 function renderNumber(value: number, s: CompiledSection): string {
+  if (s.blank === true) return '';
   if (s.kind === 'date') return renderDate(value, s);
   const scaled = s.percent ? value * 100 : value;
   const body = s.scientific ? sciBody(scaled, s) : fixedBody(scaled, s);
@@ -297,6 +305,7 @@ function substituteNum(tokens: readonly Token[], body: string, ampm: boolean): s
 }
 
 function renderText(text: string, s: CompiledSection): string {
+  if (s.blank === true) return '';
   // Text section: '@' placeholder stands for the text (first occurrence).
   let out = '';
   let placed = false;
@@ -322,10 +331,14 @@ function renderDate(serial: number, s: CompiledSection): string {
       case 'mmmm': out += MONTHS_LONG[d.getUTCMonth()]!; break;
       case 'mmm': out += MONTHS_SHORT[d.getUTCMonth()]!; break;
       case 'mm': out += String(d.getUTCMonth() + 1).padStart(2, '0'); break;
+      case 'm': out += String(d.getUTCMonth() + 1); break;
       case 'dd': out += String(d.getUTCDate()).padStart(2, '0'); break;
+      case 'd': out += String(d.getUTCDate()); break;
       case 'hh': out += String(s.ampm ? hours12 : hours24).padStart(2, '0'); break;
+      case 'h': out += String(s.ampm ? hours12 : hours24); break;
       case 'min': out += String(d.getUTCMinutes()).padStart(2, '0'); break;
       case 'ss': out += String(d.getUTCSeconds()).padStart(2, '0'); break;
+      case 's': out += String(d.getUTCSeconds()); break;
       case 'AM/PM': out += hours24 < 12 ? 'AM' : 'PM'; break;
       default: out += t.s;
     }

@@ -12,6 +12,8 @@ export interface SheetProtectionState {
  * hash under ~200 ms while still making offline reversal expensive.
  */
 const ITERATIONS = 20_000;
+/** Untrusted workbooks must not be able to pin the UI with a huge iteration count. */
+const MAX_ITERATIONS = 200_000;
 const SALT_BYTES = 16;
 const FORMAT = 'pbkdf2-sha256';
 
@@ -26,12 +28,13 @@ export function hashPassword(password: string): string {
 
 /** Verify a password against a stored hash; accepts legacy Base64 hashes too. */
 export function verifyPassword(password: string, hash: string): boolean {
+  if (hash.length === 0) return false;
   const parts = hash.split('$');
   if (parts[0] === FORMAT && parts.length === 4) {
     const iterations = Number(parts[1]);
     const salt = base64ToBytes(parts[2] ?? '');
     const expected = base64ToBytes(parts[3] ?? '');
-    if (!Number.isInteger(iterations) || iterations < 1 || salt.length === 0 || expected.length === 0) return false;
+    if (!Number.isInteger(iterations) || iterations < 1 || iterations > MAX_ITERATIONS || salt.length === 0 || expected.length === 0) return false;
     const digest = pbkdf2(encoder.encode(password), salt, iterations);
     return constantTimeEquals(digest, expected);
   }

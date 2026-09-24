@@ -8,7 +8,7 @@
 import { COL_WIDTH, ROW_HEIGHT } from '../renderer/coordinate';
 import type { Store } from '../store/Store';
 import { cellIdCoords, parseRange } from '../util/cell';
-import { contentPx, type PrintSettings } from './types';
+import { contentPx, footerBandPx, headerBandPx, type PrintSettings } from './types';
 
 export interface UsedRange { readonly r1: number; readonly c1: number; readonly r2: number; readonly c2: number }
 
@@ -59,6 +59,8 @@ export function usedRange(store: Store, sheetId = store.getActiveSheetId()): Use
 
 export function paginate(store: Store, sheetId: string, used: UsedRange, settings: PrintSettings): PrintGeometry {
   const content = contentPx(settings);
+  // Header/footer bands shrink the row budget (they overlay top/bottom bands).
+  const rowBudget = Math.max(20, content.h - headerBandPx(settings) - footerBandPx(settings));
   const colWidth = (c: number): number => {
     const meta = store.getCol(c, sheetId);
     return meta !== undefined && meta.hide === true ? 0 : meta?.width ?? COL_WIDTH;
@@ -82,7 +84,7 @@ export function paginate(store: Store, sheetId: string, used: UsedRange, setting
   );
   const rowBands = axisBands(
     (r) => rowHeight(r) * scale,
-    used.r1, used.r2, content.h,
+    used.r1, used.r2, rowBudget,
     merges.map((m) => ({ start: m.r1, end: m.r2 })),
   );
 

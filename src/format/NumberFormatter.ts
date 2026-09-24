@@ -61,9 +61,9 @@ function formatPercent(value: number): FormatResult {
 function formatDate(value: number): FormatResult {
   // Treat value as Excel serial date number (days since 1900-01-01)
   const date = serialToDate(value);
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
   return { text: `${y}-${m}-${d}`, formatted: true };
 }
 

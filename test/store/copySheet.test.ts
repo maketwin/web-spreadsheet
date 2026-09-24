@@ -12,6 +12,8 @@ describe('Store.copySheet / moveSheet (Excel 移动或复制)', () => {
     expect(store.getCell(0, 0, copyId!)?.text).toBe('hello');
     // source untouched
     expect(store.getCell(0, 0, a)?.text).toBe('hello');
+    store.setCell(0, 0, { text: 'changed' }, a);
+    expect(store.getCell(0, 0, copyId!)?.text).toBe('hello');
   });
 
   it('inserts copy before a target sheet', () => {

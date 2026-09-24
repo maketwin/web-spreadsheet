@@ -9,6 +9,7 @@ export class CompositeCommand extends Command<readonly Command[]> {
   public execute(store: Store): void { for (const cmd of this.args) cmd.execute(store); }
   public getUndo(): Command { return new CompositeCommand([...this.args].reverse().map((cmd) => cmd.getUndo())); }
   public override describe(): string { return 'Composite'; }
+  public parts(): readonly Command[] { return this.args; }
 }
 
 export function clearRange(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress): void { const values = matrix(range, () => ({ text: '' })); executeRange(store, cmdManager, range.r1, range.c1, values); }

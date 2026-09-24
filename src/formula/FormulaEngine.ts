@@ -1,8 +1,10 @@
 import type { Store } from '../store/Store';
+import { formulaDependencies, type NamedDepArea } from '../util/cell';
 import { DependencyGraph } from './dependency';
-import { evaluate, type NamedRangeResolver } from './evaluator';
+import { evaluate } from './evaluator';
 import { FormulaParser } from './parser';
 import type { AstNode, FormulaArgument, FormulaValue } from './types';
+import type { NamedRangeDef } from '../namedrange/types';
 
 export class FormulaEngine {
   private graph = new DependencyGraph();
@@ -20,7 +22,8 @@ export class FormulaEngine {
   setFormula(cellId: string, formula: string, dependsOn: string[], sheetId?: string): void {
     const sid = sheetId ?? this.store.getActiveSheetId();
     const scopedId = scopedKey(cellId, sid);
-    const scopedDeps = dependsOn.map((d) => scopeDep(d, sid));
+    const fromAst = formulaDependencies(formula, (name) => this.nameArea(name, sid));
+    const scopedDeps = [...new Set([...dependsOn, ...fromAst])].map((d) => this.canonicalDep(scopeDep(d, sid)));
     const circular = this.graph.wouldCreateCycle(scopedId, scopedDeps);
     this.graph.setDependencies(scopedId, scopedDeps);
     this.formulas.set(scopedId, formula);
@@ -67,7 +70,7 @@ export class FormulaEngine {
       const value = scalar(evaluate(
         ast,
         (x, y, sheetName) => this.resolveCell(x, y, sheetName, sheetId),
-        this.nameResolver,
+        (name) => this.resolveNamedRange(name, sheetId),
         {
           currentCell: { r, c },
           isRowHidden: (row, sheetName) => {
@@ -144,8 +147,9 @@ export class FormulaEngine {
   }
 
   private sheetIdForName(name: string): string | undefined {
+    const wanted = name.toLowerCase();
     for (const { id, name: n } of this.store.getSheets()) {
-      if (n === name) return id;
+      if (n.toLowerCase() === wanted) return id;
     }
     return undefined;
   }
@@ -157,25 +161,67 @@ export class FormulaEngine {
     return undefined;
   }
 
-  private readonly nameResolver: NamedRangeResolver = (name: string): AstNode | null => {
-    const def = this.store.getNamedRange(name);
-    if (def === undefined) return null;
-    const parts = def.range.split(':');
-    const start = parts[0]?.split(',').map(Number) ?? [];
-    const end = parts[1]?.split(',').map(Number) ?? start;
-    // 引用其他表时生成带 sheetName 的节点，否则按本表求值（对齐 Excel）。
-    const sheetName = def.sheetId !== undefined && def.sheetId !== this.store.getActiveSheetId()
-      ? this.sheetNameForId(def.sheetId)
-      : undefined;
+  /** Sheet-local name first, then any sheet that defines it (workbook fallback). */
+  private lookupName(name: string, formulaSheetId: string): { readonly def: NamedRangeDef; readonly ownerId: string } | undefined {
+    const local = this.store.getNamedRange(name, formulaSheetId);
+    if (local !== undefined) return { def: local, ownerId: formulaSheetId };
+    const wanted = name.toLowerCase();
+    for (const { id } of this.store.getSheets()) {
+      for (const [stored, def] of this.store.getNamedRanges(id)) {
+        if (stored.toLowerCase() === wanted) return { def, ownerId: id };
+      }
+    }
+    return undefined;
+  }
+
+  private nameArea(name: string, formulaSheetId: string): NamedDepArea | undefined {
+    const found = this.lookupName(name, formulaSheetId);
+    if (found === undefined) return undefined;
+    const area = parseInternalRange(found.def.range);
+    if (area === undefined) return undefined;
+    const sheetName = this.sheetNameForId(found.def.sheetId ?? found.ownerId);
+    return sheetName !== undefined ? { ...area, sheetName } : area;
+  }
+
+  /** Always qualify by the name's target sheet, not whichever sheet happens to be active. */
+  private resolveNamedRange(name: string, formulaSheetId: string): AstNode | null {
+    const found = this.lookupName(name, formulaSheetId);
+    if (found === undefined) return null;
+    const area = parseInternalRange(found.def.range);
+    if (area === undefined) return null;
+    const sheetName = this.sheetNameForId(found.def.sheetId ?? found.ownerId);
     return {
       type: 'range',
-      x1: start[1] ?? 0,
-      y1: start[0] ?? 0,
-      x2: end[1] ?? 0,
-      y2: end[0] ?? 0,
+      x1: area.c1,
+      y1: area.r1,
+      x2: area.c2,
+      y2: area.r2,
       ...(sheetName !== undefined ? { sheetName } : {}),
     };
-  };
+  }
+
+  /** Cross-sheet dep keys use the canonical sheet name so `sheet2!A1` still recalcs. */
+  private canonicalDep(dep: string): string {
+    const colon = dep.indexOf(':');
+    if (colon < 0) return dep;
+    const id = this.sheetIdForName(dep.slice(0, colon));
+    if (id === undefined) return dep;
+    const canonical = this.sheetNameForId(id);
+    return canonical !== undefined ? `${canonical}:${dep.slice(colon + 1)}` : dep;
+  }
+}
+
+function parseInternalRange(range: string): { r1: number; c1: number; r2: number; c2: number } | undefined {
+  const parts = range.split(':');
+  const start = parts[0]?.split(',').map(Number) ?? [];
+  const end = parts[1]?.split(',').map(Number) ?? start;
+  const r1 = start[0];
+  const c1 = start[1];
+  if (r1 === undefined || c1 === undefined || !Number.isFinite(r1) || !Number.isFinite(c1)) return undefined;
+  const r2 = end[0] ?? r1;
+  const c2 = end[1] ?? c1;
+  if (!Number.isFinite(r2) || !Number.isFinite(c2)) return undefined;
+  return { r1, c1, r2, c2 };
 }
 
 function scopedKey(cellId: string, sheetId: string): string {

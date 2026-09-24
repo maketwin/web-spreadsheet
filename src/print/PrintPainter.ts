@@ -20,7 +20,7 @@ import { isRich } from '../util/richText';
 import { WRAP_LINE_HEIGHT, wrapTextLines } from '../util/wrapText';
 import { drawRichLines, layoutRichText, richContentHeight } from '../renderer/richTextLayout';
 import type { PageLayout } from './PrintPaginator';
-import { PRINT_DPI_SCALE, contentPx, type PrintSettings } from './types';
+import { PRINT_DPI_SCALE, contentPx, formatHeaderText, footerBandPx, headerBandPx, type PrintSettings } from './types';
 
 /** Paper is always white; dark app themes must not darken the printout. */
 const PRINT_BG = '#ffffff';
@@ -40,8 +40,9 @@ export class PrintPainter {
 
   public constructor(private readonly store: Store, private readonly sheetId: string) {}
 
-  /** Render one page: a content-area-sized canvas at PRINT_DPI_SCALE bitmap resolution. */
-  public paint(page: PageLayout, scale: number, settings: PrintSettings): HTMLCanvasElement {
+  /** Render one page: a content-area-sized canvas at PRINT_DPI_SCALE bitmap resolution.
+   * When header/footer text is configured, bands are reserved and the text drawn there. */
+  public paint(page: PageLayout, scale: number, settings: PrintSettings, totalPages = 1): HTMLCanvasElement {
     const canvas = document.createElement('canvas');
     const content = contentPx(settings);
     canvas.width = Math.max(1, Math.round(content.w * PRINT_DPI_SCALE));
@@ -51,10 +52,13 @@ export class PrintPainter {
       console.warn('[print] 2d context unavailable; page renders blank');
       return canvas;
     }
-    // Grid-px coordinate system: the transform maps grid px → device px.
-    ctx.setTransform(PRINT_DPI_SCALE * scale, 0, 0, PRINT_DPI_SCALE * scale, 0, 0);
+    const headerBand = headerBandPx(settings);
+    const footerBand = footerBandPx(settings);
+    // Grid-px coordinate system: the transform maps grid px → device px, offset
+    // below the header band; the grid paints into the reduced middle area.
+    ctx.setTransform(PRINT_DPI_SCALE * scale, 0, 0, PRINT_DPI_SCALE * scale, 0, PRINT_DPI_SCALE * headerBand);
     const pageW = content.w / scale;
-    const pageH = content.h / scale;
+    const pageH = Math.max(1, (content.h - headerBand - footerBand) / scale);
     ctx.fillStyle = PRINT_BG;
     ctx.fillRect(-1, -1, pageW + 2, pageH + 2);
 
@@ -65,6 +69,19 @@ export class PrintPainter {
     if (settings.showGrid) this.paintGridLines(ctx, page, cols, rows);
     this.paintBorders(ctx, page, cols, rows, pageW, pageH);
     this.paintTexts(ctx, page, cols, rows, skip);
+
+    // Header/footer text in the reserved bands (device px, unscaled).
+    if (headerBand > 0 || footerBand > 0) {
+      ctx.setTransform(PRINT_DPI_SCALE, 0, 0, PRINT_DPI_SCALE, 0, 0);
+      const sheetName = this.store.getSheets().find((s) => s.id === this.sheetId)?.name;
+      const info = { page: page.index + 1, pages: totalPages, sheet: sheetName };
+      ctx.fillStyle = '#333333';
+      ctx.font = `11px ${PRINT_FONT_STACK}`;
+      ctx.textBaseline = 'alphabetic';
+      ctx.textAlign = 'center';
+      if (headerBand > 0) ctx.fillText(formatHeaderText(settings.headerText ?? '', info), content.w / 2, headerBand - 8);
+      if (footerBand > 0) ctx.fillText(formatHeaderText(settings.footerText ?? '', info), content.w / 2, content.h - 8);
+    }
     return canvas;
   }
 

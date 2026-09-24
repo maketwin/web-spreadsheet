@@ -1,5 +1,7 @@
 import type { Cell, CellValue, Style } from '../types';
 import { formatValue } from '../format/NumberFormatter';
+import { FormulaParser } from '../formula/parser';
+import type { AstNode } from '../formula/types';
 import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
 import { alpha2num, num2alpha } from './alphabet';
 
@@ -303,43 +305,69 @@ function parseRefToken(token: string): { readonly r: number; readonly c: number 
   return { r: Number(match[4]) - 1, c: alpha2num(match[2].toUpperCase()) };
 }
 
-export function formulaDependencies(formula: string): string[] {
+/** Area a named range expands to when collecting formula precedents. */
+export interface NamedDepArea {
+  readonly r1: number;
+  readonly c1: number;
+  readonly r2: number;
+  readonly c2: number;
+  readonly sheetName?: string;
+}
+
+/**
+ * Precedent cell ids (`"r,c"`, or `"Sheet:r,c"`). Walks the parser AST so
+ * `$A$1` and quoted sheet names are included — a cell-ref regex drops both.
+ */
+export function formulaDependencies(formula: string, expandName?: (name: string) => NamedDepArea | undefined): string[] {
+  const ast = new FormulaParser().parse(formula);
+  if (ast === null) return [];
   const deps = new Set<string>();
-  const pattern = /(?:'[^']+'|[A-Za-z][A-Za-z0-9_]*)?!?[A-Za-z]+[1-9]\d*(?::[A-Za-z]+[1-9]\d*)?/g;
-  for (const match of formula.matchAll(pattern)) addDependencyMatch(deps, match[0]);
+  collectDeps(ast, deps, expandName);
   return [...deps];
 }
 
-function addDependencyMatch(deps: Set<string>, expr: string): void {
-  const bangIndex = expr.indexOf('!');
-  const sheetName = bangIndex > 0 ? expr.slice(0, bangIndex).replace(/^'|'$/g, '') : undefined;
-  const unscoped = bangIndex > 0 ? expr.slice(bangIndex + 1) : expr;
-  const parts = unscoped.split(':');
-  const start = parts[0];
-  const end = parts[1];
-  if (start === undefined) return;
-  if (end === undefined) {
-    const id = exprToCellId(start);
-    deps.add(sheetName !== undefined ? `${sheetName}:${id}` : id);
-    return;
-  }
-  addRangeDependencies(deps, start, end, sheetName);
-}
-
-function addRangeDependencies(deps: Set<string>, start: string, end: string, sheetName?: string): void {
-  const a = exprToCoords(start);
-  const b = exprToCoords(end);
-  for (let r = Math.min(a.r, b.r); r <= Math.max(a.r, b.r); r += 1) {
-    for (let c = Math.min(a.c, b.c); c <= Math.max(a.c, b.c); c += 1) {
-      const id = cellId(r, c);
-      deps.add(sheetName !== undefined ? `${sheetName}:${id}` : id);
+function collectDeps(node: AstNode, deps: Set<string>, expandName: ((name: string) => NamedDepArea | undefined) | undefined): void {
+  switch (node.type) {
+    case 'cell':
+      addDep(deps, node.y, node.x, node.sheetName);
+      return;
+    case 'range': {
+      const r1 = Math.min(node.y1, node.y2);
+      const r2 = Math.max(node.y1, node.y2);
+      const c1 = Math.min(node.x1, node.x2);
+      const c2 = Math.max(node.x1, node.x2);
+      for (let r = r1; r <= r2; r += 1) {
+        for (let c = c1; c <= c2; c += 1) addDep(deps, r, c, node.sheetName);
+      }
+      return;
     }
+    case 'name': {
+      if (node.value.toUpperCase() === 'TRUE' || node.value.toUpperCase() === 'FALSE') return;
+      const area = expandName?.(node.value);
+      if (area === undefined) return;
+      for (let r = Math.min(area.r1, area.r2); r <= Math.max(area.r1, area.r2); r += 1) {
+        for (let c = Math.min(area.c1, area.c2); c <= Math.max(area.c1, area.c2); c += 1) addDep(deps, r, c, area.sheetName);
+      }
+      return;
+    }
+    case 'func':
+      node.args.forEach((arg) => collectDeps(arg, deps, expandName));
+      return;
+    case 'binary':
+      collectDeps(node.left, deps, expandName);
+      collectDeps(node.right, deps, expandName);
+      return;
+    case 'unary':
+      collectDeps(node.operand, deps, expandName);
+      return;
+    default:
+      return;
   }
 }
 
-function exprToCellId(expr: string): string {
-  const coords = exprToCoords(expr);
-  return cellId(coords.r, coords.c);
+function addDep(deps: Set<string>, r: number, c: number, sheetName: string | undefined): void {
+  const id = cellId(r, c);
+  deps.add(sheetName !== undefined ? `${sheetName}:${id}` : id);
 }
 
 export function parseRange(rangeStr: string): { r1: number; c1: number; r2: number; c2: number } {

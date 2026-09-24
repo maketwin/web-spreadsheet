@@ -86,7 +86,7 @@ function shortcutAction(key: string, shiftKey = false): KeyboardAction | null {
   if (normalized === '0') return { type: 'menu', command: 'zoom100' };
   if (normalized === '+' || normalized === '=') return { type: 'menu', command: 'zoomIn' };
   if (normalized === '-') return { type: 'menu', command: 'zoomOut' };
-  if (normalized === 'z') return { type: 'menu', command: 'undo' };
+  if (normalized === 'z') return { type: 'menu', command: shiftKey ? 'redo' : 'undo' };
   if (normalized === 'y') return { type: 'menu', command: 'redo' };
   return null;
 }

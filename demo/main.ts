@@ -20,7 +20,7 @@ root.id = 'root';
 root.className = 'spreadsheet-host';
 document.body.append(root);
 
-const ss = new Spreadsheet(root, { data });
+const ss = new Spreadsheet(root, { data, theme: 'light' });
 ss.mount();
 (window as unknown as { __ss: Spreadsheet }).__ss = ss; // debug/test handle
 

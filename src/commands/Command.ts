@@ -23,6 +23,13 @@ export abstract class Command<TArgs = unknown> {
   public describe(): string {
     return this.constructor.name;
   }
+
+  /** Sheet the command writes, when it records one. Otherwise the active sheet. */
+  public targetSheetId(): string | undefined {
+    if (this.args === null || typeof this.args !== 'object' || Array.isArray(this.args)) return undefined;
+    const sheetId = (this.args as { sheetId?: unknown }).sheetId;
+    return typeof sheetId === 'string' ? sheetId : undefined;
+  }
 }
 
 export function setCommand<TArgs>(

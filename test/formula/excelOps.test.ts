@@ -25,6 +25,18 @@ describe('absolute references ($A$1)', () => {
   });
 });
 
+describe('INDEX and MATCH', () => {
+  it('INDEX uses both row and column', () => {
+    expect(run('=INDEX(A1:C3,2,3)', { '2,1': 9 })).toBe(9);
+  });
+
+  it('MATCH exact miss is #N/A and default type is approximate', () => {
+    const col = { '0,0': 1, '0,1': 10, '0,2': 20 };
+    expect(run('=MATCH(5,A1:A3,0)', col)).toBe('#N/A');
+    expect(run('=MATCH(5,A1:A3)', col)).toBe(1);
+  });
+});
+
 describe('comparison and concat operators (Excel parity)', () => {
   it('supports >= and <=', () => {
     expect(run('=A1>=2', { '0,0': 2 })).toBe(true);

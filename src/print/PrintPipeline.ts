@@ -8,7 +8,8 @@
  * `afterprint` (with a timeout fallback for environments that never fire it).
  */
 import type { Store } from '../store/Store';
-import { paginate, usedRange, type PrintGeometry } from './PrintPaginator';
+import { parseRange } from '../util/cell';
+import { paginate, usedRange, type PrintGeometry, type UsedRange } from './PrintPaginator';
 import { PrintPainter } from './PrintPainter';
 import { contentPx, marginPx, paperPx, type PaperSize, type PrintSettings } from './types';
 
@@ -17,11 +18,32 @@ export interface PrintPagesResult {
   readonly canvases: readonly HTMLCanvasElement[];
 }
 
+/** Intersect the configured print area with the used range (invalid → used range). */
+function resolvePrintArea(store: Store, sheetId: string, settings: PrintSettings): UsedRange {
+  const base = usedRange(store, sheetId);
+  const area = settings.printArea?.trim();
+  if (area === undefined || area === '') return base;
+  try {
+    const parsed = parseRange(area);
+    const coords = [parsed.r1, parsed.c1, parsed.r2, parsed.c2];
+    if (!coords.every((n) => Number.isFinite(n))) return base;
+    return {
+      r1: Math.max(base.r1, parsed.r1),
+      c1: Math.max(base.c1, parsed.c1),
+      r2: Math.min(base.r2, parsed.r2),
+      c2: Math.min(base.c2, parsed.c2),
+    };
+  } catch {
+    return base;
+  }
+}
+
 /** Paginate and paint every page of the sheet for the given settings. */
 export function renderPrintPages(store: Store, sheetId: string, settings: PrintSettings): PrintPagesResult {
-  const geometry = paginate(store, sheetId, usedRange(store, sheetId), settings);
+  const used = resolvePrintArea(store, sheetId, settings);
+  const geometry = paginate(store, sheetId, used, settings);
   const painter = new PrintPainter(store, sheetId);
-  const canvases = geometry.pages.map((page) => painter.paint(page, geometry.scale, settings));
+  const canvases = geometry.pages.map((page) => painter.paint(page, geometry.scale, settings, geometry.pages.length));
   return { geometry, canvases };
 }
 

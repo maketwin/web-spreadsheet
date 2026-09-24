@@ -15,6 +15,11 @@ export interface PrintSettings {
   /** Percent (50–200), used when scaleMode is 'custom'. */
   readonly scalePercent: number;
   readonly showGrid: boolean;
+  /** Print area range ("A1:F20"); empty = whole used range. */
+  readonly printArea?: string;
+  /** Header/footer text; supports {page}, {pages} and {sheet} placeholders. Empty = none. */
+  readonly headerText?: string;
+  readonly footerText?: string;
 }
 
 export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
@@ -25,6 +30,27 @@ export const DEFAULT_PRINT_SETTINGS: PrintSettings = {
   scalePercent: 100,
   showGrid: true,
 };
+
+/** Band heights (CSS px) reserved at the top/bottom of the content area for
+ * header/footer text. Zero when the respective text is empty. */
+export function headerBandPx(settings: PrintSettings): number {
+  return settings.headerText !== undefined && settings.headerText !== '' ? 26 : 0;
+}
+
+export function footerBandPx(settings: PrintSettings): number {
+  return settings.footerText !== undefined && settings.footerText !== '' ? 26 : 0;
+}
+
+/** Expand {page}/{pages}/{sheet} placeholders in header/footer text. */
+export function formatHeaderText(
+  text: string,
+  info: { readonly page: number; readonly pages: number; readonly sheet?: string | undefined },
+): string {
+  return text
+    .replaceAll('{page}', String(info.page))
+    .replaceAll('{pages}', String(info.pages))
+    .replaceAll('{sheet}', info.sheet ?? '');
+}
 
 /** Paper dimensions in mm (portrait). */
 export const PAPER_MM: Readonly<Record<PaperSize, { readonly w: number; readonly h: number }>> = {

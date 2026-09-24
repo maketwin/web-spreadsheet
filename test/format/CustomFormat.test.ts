@@ -87,8 +87,9 @@ describe('formatValue custom integration', () => {
   it('keeps built-in enums on the fast path', () => {
     expect(formatValue(0.5, 'percent')).toEqual({ text: '50.00%', formatted: true });
   });
-  it('unusable custom strings fall back to raw text', () => {
-    expect(formatValue(5, ';;;')).toEqual({ text: '5', formatted: false });
+  it(';;; hides every section (Excel)', () => {
+    expect(formatValue(5, ';;;')).toEqual({ text: '', formatted: true });
+    expect(formatValue(-5, ';;;')).toEqual({ text: '', formatted: true });
   });
 });
 
