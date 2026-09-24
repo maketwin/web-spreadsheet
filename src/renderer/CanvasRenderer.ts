@@ -4,6 +4,16 @@ import { anchorToRect, rectToAnchor } from '../charts/geometry';
 import type { SelectionKind } from '../selection/Selection';
 import { Range, type RangeAddress } from '../selection/Range';
 import type { Store } from '../store/Store';
+
+/** A formula-reference highlight: colored box over a referenced range while
+ * the formula is being edited (Excel colors each reference differently). */
+export interface FormulaRefHighlight {
+  readonly x1: number;
+  readonly y1: number;
+  readonly x2: number;
+  readonly y2: number;
+  readonly color: string;
+}
 import { TOTAL_ROWS, TOTAL_COLS, ROW_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, COL_HEADER_HEIGHT, type CellAddress, type HeaderHit, canvasPointToCell, canvasPointToHeader, canvasPointToColumn, canvasPointToRow, clamp, type CanvasTheme, readCanvasTheme, headerSelectionColor } from './coordinate';
 import { collectCellBorderEdges, edgesToPaintSegs, hasBorderOnEdge, strokeBorderSegs, type LogicalBorderEdge } from './BorderPainter';
 import { DirtyRegionTracker, type Rect } from './DirtyRegionTracker';
@@ -51,6 +61,8 @@ export interface CanvasRendererOptions {
   onAutoFilterClick?: (r: number, c: number, x: number, y: number) => void;
   /** Trackpad pinch (wheel + Ctrl): owner applies the ±10 zoom step. */
   onZoom?: (zoomDelta: number) => void;
+  /** Pinch zoom wants absolute targets, not ±10 steps. */
+  onZoomTo?: (zoom: number) => void;
 }
 
 type DragAnchor = { type: 'cell'; r: number; c: number } | { type: 'column'; c: number } | { type: 'row'; r: number };
@@ -104,6 +116,8 @@ export class CanvasRenderer {
   private highlightMatches: readonly CellAddress[] = [];
   /** Index into highlightMatches of the current find match (orange outline). */
   private highlightCurrent = -1;
+  /** Ranges referenced by the formula currently being edited (colored boxes). */
+  private formulaRefHighlights: readonly FormulaRefHighlight[] = [];
   private editing = false;
   private cachedTheme: CanvasTheme | null = null;
   private canvasCssW = 0;
@@ -268,9 +282,9 @@ export class CanvasRenderer {
     if (opts.showFormula !== undefined) this.opts = { ...this.opts, showFormula: opts.showFormula };
     if (opts.showGrid !== undefined) this.opts = { ...this.opts, showGrid: opts.showGrid };
     if (zoomChanged) {
-      // Unset rows/cols fall back to the zoom-scaled defaults; explicit sizes
-      // (already stored in the scroller) are untouched.
       this.scroller.setDefaults(this.defaultRowHeight(), this.defaultColWidth());
+      // Explicit heights were stored in zoomed pixels. Rebuild from meta × the new zoom.
+      this.syncSizesFromStore();
     }
     this.invalidateAll();
   }
@@ -306,26 +320,138 @@ export class CanvasRenderer {
   }
   public setHighlightMatches(cells: readonly CellAddress[], current = -1): void { this.highlightMatches = cells; this.highlightCurrent = current; this.invalidateAll(); }
 
+  /** Colored boxes over the ranges referenced by the formula being edited. */
+  public setFormulaRefHighlights(ranges: readonly FormulaRefHighlight[] | null): void {
+    this.formulaRefHighlights = ranges ?? [];
+    this.invalidateAll();
+  }
+
   private bindEvents(): void {
     if (!this.opts.canvas.hasAttribute('tabindex')) this.opts.canvas.tabIndex = 0;
     const c = this.opts.canvas;
-    c.addEventListener('mousedown', this.handleMouseDown); c.addEventListener('dblclick', this.handleDblClick); c.addEventListener('contextmenu', this.handleContextMenu);
+    // Mouse input keeps the classic listeners; touch/pen ride pointer events
+    // (guarded by pointerType). CSS `touch-action: none` on the canvas is
+    // required for touch drags to stream pointermove.
+    c.addEventListener('mousedown', this.handleMouseDown);
+    c.addEventListener('pointerdown', this.handlePointerDown);
+    c.addEventListener('dblclick', this.handleDblClick); c.addEventListener('contextmenu', this.handleContextMenu);
     c.addEventListener('wheel', this.handleWheel, { passive: false });
-    window.addEventListener('mousemove', this.handleMouseMove); window.addEventListener('mouseup', this.handleMouseUp);
+    window.addEventListener('mousemove', this.handleMouseMove);
+    window.addEventListener('mouseup', this.handleMouseUp);
+    window.addEventListener('pointermove', this.handlePointerMove);
+    window.addEventListener('pointerup', this.handlePointerUp);
+    window.addEventListener('pointercancel', this.handlePointerCancel);
     window.addEventListener('ss:theme-changed', this.handleThemeChanged);
   }
   private unbindEvents(): void {
     const c = this.opts.canvas;
-    c.removeEventListener('mousedown', this.handleMouseDown); c.removeEventListener('dblclick', this.handleDblClick); c.removeEventListener('contextmenu', this.handleContextMenu);
+    c.removeEventListener('mousedown', this.handleMouseDown);
+    c.removeEventListener('pointerdown', this.handlePointerDown);
+    c.removeEventListener('dblclick', this.handleDblClick); c.removeEventListener('contextmenu', this.handleContextMenu);
     c.removeEventListener('wheel', this.handleWheel);
-    window.removeEventListener('mousemove', this.handleMouseMove); window.removeEventListener('mouseup', this.handleMouseUp);
+    window.removeEventListener('mousemove', this.handleMouseMove);
+    window.removeEventListener('mouseup', this.handleMouseUp);
+    window.removeEventListener('pointermove', this.handlePointerMove);
+    window.removeEventListener('pointerup', this.handlePointerUp);
+    window.removeEventListener('pointercancel', this.handlePointerCancel);
     window.removeEventListener('ss:theme-changed', this.handleThemeChanged);
   }
 
-  private readonly handleMouseDown = (ev: MouseEvent): void => {
+  /** Pressed pointers (id → last position). 1 = select/drag, 2 = pinch zoom. */
+  private readonly pointers = new Map<number, { x: number; y: number }>();
+  private pinchBase: { dist: number; zoom: number } | null = null;
+  private lastTap: { x: number; y: number; time: number } | null = null;
+  /** Timestamp of the last touch/pen pointerdown — touch fires compatibility
+   * mouse events right after, which must not double-handle the gesture. */
+  private touchPointerAt = 0;
+  private mouseAfterTouch(): boolean {
+    return this.touchPointerAt !== 0 && performance.now() - this.touchPointerAt < 150;
+  }
+
+  private readonly handlePointerDown = (ev: PointerEvent): void => {
+    // Mouse input keeps flowing through the classic mouse listeners; the
+    // pointer path below is for touch/pen only.
+    if (ev.pointerType === 'mouse') return;
+    this.touchPointerAt = performance.now();
+    this.pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (this.pointers.size === 2) {
+      // Second finger: switch to pinch zoom and abort the in-progress drag.
+      this.dragAnchor = null;
+      this.moveDrag = null;
+      this.pressedCell = null;
+      const pts = [...this.pointers.values()];
+      const a = pts[0];
+      const b = pts[1];
+      if (a !== undefined && b !== undefined) {
+        this.pinchBase = { dist: Math.hypot(a.x - b.x, a.y - b.y), zoom: this.zoom() };
+      }
+      return;
+    }
+    if (this.pointers.size > 2) return;
+    this.handleMouseDown(ev, true);
+  };
+
+  private readonly handlePointerMove = (ev: PointerEvent): void => {
+    if (ev.pointerType === 'mouse') return;
+    if (!this.pointers.has(ev.pointerId)) return;
+    this.pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (this.pointers.size >= 2 && this.pinchBase !== null) {
+      const pts = [...this.pointers.values()].slice(0, 2);
+      const a = pts[0];
+      const b = pts[1];
+      if (a === undefined || b === undefined || this.pinchBase.dist <= 0) return;
+      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      const target = clamp(this.pinchBase.zoom * (dist / this.pinchBase.dist), 50, 200);
+      this.opts.onZoomTo?.(target);
+      return;
+    }
+    this.handleMouseMove(ev);
+  };
+
+  private readonly handlePointerUp = (ev: PointerEvent): void => {
+    if (ev.pointerType === 'mouse') return;
+    const wasMulti = this.pointers.size >= 2;
+    this.pointers.delete(ev.pointerId);
+    if (wasMulti) {
+      if (this.pointers.size < 2) this.pinchBase = null;
+      return;
+    }
+    // Touch double-tap → synthesize a DOM dblclick so the React onDoubleClick
+    // handler (cell edit entry) fires, exactly like a mouse double-click.
+    const now = performance.now();
+    if (this.lastTap !== null && now - this.lastTap.time <= 300 && Math.hypot(ev.clientX - this.lastTap.x, ev.clientY - this.lastTap.y) <= 16) {
+      this.lastTap = null;
+      this.handleMouseUp();
+      const target = ev.target instanceof Element ? ev.target : this.opts.canvas;
+      target.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, clientX: ev.clientX, clientY: ev.clientY, button: 0, view: window }));
+      return;
+    }
+    const moved = Math.hypot(ev.clientX - (this.lastTap?.x ?? -999), ev.clientY - (this.lastTap?.y ?? -999));
+    this.lastTap = moved <= 16 ? { x: ev.clientX, y: ev.clientY, time: now } : null;
+    this.handleMouseUp();
+  };
+
+  private readonly handlePointerCancel = (ev: PointerEvent): void => {
+    if (ev.pointerType === 'mouse') return;
+    this.pointers.delete(ev.pointerId);
+    if (this.pointers.size < 2) this.pinchBase = null;
+    this.dragAnchor = null;
+    this.moveDrag = null;
+    this.pressedCell = null;
+  };
+
+  private readonly handleMouseDown = (ev: MouseEvent, fromPointer = false): void => {
     // Excel: only primary button starts selection / drag. Right-click selection is handled in contextmenu
     // so a multi-cell selection is not collapsed before the menu opens.
     if (ev.button !== 0) return;
+    // A touch/pen pointer already handled this gesture; the compatibility
+    // mouse event that trails it must not re-select (the pointer path itself
+    // calls this with fromPointer = true).
+    if (!fromPointer && this.mouseAfterTouch()) return;
+    // While the cell editor is open, mousedown's default action would shift
+    // focus to the canvas and blur-commit the editor before the click decides
+    // between point-insert and commit — suppress it.
+    if (this.editing) ev.preventDefault();
     if (this.resizeHandler.onMouseDown(ev)) return;
     if (this.fillHandle.onMouseDown(ev)) { this.dragAnchor = null; return; }
     const h = this.headerAtPoint(ev.clientX, ev.clientY);
@@ -395,7 +521,18 @@ export class CanvasRenderer {
     this.setSelection(range, 'range', cell); this.opts.onSelectionChange?.(range, cell, { r: this.dragAnchor.r, c: this.dragAnchor.c });
   };
   private readonly handleMouseUp = (): void => { if (this.resizeHandler.isResizing()) { this.resizeHandler.onMouseUp(); this.pressedCell = null; return; } if (this.fillHandle.isDragging()) { this.fillHandle.onMouseUp(); this.pressedCell = null; return; } if (this.moveDrag !== null) { const d = this.moveDrag; // Dropping back onto the source is a no-op, not a move — MoveRange would clear the cells.
-    if (d.moved && (d.target.r !== d.source.r1 || d.target.c !== d.source.c1)) this.opts.onMoveRange?.(d.source, Range.single(d.target.r, d.target.c).toAddress(), d.copy); this.moveDrag = null; this.opts.canvas.style.cursor = ''; this.invalidateAll(); return; } this.dragAnchor = null;
+    if (d.moved && (d.target.r !== d.source.r1 || d.target.c !== d.source.c1)) this.opts.onMoveRange?.(d.source, Range.single(d.target.r, d.target.c).toAddress(), d.copy); this.moveDrag = null; this.opts.canvas.style.cursor = ''; this.invalidateAll(); return; }
+    // Excel: after a drag the active cell lands on the drag ORIGIN (name box /
+    // formula bar follow it), while the far end becomes the pivot that the next
+    // Shift+Arrow extends against.
+    const dragOrigin = this.dragAnchor;
+    if (dragOrigin?.type === 'cell' && this.selectionKind === 'range' && this.selectedRange !== undefined) {
+      const origin = { r: dragOrigin.r, c: dragOrigin.c };
+      const end = this.activeCell ?? origin;
+      this.setSelection(this.selectedRange, 'range', origin);
+      this.opts.onSelectionChange?.(this.selectedRange, origin, end);
+    }
+    this.dragAnchor = null;
     const press = this.pressedCell;
     this.pressedCell = null;
     if (press !== null && !this.pressedMoved) this.opts.onHyperlinkClick?.(press);
@@ -556,6 +693,7 @@ export class CanvasRenderer {
     this.collectVisibleBorders(this.borderVis(vis));
     for (const q of quads) { this.paintGridLines(q, theme); this.flushBorders(q.clip); }
     this.paintCellTexts(quads, this.borderVis(vis), theme);
+    this.paintCommentIndicators(vis);
     this.paintSparklines(quads);
     this.paintFreezeSeparators(theme);
     this.ctx.restore();
@@ -1188,11 +1326,12 @@ export class CanvasRenderer {
 
     this.ctx.save();
     // Vertical clip always to the row band; horizontal expands across empty neighbors when wrap is off (Excel overflow).
+    // 显示公式模式下例外：长公式串裁剪在格内（Excel 不跨格溢出公式，避免相邻公式叠字）。
     const clipY = y + 1;
     const clipH = Math.max(0, rh - 2);
     let clipX = x + 1;
     let clipW = Math.max(0, cw - 2);
-    if (!wrapping) {
+    if (!wrapping && this.opts.showFormula !== true) {
       const span = this.textOverflowSpan(r, c, x, cw, align);
       clipX = span.left;
       clipW = Math.max(0, span.right - span.left);
@@ -1537,6 +1676,55 @@ export class CanvasRenderer {
     }
     this.paintMoveDragOverlay(ctx, theme);
     this.paintHighlights(ctx, theme);
+    this.paintFormulaRefHighlights(ctx);
+  }
+
+  /** Excel comment indicator: small red triangle at the cell's top-right corner. */
+  private paintCommentIndicators(vis: VisibleRange): void {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.fillStyle = '#e02020';
+    for (let r = vis.startRow; r < vis.endRow; r += 1) {
+      for (let c = vis.startCol; c < vis.endCol; c += 1) {
+        if (this.opts.store.getCell(r, c)?.comment === undefined) continue;
+        const { x, y } = this.cellVP(r, c);
+        const w = this.scroller.getColWidth(c);
+        const h = this.scroller.getRowHeight(r);
+        const size = Math.min(9, w, h);
+        ctx.beginPath();
+        ctx.moveTo(x + w - size, y);
+        ctx.lineTo(x + w, y);
+        ctx.lineTo(x + w, y + size);
+        ctx.closePath();
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  /** Paint colored boxes over ranges referenced by the edited formula. */
+  private paintFormulaRefHighlights(ctx: CanvasRenderingContext2D): void {    if (this.formulaRefHighlights.length === 0) return;
+    const vis = this.scroller.getVisibleRange();
+    ctx.save();
+    for (const hl of this.formulaRefHighlights) {
+      const x1 = Math.min(hl.x1, hl.x2);
+      const x2 = Math.max(hl.x1, hl.x2);
+      const y1 = Math.min(hl.y1, hl.y2);
+      const y2 = Math.max(hl.y1, hl.y2);
+      if (x2 < vis.startCol || x1 >= vis.endCol || y2 < vis.startRow || y1 >= vis.endRow) continue;
+      const start = this.cellVP(y1, x1);
+      const end = this.cellVP(y2, x2);
+      const w = end.x + this.scroller.getColWidth(x2) - start.x;
+      const h = end.y + this.scroller.getRowHeight(y2) - start.y;
+      ctx.globalAlpha = 0.18;
+      ctx.fillStyle = hl.color;
+      ctx.fillRect(start.x, start.y, w, h);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = hl.color;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(start.x + 1, start.y + 1, w - 2, h - 2);
+    }
+    ctx.restore();
   }
 
   /** Paint find-match highlights: light yellow cells, orange outline on the current match.
@@ -1815,6 +2003,9 @@ export class CanvasRenderer {
 
   private syncSizesFromStore(): void {
     const z = this.zoom();
+    // Drop the previous sheet's cached heights before applying this sheet's meta.
+    for (let r = 0; r < TOTAL_ROWS; r += 1) this.scroller.setRowHeight(r, this.defaultRowHeight());
+    for (let c = 0; c < TOTAL_COLS; c += 1) this.scroller.setColWidth(c, this.defaultColWidth());
     for (let r = 0; r < TOTAL_ROWS; r += 1) {
       const meta = this.opts.store.getRow(r);
       // Excel collapses AutoFilter-hidden rows to zero height so lower rows shift up.
@@ -1831,6 +2022,8 @@ export class CanvasRenderer {
 
   private onStoreEvent(e: StoreEvent): void {
     const z = this.zoom();
+    const active = this.opts.store.getActiveSheetId();
+    if ((e.type === 'row' || e.type === 'col') && e.sheetId !== undefined && e.sheetId !== active) return;
     if (e.type === 'row') {
       const hidden = e.meta?.hide === true;
       const h = e.meta?.height;
@@ -1843,7 +2036,11 @@ export class CanvasRenderer {
     }
     // Find highlights belong to their sheet; switching sheets must not paint
     // stale coordinates onto the new one.
-    if (e.type === 'sheet' && e.action === 'activate') { this.highlightMatches = []; this.highlightCurrent = -1; }
+    if (e.type === 'sheet' && e.action === 'activate') {
+      this.highlightMatches = [];
+      this.highlightCurrent = -1;
+      this.syncSizesFromStore();
+    }
     this.invalidateAll();
   }
 }

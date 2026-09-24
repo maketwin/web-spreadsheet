@@ -608,6 +608,14 @@ describe('CanvasRenderer', () => {
 
   it('reads CSS variables for each paint', () => {
     const ctx = installCanvasContext();
+    // Track every fillStyle so the assertion does not depend on paint order
+    // (comment indicators legitimately paint after the grid lines).
+    const fillStyles: string[] = [];
+    Object.defineProperty(ctx, 'fillStyle', {
+      get: () => fillStyles[fillStyles.length - 1],
+      set: (v: string) => { fillStyles.push(v); },
+      configurable: true,
+    });
     const callbacks = installAnimationFrames();
     document.documentElement.style.setProperty('--ss-bg', '#101010');
     const renderer = new CanvasRenderer({ canvas: makeCanvas(), store: new Store() });
@@ -615,7 +623,7 @@ describe('CanvasRenderer', () => {
     callbacks[0]?.(0);
 
     expect(ctx.fillRect).toHaveBeenCalledWith(0, 0, 300, 150);
-    expect(ctx.fillStyle).toBe('#444444');
+    expect(fillStyles).toContain('#444444');
     document.documentElement.style.removeProperty('--ss-bg');
     renderer.destroy();
   });
