@@ -1,10 +1,16 @@
 import type { AutoFilterState, Cell, ColMeta, RowMeta, Style } from '../types';
 import type { ConditionalRule } from '../conditional/ConditionalRule';
-import type { ChartSpec } from '../charts/types';
+import type { ChartSpec, ImageSpec } from '../charts/types';
 import type { ValidationRule } from '../validation/types';
 import type { SparklineSpec } from '../sparkline/types';
 import type { NamedRangeDef } from '../namedrange/types';
 import type { SheetProtectionState } from '../protection/SheetProtection';
+
+/** 行分组（大纲）：[start, end] 为 0-based 闭区间。 */
+export interface RowGroupDef {
+  readonly start: number;
+  readonly end: number;
+}
 
 export interface SerializedSheetData {
   readonly cells: Array<[string, Cell]>;
@@ -14,9 +20,11 @@ export interface SerializedSheetData {
   readonly merges: string[];
   readonly conditionalRules: Array<[string, ConditionalRule[]]>;
   readonly charts: ChartSpec[];
+  readonly images: ImageSpec[];
   readonly validationRules: Array<[string, ValidationRule]>;
   readonly sparklines: SparklineSpec[];
   readonly namedRanges: Array<[string, NamedRangeDef]>;
+  readonly rowGroups: RowGroupDef[];
   readonly protection?: SheetProtectionState | undefined;
   readonly autoFilter?: AutoFilterState | undefined;
 }
@@ -29,9 +37,11 @@ export class SheetData {
   private readonly merges = new Set<string>();
   private readonly conditionalRules = new Map<string, ConditionalRule[]>();
   private readonly charts = new Map<string, ChartSpec>();
+  private readonly images = new Map<string, ImageSpec>();
   private readonly validationRules = new Map<string, ValidationRule>();
   private readonly sparklines = new Map<string, SparklineSpec>();
   private readonly namedRanges = new Map<string, NamedRangeDef>();
+  private rowGroups: RowGroupDef[] = [];
   private protection: SheetProtectionState | undefined;
   private autoFilter: AutoFilterState | undefined;
 
@@ -110,6 +120,26 @@ export class SheetData {
 
   public removeChart(id: string): void {
     this.charts.delete(id);
+  }
+
+  public getImages(): readonly ImageSpec[] {
+    return [...this.images.values()];
+  }
+
+  public addImage(spec: ImageSpec): void {
+    this.images.set(spec.id, spec);
+  }
+
+  public removeImage(id: string): void {
+    this.images.delete(id);
+  }
+
+  public getRowGroups(): readonly RowGroupDef[] {
+    return [...this.rowGroups];
+  }
+
+  public setRowGroups(groups: readonly RowGroupDef[]): void {
+    this.rowGroups = [...groups];
   }
 
   public getValidationRules(): readonly [string, ValidationRule][] {
@@ -195,6 +225,8 @@ export class SheetData {
       merges: [...this.merges],
       conditionalRules: [...this.conditionalRules.entries()],
       charts: [...this.charts.values()],
+      images: [...this.images.values()],
+      rowGroups: [...this.rowGroups],
       validationRules: [...this.validationRules.entries()],
       sparklines: [...this.sparklines.values()],
       namedRanges: [...this.namedRanges.entries()],
@@ -212,6 +244,8 @@ export class SheetData {
     data.merges.forEach((merge) => sheet.merges.add(merge));
     data.conditionalRules.forEach(([key, value]) => sheet.conditionalRules.set(key, value));
     data.charts.forEach((spec) => sheet.charts.set(spec.id, spec));
+    data.images.forEach((spec) => sheet.images.set(spec.id, spec));
+    sheet.rowGroups = [...(data.rowGroups ?? [])];
     data.validationRules.forEach(([key, value]) => sheet.validationRules.set(key, value));
     data.sparklines.forEach((spec) => sheet.sparklines.set(spec.id, spec));
     data.namedRanges.forEach(([key, value]) => sheet.namedRanges.set(key, value));

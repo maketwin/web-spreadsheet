@@ -24,17 +24,17 @@ export interface FloatingChartProps {
 }
 
 type HandleId = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
-interface Gesture {
+export interface Gesture {
   readonly mode: 'move' | HandleId;
   readonly startClientX: number;
   readonly startClientY: number;
   readonly startRect: Rect;
 }
 
-interface Rect { x: number; y: number; w: number; h: number }
+export interface Rect { x: number; y: number; w: number; h: number }
 
-const HANDLES: readonly HandleId[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
-const HANDLE_CURSOR: Readonly<Record<HandleId, string>> = {
+export const HANDLES: readonly HandleId[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+export const HANDLE_CURSOR: Readonly<Record<HandleId, string>> = {
   nw: 'nwse-resize', n: 'ns-resize', ne: 'nesw-resize', e: 'ew-resize',
   se: 'nwse-resize', s: 'ns-resize', sw: 'nesw-resize', w: 'ew-resize',
 };
@@ -113,8 +113,8 @@ export const FloatingChart: FC<FloatingChartProps> = ({ spec, store, renderer, s
   };
 
   const onGestureUp = (): void => {
-    window.removeEventListener('pointermove', onGestureMove);
-    window.removeEventListener('pointerup', onGestureUp);
+    window.removeEventListener('pointermove', stableMove.current);
+    window.removeEventListener('pointerup', stableUp.current);
     const g = gestureRef.current;
     gestureRef.current = null;
     setLiveRect(null);
@@ -122,15 +122,24 @@ export const FloatingChart: FC<FloatingChartProps> = ({ spec, store, renderer, s
     onGeometry(spec.id, commitAnchor(renderer, liveRectRef.current ?? g.startRect));
   };
 
-  // If the component unmounts mid-gesture, drop the window listeners instead
-  // of leaving them alive until the next pointerup.
+  const moveRef = useRef(onGestureMove);
+  const upRef = useRef(onGestureUp);
+  moveRef.current = onGestureMove;
+  upRef.current = onGestureUp;
+  const stableMove = useRef((e: PointerEvent) => { moveRef.current(e); });
+  const stableUp = useRef(() => { upRef.current(); });
+
+  // Unmount only. A dep-less effect re-runs every render and tears the gesture
+  // listeners off as soon as setLiveRect commits.
   useEffect(() => {
+    const move = stableMove.current;
+    const up = stableUp.current;
     return () => {
-      window.removeEventListener('pointermove', onGestureMove);
-      window.removeEventListener('pointerup', onGestureUp);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
       gestureRef.current = null;
     };
-  });
+  }, []);
 
   const beginGesture = (e: ReactPointerEvent<HTMLElement>, mode: Gesture['mode']): void => {
     if (renderer === null || e.button !== 0) return;
@@ -141,8 +150,8 @@ export const FloatingChart: FC<FloatingChartProps> = ({ spec, store, renderer, s
     const baseRect = liveRect ?? renderer.chartRect(anchor);
     gestureRef.current = { mode, startClientX: e.clientX, startClientY: e.clientY, startRect: baseRect };
     setLiveRect(baseRect);
-    window.addEventListener('pointermove', onGestureMove);
-    window.addEventListener('pointerup', onGestureUp);
+    window.addEventListener('pointermove', stableMove.current);
+    window.addEventListener('pointerup', stableUp.current);
   };
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
@@ -220,7 +229,7 @@ export const FloatingChart: FC<FloatingChartProps> = ({ spec, store, renderer, s
   );
 };
 
-function applyGesture(g: Gesture, dx: number, dy: number): Rect {
+export function applyGesture(g: Gesture, dx: number, dy: number): Rect {
   const minW = CHART_MIN_W;
   const minH = CHART_MIN_H;
   if (g.mode === 'move') return { x: g.startRect.x + dx, y: g.startRect.y + dy, w: g.startRect.w, h: g.startRect.h };
@@ -233,7 +242,7 @@ function applyGesture(g: Gesture, dx: number, dy: number): Rect {
 }
 
 /** Clamp a gesture rect into the grid client area and snap it back to an anchor. */
-function commitAnchor(renderer: CanvasRenderer, rect: Rect): ChartAnchor {
+export function commitAnchor(renderer: CanvasRenderer, rect: Rect): ChartAnchor {
   const grid = renderer.gridClientRect();
   const x = Math.min(Math.max(rect.x, grid.x), Math.max(grid.x, grid.x + grid.w - CHART_MIN_W));
   const y = Math.min(Math.max(rect.y, grid.y), Math.max(grid.y, grid.y + grid.h - CHART_MIN_H));

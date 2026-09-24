@@ -40,3 +40,13 @@ export interface ChartSpec {
   /** Floating-object geometry. Legacy panel-era specs may omit it; the UI normalizes on render. */
   readonly anchor?: ChartAnchor | undefined;
 }
+
+/** Floating image object (data-URL based; lives per sheet like charts). */
+export interface ImageSpec {
+  readonly id: string;
+  readonly name: string;
+  /** Image source as a data URL (persisted with the workbook autosave). */
+  readonly src: string;
+  readonly anchor: ChartAnchor;
+  readonly sheetId?: string | undefined;
+}

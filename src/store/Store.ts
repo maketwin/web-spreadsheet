@@ -1,9 +1,11 @@
 import { SheetData, type SerializedSheetData } from './SheetData';
 
 import { parseRange } from '../util/cell';
+import { mapSheetRefs } from '../util/sheetRef';
 import type { Cell, ColMeta, RowMeta, StoreEvent, Style, Unsubscribe } from '../types';
 import type { ConditionalRule } from '../conditional/ConditionalRule';
-import type { ChartSpec } from '../charts/types';
+import type { ChartSpec, ImageSpec } from '../charts/types';
+import type { RowGroupDef } from './SheetData';
 import type { ValidationRule } from '../validation/types';
 import type { SparklineSpec } from '../sparkline/types';
 import type { NamedRangeDef } from '../namedrange/types';
@@ -21,6 +23,7 @@ export class Store {
   private readonly sheets = new Map<string, SheetData>();
   private readonly sheetNames = new Map<string, string>();
   private readonly sheetColors = new Map<string, string>();
+  private workbookPasswordHash: string | undefined;
   private readonly subscribers = new Set<(e: StoreEvent) => void>();
   private activeSheetId = 'sheet-1';
   private nextSheetNumber = 2;
@@ -73,7 +76,13 @@ export class Store {
   public renameSheet(sheetId: string, name: string): boolean {
     const trimmed = name.trim();
     if (trimmed.length === 0 || !this.sheets.has(sheetId)) return false;
+    const previous = this.sheetNames.get(sheetId) ?? '';
+    if (previous === trimmed) return true;
+    for (const [id, existing] of this.sheetNames) {
+      if (id !== sheetId && existing.toLowerCase() === trimmed.toLowerCase()) return false;
+    }
     this.sheetNames.set(sheetId, trimmed);
+    if (previous !== trimmed) this.rewriteSheetRefs(previous, trimmed);
     this.notify({ type: 'sheet', action: 'rename', sheetId, name: trimmed });
     return true;
   }
@@ -126,7 +135,8 @@ export class Store {
       ? this.uniqueSheetName(opts.name.trim())
       : this.uniqueCopyName(sourceName);
     const id = this.makeSheetId();
-    this.sheets.set(id, SheetData.deserialize(source.serialize()));
+    // serialize() keeps live object references; clone before the copy shares them.
+    this.sheets.set(id, SheetData.deserialize(structuredClone(source.serialize())));
     this.sheetNames.set(id, name);
     const color = this.sheetColors.get(sheetId);
     if (color !== undefined) this.sheetColors.set(id, color);
@@ -152,6 +162,7 @@ export class Store {
     for (const [sid, n] of nextNames) this.sheetNames.set(sid, n);
     for (const [sid, c] of nextColors) this.sheetColors.set(sid, c);
     this.activeSheetId = id;
+    this.replayFormulaCells(id);
     this.notify({ type: 'sheet', action: 'add', sheetId: id, name });
     return id;
   }
@@ -179,10 +190,12 @@ export class Store {
 
   public deleteSheet(sheetId: string): boolean {
     if (this.sheets.size <= 1 || !this.sheets.has(sheetId)) return false;
+    const removedName = this.sheetNames.get(sheetId);
     this.sheets.delete(sheetId);
     this.sheetNames.delete(sheetId);
     this.sheetColors.delete(sheetId);
     if (this.activeSheetId === sheetId) this.activeSheetId = this.sheets.keys().next().value as string;
+    if (removedName !== undefined) this.rewriteSheetRefs(removedName, null);
     this.notify({ type: 'sheet', action: 'delete', sheetId });
     return true;
   }
@@ -282,6 +295,29 @@ export class Store {
   public removeChart(id: string, sheetId = this.activeSheetId): void {
     this.requireSheet(sheetId).removeChart(id);
     this.notify(eventWithSheet({ type: 'style' as const, id: `chart:${id}`, style: undefined }, sheetId));
+  }
+
+  public getImages(sheetId = this.activeSheetId): readonly ImageSpec[] {
+    return this.requireSheet(sheetId).getImages();
+  }
+
+  public addImage(spec: ImageSpec, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).addImage(spec);
+    this.notify(eventWithSheet({ type: 'style' as const, id: `image:${spec.id}`, style: undefined }, sheetId));
+  }
+
+  public removeImage(id: string, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).removeImage(id);
+    this.notify(eventWithSheet({ type: 'style' as const, id: `image:${id}`, style: undefined }, sheetId));
+  }
+
+  public getRowGroups(sheetId = this.activeSheetId): readonly RowGroupDef[] {
+    return this.requireSheet(sheetId).getRowGroups();
+  }
+
+  public setRowGroups(groups: readonly RowGroupDef[], sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).setRowGroups(groups);
+    this.notify(eventWithSheet({ type: 'style' as const, id: 'rowGroups', style: undefined }, sheetId));
   }
 
   public getValidationRules(sheetId = this.activeSheetId): readonly [string, ValidationRule][] {
@@ -409,12 +445,22 @@ export class Store {
   public serialize(): SerializedStore {
     return {
       activeSheetId: this.activeSheetId,
+      passwordHash: this.workbookPasswordHash,
       sheets: this.getSheets().map(({ id, name, color }) => (
         color === undefined
           ? { id, name, data: this.requireSheet(id).serialize() }
           : { id, name, color, data: this.requireSheet(id).serialize() }
       )),
     };
+  }
+
+  public getWorkbookPasswordHash(): string | undefined {
+    return this.workbookPasswordHash;
+  }
+
+  public setWorkbookPasswordHash(hash: string | undefined): void {
+    this.workbookPasswordHash = hash;
+    this.notify({ type: 'style' as const, id: 'workbookPassword', style: undefined });
   }
 
   /**
@@ -509,6 +555,33 @@ export class Store {
     return id;
   }
 
+  /** Point every formula at the renamed sheet, or `#REF!` when `next` is null (sheet deleted). */
+  private rewriteSheetRefs(previous: string, next: string | null): void {
+    for (const id of this.sheets.keys()) {
+      for (const [key, cell] of this.getCells(id)) {
+        const formula = cell.formula ?? (cell.text.startsWith('=') ? cell.text : undefined);
+        if (formula === undefined) continue;
+        const rewritten = mapSheetRefs(formula, previous, next);
+        if (rewritten === formula) continue;
+        const sep = key.indexOf(',');
+        const nextCell: Cell = { ...cell, text: rewritten };
+        delete nextCell.value;
+        if (rewritten.startsWith('=')) nextCell.formula = rewritten;
+        else delete nextCell.formula;
+        this.setCell(Number(key.slice(0, sep)), Number(key.slice(sep + 1)), nextCell, id);
+      }
+    }
+  }
+
+  /** Re-emit formula cells so the formula engine registers the copy. */
+  private replayFormulaCells(sheetId: string): void {
+    for (const [key, cell] of this.getCells(sheetId)) {
+      if (cell.formula === undefined && !cell.text.startsWith('=')) continue;
+      const sep = key.indexOf(',');
+      this.setCell(Number(key.slice(0, sep)), Number(key.slice(sep + 1)), { ...cell }, sheetId);
+    }
+  }
+
   private makeSheetName(): string {
     let index = this.nextSheetNumber;
     let name = `Sheet${index}`;
@@ -544,4 +617,6 @@ function eventKey(e: StoreEvent): string | undefined {
 export interface SerializedStore {
   readonly activeSheetId: string;
   readonly sheets: Array<{ readonly id: string; readonly name: string; readonly color?: string; readonly data: SerializedSheetData }>;
+  /** SHA-256 hex of the workbook password; empty when no password is set. */
+  readonly passwordHash?: string | undefined;
 }
