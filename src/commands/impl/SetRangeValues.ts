@@ -84,7 +84,10 @@ function nextCell(oldCell: Cell | undefined, newValue: CellPatch): Cell {
     if (clears('value')) delete base.value;
     if (clears('styleId')) delete base.styleId;
     if (clears('type')) delete base.type;
+    if (clears('hyperlink')) delete base.hyperlink;
     const next = cellFromText(base, text);
+    // Full replace paste: explicit hyperlink:undefined must win over cellFromText keep-link-on-edit.
+    if (clears('hyperlink')) delete next.hyperlink;
     setRichText(next);
     return next;
   }
@@ -93,6 +96,7 @@ function nextCell(oldCell: Cell | undefined, newValue: CellPatch): Cell {
   if (clears('value')) delete merged.value;
   if (clears('styleId')) delete merged.styleId;
   if (clears('type')) delete merged.type;
+  if (clears('hyperlink')) delete merged.hyperlink;
   setRichText(merged);
   return merged;
 }

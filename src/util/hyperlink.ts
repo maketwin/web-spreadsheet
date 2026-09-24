@@ -7,6 +7,16 @@ export type HyperlinkOpenResult =
   | { readonly kind: 'sheet'; readonly sheetId?: string; readonly r: number; readonly c: number }
   | { readonly kind: 'invalid' };
 
+
+/** Excel sheet names in links: 'My Sheet' or 'O''Brien' (doubled apostrophes). */
+function unquoteSheetName(raw: string): string {
+  const s = raw.trim();
+  if (s.length >= 2 && s.startsWith("'") && s.endsWith("'")) {
+    return s.slice(1, -1).replace(/''/g, "'");
+  }
+  return s;
+}
+
 /** Classify a hyperlink target for open / navigate. */
 export function resolveHyperlinkTarget(store: Store, link: CellHyperlink): HyperlinkOpenResult {
   const raw = link.target.trim();
@@ -21,7 +31,7 @@ export function resolveHyperlinkTarget(store: Store, link: CellHyperlink): Hyper
   let sheetName: string | undefined;
   let a1 = ref;
   if (bang >= 0) {
-    sheetName = ref.slice(0, bang).replace(/^'|'$/g, '');
+    sheetName = unquoteSheetName(ref.slice(0, bang));
     a1 = ref.slice(bang + 1);
   }
   // Single cell only (A1 or $A$1)

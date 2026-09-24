@@ -139,9 +139,6 @@ export class CanvasRenderer {
   private clipboardRange: RangeAddress | undefined;
   private antsOffset = 0;
   private antsTimer: number | null = null;
-  /** Press/release tracking for the hyperlink plain-click gesture. */
-  private pressedCell: CellAddress | null = null;
-  private pressedMoved = false;
 
   public constructor(private opts: CanvasRendererOptions) {
     const ctx = opts.canvas.getContext('2d');
@@ -378,8 +375,7 @@ export class CanvasRenderer {
       // Second finger: switch to pinch zoom and abort the in-progress drag.
       this.dragAnchor = null;
       this.moveDrag = null;
-      this.pressedCell = null;
-      const pts = [...this.pointers.values()];
+            const pts = [...this.pointers.values()];
       const a = pts[0];
       const b = pts[1];
       if (a !== undefined && b !== undefined) {
@@ -437,8 +433,7 @@ export class CanvasRenderer {
     if (this.pointers.size < 2) this.pinchBase = null;
     this.dragAnchor = null;
     this.moveDrag = null;
-    this.pressedCell = null;
-  };
+      };
 
   private readonly handleMouseDown = (ev: MouseEvent, fromPointer = false): void => {
     // Excel: only primary button starts selection / drag. Right-click selection is handled in contextmenu
@@ -479,18 +474,13 @@ export class CanvasRenderer {
       return;
     }
     this.dragAnchor = { type: 'cell', ...cell }; this.setSelectedCell(cell);
-    this.pressedCell = this.opts.store.getCell(cell.r, cell.c)?.hyperlink !== undefined && ev.shiftKey === false && ev.ctrlKey === false && ev.metaKey === false ? cell : null;
-    this.pressedMoved = false;
+    // Excel / docs: plain click selects; Ctrl/Cmd+click follows hyperlink (handled in onCellClick).
     if (ev.shiftKey) this.opts.onCellClick?.(cell, true); else this.opts.onCellClick?.(cell, false, ev.ctrlKey || ev.metaKey);
   };
   private readonly handleMouseMove = (ev: MouseEvent): void => {
     if (this.resizeHandler.isResizing()) { this.resizeHandler.onMouseMove(ev); return; }
     if (this.fillHandle.isDragging()) { this.fillHandle.onMouseMove(ev); return; }
     this.resizeHandler.onMouseMove(ev); this.fillHandle.onMouseMove(ev);
-    if (this.pressedCell !== null) {
-      const cell = this.pointerCell(ev.clientX, ev.clientY);
-      if (cell !== null && (cell.r !== this.pressedCell.r || cell.c !== this.pressedCell.c)) this.pressedMoved = true;
-    }
     if (this.moveDrag !== null) {
       // Excel tracks the Ctrl modifier for the whole drag, not just the press.
       const copy = ev.ctrlKey || ev.metaKey;
@@ -520,7 +510,7 @@ export class CanvasRenderer {
     const range = new Range({ r1: this.dragAnchor.r, c1: this.dragAnchor.c, r2: cell.r, c2: cell.c }).toAddress();
     this.setSelection(range, 'range', cell); this.opts.onSelectionChange?.(range, cell, { r: this.dragAnchor.r, c: this.dragAnchor.c });
   };
-  private readonly handleMouseUp = (): void => { if (this.resizeHandler.isResizing()) { this.resizeHandler.onMouseUp(); this.pressedCell = null; return; } if (this.fillHandle.isDragging()) { this.fillHandle.onMouseUp(); this.pressedCell = null; return; } if (this.moveDrag !== null) { const d = this.moveDrag; // Dropping back onto the source is a no-op, not a move — MoveRange would clear the cells.
+  private readonly handleMouseUp = (): void => { if (this.resizeHandler.isResizing()) { this.resizeHandler.onMouseUp(); return; } if (this.fillHandle.isDragging()) { this.fillHandle.onMouseUp(); return; } if (this.moveDrag !== null) { const d = this.moveDrag; // Dropping back onto the source is a no-op, not a move — MoveRange would clear the cells.
     if (d.moved && (d.target.r !== d.source.r1 || d.target.c !== d.source.c1)) this.opts.onMoveRange?.(d.source, Range.single(d.target.r, d.target.c).toAddress(), d.copy); this.moveDrag = null; this.opts.canvas.style.cursor = ''; this.invalidateAll(); return; }
     // Excel: after a drag the active cell lands on the drag ORIGIN (name box /
     // formula bar follow it), while the far end becomes the pivot that the next
@@ -533,9 +523,6 @@ export class CanvasRenderer {
       this.opts.onSelectionChange?.(this.selectedRange, origin, end);
     }
     this.dragAnchor = null;
-    const press = this.pressedCell;
-    this.pressedCell = null;
-    if (press !== null && !this.pressedMoved) this.opts.onHyperlinkClick?.(press);
   };
   private readonly handleDblClick = (ev: MouseEvent): void => {
     if (this.resizeHandler.onDblClick(ev)) { ev.stopPropagation(); return; }
@@ -693,7 +680,7 @@ export class CanvasRenderer {
     this.collectVisibleBorders(this.borderVis(vis));
     for (const q of quads) { this.paintGridLines(q, theme); this.flushBorders(q.clip); }
     this.paintCellTexts(quads, this.borderVis(vis), theme);
-    this.paintCommentIndicators(vis);
+    // Comments/notes are out of product scope — do not paint indicators.
     this.paintSparklines(quads);
     this.paintFreezeSeparators(theme);
     this.ctx.restore();
@@ -1679,28 +1666,6 @@ export class CanvasRenderer {
     this.paintFormulaRefHighlights(ctx);
   }
 
-  /** Excel comment indicator: small red triangle at the cell's top-right corner. */
-  private paintCommentIndicators(vis: VisibleRange): void {
-    const ctx = this.ctx;
-    ctx.save();
-    ctx.fillStyle = '#e02020';
-    for (let r = vis.startRow; r < vis.endRow; r += 1) {
-      for (let c = vis.startCol; c < vis.endCol; c += 1) {
-        if (this.opts.store.getCell(r, c)?.comment === undefined) continue;
-        const { x, y } = this.cellVP(r, c);
-        const w = this.scroller.getColWidth(c);
-        const h = this.scroller.getRowHeight(r);
-        const size = Math.min(9, w, h);
-        ctx.beginPath();
-        ctx.moveTo(x + w - size, y);
-        ctx.lineTo(x + w, y);
-        ctx.lineTo(x + w, y + size);
-        ctx.closePath();
-        ctx.fill();
-      }
-    }
-    ctx.restore();
-  }
 
   /** Paint colored boxes over ranges referenced by the edited formula. */
   private paintFormulaRefHighlights(ctx: CanvasRenderingContext2D): void {    if (this.formulaRefHighlights.length === 0) return;

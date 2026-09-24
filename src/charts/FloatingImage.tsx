@@ -23,6 +23,8 @@ export const FloatingImage: FC<FloatingImageProps> = ({ spec, renderer, selected
   const gestureRef = useRef<Gesture | null>(null);
   const liveRectRef = useRef<Rect | null>(null);
   const [liveRect, setLiveRect] = useState<Rect | null>(null);
+  // onGestureUp commits from this ref — state alone would commit the gesture's start rect.
+  liveRectRef.current = liveRect;
   const anchor = spec.anchor;
 
   // Keep DOM position glued to the anchor even when only the canvas scrolls.

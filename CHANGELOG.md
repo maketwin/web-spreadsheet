@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixes
+
+- **Hyperlink click** — plain click selects; Ctrl/Cmd+click opens (matches docs; no accidental navigate).
+- **Hyperlink paste/fill** — session + system clipboard carry `hyperlink`; overwrite clears stale links; fill handle keeps links on straight copy; clipboard HTML uses `<a href>`.
+- **In-sheet link sheet names** — Excel-style `'O''Brien'!A1` apostrophe escaping.
+- **Comments UI removed** — context menu / dialog / red-triangle paint dropped (product: no comments).
+
 ### Features (Excel parity)
 
 - **Tier-1 热门公式补齐（+24 个，总数 82）** — `SUMPRODUCT`；`FIND`（区分

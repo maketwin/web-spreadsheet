@@ -90,9 +90,16 @@ function toHtml(cells: ReadonlyArray<ReadonlyArray<Cell | undefined>>): string {
 /** Rich runs become styled spans (Excel-compatible clipboard HTML); plain cells stay bare. */
 function tdHtml(cell: Cell | undefined): string {
   const text = cell?.text ?? '';
-  if (cell === undefined || !isRich(cell.richText)) return `<td>${escapeHtml(text)}</td>`;
-  const spans = cell.richText.map((run) => `<span${styleAttr(runSpanStyle(run.style ?? {}))}>${escapeHtml(run.text)}</span>`).join('');
-  return `<td>${spans}</td>`;
+  let inner: string;
+  if (cell === undefined || !isRich(cell.richText)) inner = escapeHtml(text);
+  else {
+    inner = cell.richText.map((run) => `<span${styleAttr(runSpanStyle(run.style ?? {}))}>${escapeHtml(run.text)}</span>`).join('');
+  }
+  const href = cell?.hyperlink?.target;
+  if (href !== undefined && href !== '') {
+    return `<td><a href="${escapeHtml(href)}">${inner}</a></td>`;
+  }
+  return `<td>${inner}</td>`;
 }
 
 function styleAttr(style: string): string {
@@ -109,6 +116,9 @@ function cellFromHtml(td: Element): Cell {
   if (normalized !== undefined) cell.richText = normalized;
   const pasteStyle = cellStyleFromElement(td as HTMLElement);
   if (pasteStyle !== undefined) cell.pasteStyle = pasteStyle;
+  const anchor = td.querySelector('a[href]');
+  const href = anchor?.getAttribute('href')?.trim();
+  if (href !== undefined && href !== '') cell.hyperlink = { target: href };
   return cell;
 }
 

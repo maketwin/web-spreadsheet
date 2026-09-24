@@ -102,13 +102,13 @@ export function buildSessionPasteValues(session: ClipboardSessionState, r: numbe
     const line: CellPatch[] = [];
     for (let j = 0; j < cols; j += 1) {
       const cell = session.cells[i % srcRows]?.[j % srcCols];
-      if (cell === undefined) { line.push({ text: '', formula: undefined, value: undefined, styleId: undefined, type: undefined, richText: undefined }); continue; }
+      if (cell === undefined) { line.push({ text: '', formula: undefined, value: undefined, styleId: undefined, type: undefined, richText: undefined, hyperlink: undefined }); continue; }
       // Formula shift is measured from this tile's source cell, so tiled copies
       // each get their own relative references (Excel).
       const dr = r + i - (session.range.r1 + (i % srcRows));
       const dc = c + j - (session.range.c1 + (j % srcCols));
       // Explicit keys (even undefined) so the paste fully replaces the target
-      // cell instead of merging with stale formula/value/style remnants.
+      // cell instead of merging with stale formula/value/style/hyperlink remnants.
       line.push({
         text: cell.text,
         formula: cell.formula !== undefined && session.type === 'copy' ? shiftFormula(cell.formula, dr, dc) : cell.formula,
@@ -116,6 +116,7 @@ export function buildSessionPasteValues(session: ClipboardSessionState, r: numbe
         styleId: cell.styleId,
         type: cell.type,
         richText: cell.richText,
+        hyperlink: cell.hyperlink !== undefined ? { ...cell.hyperlink } : undefined,
       });
     }
     out.push(line);
@@ -186,8 +187,26 @@ export async function pasteFromClipboard(store: Store, cmdManager: CommandManage
   if (!plan.ok) return plan;
   const tiled = tilePlainCells(cells, plan.rect);
   const withStyles = applyPasteStyles(store, tiled, plan.rect.r1, plan.rect.c1);
-  applyMatrix(store, cmdManager, plan.rect.r1, plan.rect.c1, withStyles);
+  // Explicit hyperlink (or undefined) so paste replaces stale links on the target.
+  const patches = withStyles.map((row) => row.map((cell) => cellToPastePatch(cell)));
+  applyMatrix(store, cmdManager, plan.rect.r1, plan.rect.c1, patches);
   return plan;
+}
+
+/** Full-replace paste patch: always names hyperlink so old links cannot linger. */
+function cellToPastePatch(cell: Cell | undefined): CellPatch {
+  if (cell === undefined) {
+    return { text: '', formula: undefined, value: undefined, styleId: undefined, type: undefined, richText: undefined, hyperlink: undefined };
+  }
+  return {
+    text: cell.text,
+    formula: cell.formula,
+    value: cell.value,
+    styleId: cell.styleId,
+    type: cell.type,
+    richText: cell.richText,
+    hyperlink: cell.hyperlink !== undefined ? { ...cell.hyperlink } : undefined,
+  };
 }
 
 /** Turn ephemeral `pasteStyle` from HTML `<td>` into real styleIds before apply. */

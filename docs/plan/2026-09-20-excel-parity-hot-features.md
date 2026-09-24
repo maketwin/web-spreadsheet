@@ -98,7 +98,7 @@
 | # | 项 | Excel 对齐要点 | 主要落点 | 状态 |
 |---|----|----------------|----------|------|
 | C1 | 数据模型（仅超链接） | `hyperlink?: { target, tooltip? }`；**无 comment 字段** | `types.ts`、`SheetData` serialize | 完成 |
-| C2 | 批注 UI | — | — | **取消**（不做） |
+| C2 | 批注 UI | — | — | **取消**（不做；2026-09-24 拆除右键/对话框/红三角残留） |
 | C3 | 超链接 UI | 插入/编辑/打开（http/mailto/表内引用）；Ctrl+单击打开；下划线+主题色 | dialog + 点击手势 | 完成 |
 | C4 | 命令与撤销 | `SetHyperlink` / `ClearHyperlink` only | `commands/` | 完成 |
 | C5 | xlsx I/O | 导入导出 hyperlinks（SheetJS 能力内）；批注不写 | `src/io/` | 完成 |
@@ -145,7 +145,7 @@
 |---|----|------|------|
 | E1 | 名称管理器 | 已有 `namedrange` 服务与名称框跳转；补「公式 → 名称管理器」列表/新建/删除/引用编辑 | 完成 |
 | E2 | 文档纠偏 | `docs/guide/rich-text.md`「已知偏差」已落后于 `37d5310`（公式栏 runs、typing style、混合字号）；改成与现实一致 | 完成 |
-| E3 | `INDIRECT` / `OFFSET`（可选） | 若 A 完成后仍高频被要再开；本轮默认**可选** | 延期（可选，本轮未开） |
+| E3 | `INDIRECT` / `OFFSET`（可选） | 已实现；依赖图仅静态基址（动态目标改值可能不重算） | 完成（附已知限制） |
 | E4 | CF「突出显示单元格」快捷 | 大于/小于/介于/等于 向导（可复用 cellValue） | 完成 |
 
 ---

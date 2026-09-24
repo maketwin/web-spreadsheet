@@ -48,3 +48,17 @@ describe('SetHyperlinkCommand', () => {
     expect(store.getCell(0, 0)?.hyperlink).toBeUndefined();
   });
 });
+
+  it('resolves quoted sheet names and doubled apostrophes', () => {
+    const store = new Store();
+    store.addSheet('My Sheet');
+    store.addSheet("O'Brien");
+    const space = store.getSheets().find((s) => s.name === 'My Sheet')!;
+    const apos = store.getSheets().find((s) => s.name === "O'Brien")!;
+    expect(resolveHyperlinkTarget(store, { target: "'My Sheet'!A1" })).toEqual({
+      kind: 'sheet', sheetId: space.id, r: 0, c: 0,
+    });
+    expect(resolveHyperlinkTarget(store, { target: "'O''Brien'!B2" })).toEqual({
+      kind: 'sheet', sheetId: apos.id, r: 1, c: 1,
+    });
+  });

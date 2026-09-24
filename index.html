@@ -202,8 +202,9 @@
     }
     /* 触控：画布自己接管触摸手势（选区拖拽/双指缩放），不交给浏览器滚动 */
     .ss-canvas { touch-action: none; }
-    /* 浮动图片对象 */
-    .ss-image-object { position: absolute; border: 1px dashed transparent; box-sizing: border-box; }
+    /* 浮动图片对象：浮层是 pointer-events:none，图片必须自己恢复事件，
+       否则选不中、拖不动、8 个缩放手柄全部失灵（与 .ss-chart-object 同理） */
+    .ss-image-object { position: absolute; border: 1px dashed transparent; box-sizing: border-box; pointer-events: auto; touch-action: none; cursor: move; }
     .ss-image-object--selected { border-color: #217346; z-index: 5; }
     /* 公式输入辅助：补全下拉 + 参数提示 */
     .ss-formula-assist {

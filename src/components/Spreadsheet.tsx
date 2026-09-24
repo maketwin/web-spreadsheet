@@ -14,7 +14,6 @@ import type { Command } from '../commands/Command';
 import type { DialogName } from './menu/types';
 import { CommandManager } from '../commands/CommandManager';
 import { SetCellText } from '../commands/impl/SetCellText';
-import { SetCellCommentCommand } from '../commands/impl/SetCellComment';
 import { hashPassword } from '../util/passwordHash';
 import { SetRangeStyleCommand } from '../commands/impl/SetRangeStyle';
 import { SetRangeBorderCommand, type BorderPreset, type BorderLine } from '../commands/impl/SetRangeBorder';
@@ -93,11 +92,10 @@ interface FilterPopupState { readonly r: number; readonly c: number; readonly x:
 /** Module-level hook the active instance registers so applyShortcutStyle can offer run-level styling to the open cell editor. */
 const editorRunStyleIntercept: { current: ((style: Partial<Style>) => boolean) | null } = { current: null };
 type SpreadsheetContextMenu =
-  | { readonly kind: 'cell'; readonly x: number; readonly y: number; readonly r: number; readonly c: number; readonly hasComment: boolean }
+  | { readonly kind: 'cell'; readonly x: number; readonly y: number; readonly r: number; readonly c: number }
   | { readonly kind: 'row'; readonly index: number; readonly count: number; readonly x: number; readonly y: number }
   | { readonly kind: 'column'; readonly index: number; readonly count: number; readonly x: number; readonly y: number };
 
-interface CommentDraft { readonly r: number; readonly c: number; readonly text: string; readonly isNew: boolean }
 
 export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, formulaEngine, theme, onClose }) => {
   const [selected, setSelected] = useState<Selection | null>(cellSelection(0, 0));
@@ -107,7 +105,6 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const [view, setView] = useState<ViewState>({ zoom: 100, showFormula: false, showGrid: true, frozenRows: 0, frozenCols: 0 });
   const [findDialogOpen, setFindDialogOpen] = useState<DialogName | null>(null);
   const [ctxMenu, setCtxMenu] = useState<SpreadsheetContextMenu | null>(null);
-  const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
   const [protectOpen, setProtectOpen] = useState(false);
   /** 工作簿密码锁定：恢复的自动保存带密码时，需解锁才能操作。 */
   const [workbookLocked, setWorkbookLocked] = useState(store.getWorkbookPasswordHash() !== undefined);
@@ -227,7 +224,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     }
   }, [selectSelection]);
   const onCellContextMenu = useCallback((cell: CellAddress, x: number, y: number) => {
-    const cellMenu = (): SpreadsheetContextMenu => ({ kind: 'cell', x, y, r: cell.r, c: cell.c, hasComment: store.getCell(cell.r, cell.c)?.comment !== undefined });
+    const cellMenu = (): SpreadsheetContextMenu => ({ kind: 'cell', x, y, r: cell.r, c: cell.c });
     const cur = selectedRef.current;
     // Excel: right-click inside selection keeps it; outside selects that cell.
     // Full row/col selection keeps kind and opens the matching header-style menu.
@@ -532,30 +529,6 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       />
     </Modal>}
     <Modal
-      title={commentDraft?.isNew ? '插入批注' : '编辑批注'}
-      open={commentDraft !== null}
-      onCancel={() => setCommentDraft(null)}
-      onOk={() => {
-        if (commentDraft === null) return;
-        const text = commentDraft.text.trim();
-        if (text === '') { setCommentDraft(null); return; }
-        execCmd(new SetCellCommentCommand({ r: commentDraft.r, c: commentDraft.c, comment: { text, author: '我', createdAt: new Date().toISOString() } }));
-        setCommentDraft(null);
-      }}
-      okText="确定"
-      cancelText="取消"
-      width={380}
-      destroyOnHidden
-    >
-      <Input.TextArea
-        autoFocus
-        rows={4}
-        value={commentDraft?.text ?? ''}
-        placeholder="输入批注内容"
-        onChange={(e) => setCommentDraft((current) => current === null ? current : { ...current, text: e.target.value })}
-      />
-    </Modal>
-    <Modal
       title={sheetPrompt?.mode === 'rename' ? '重命名工作表' : '新建工作表'}
       open={sheetPrompt !== null}
       onCancel={() => setSheetPrompt(null)}
@@ -689,14 +662,6 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       onDeleteRow={() => { const range = selectedRef.current?.range; if (range === undefined) return; execCmd(new DeleteRowCommand({ r: range.r1, count: range.r2 - range.r1 + 1 })); }}
       onDeleteCol={() => { const range = selectedRef.current?.range; if (range === undefined) return; execCmd(new DeleteColCommand({ c: range.c1, count: range.c2 - range.c1 + 1 })); }}
       onNumberFormat={() => { setFindDialogOpen(null); queueMicrotask(() => setFindDialogOpen('numberFormat')); }}
-      hasComment={ctxMenu.hasComment}
-      onInsertComment={() => setCommentDraft({ r: ctxMenu.r, c: ctxMenu.c, text: '', isNew: true })}
-      onEditComment={() => setCommentDraft((current) => {
-        if (current !== null) return current;
-        const existing = store.getCell(ctxMenu.r, ctxMenu.c)?.comment;
-        return { r: ctxMenu.r, c: ctxMenu.c, text: existing?.text ?? '', isNew: false };
-      })}
-      onDeleteComment={() => execCmd(new SetCellCommentCommand({ r: ctxMenu.r, c: ctxMenu.c }))}
     />}
     {(ctxMenu?.kind === 'row' || ctxMenu?.kind === 'column') && <HeaderContextMenu
       x={ctxMenu.x} y={ctxMenu.y} type={ctxMenu.kind} index={ctxMenu.index} count={ctxMenu.count} onClose={closeCtxMenu}

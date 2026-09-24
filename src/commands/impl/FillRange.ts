@@ -153,6 +153,8 @@ function rebuildCell(src: Cell, text: string): Cell {
   if (src.type !== undefined) out.type = src.type;
   // A straight copy repeats the rich formatting; derived (series) text is plain.
   if (src.text === text && isRich(src.richText)) out.richText = src.richText;
+  // Straight copy keeps the hyperlink; series/derived text does not.
+  if (src.text === text && src.hyperlink !== undefined) out.hyperlink = { ...src.hyperlink };
   return out;
 }
 
