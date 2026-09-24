@@ -23,11 +23,19 @@ export interface RichTextRun {
   style?: RunStyle;
 }
 
-/** Cell hyperlink (Excel-style); comments/notes are intentionally unsupported. */
+/** Cell hyperlink (Excel-style). */
 export interface CellHyperlink {
   /** URL, mailto:, or A1 / Sheet!A1 worksheet reference. */
   readonly target: string;
   readonly tooltip?: string;
+}
+
+/** Cell comment/note (Excel-style): red-triangle indicator, text shown on demand. */
+export interface CellComment {
+  readonly text: string;
+  readonly author?: string;
+  /** ISO timestamp of when the comment was created. */
+  readonly createdAt?: string;
 }
 
 export interface Cell {
@@ -47,6 +55,8 @@ export interface Cell {
   pasteStyle?: Partial<Style>;
   /** Optional hyperlink; absent means no link. */
   hyperlink?: CellHyperlink;
+  /** Optional comment/note; drawn with a red-triangle indicator. */
+  comment?: CellComment;
 }
 
 export interface RowMeta {
