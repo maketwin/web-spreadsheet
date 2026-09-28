@@ -451,7 +451,11 @@ export class CanvasRenderer {
         else { this.pan = { ...this.pan, moved: true }; this.clearLongPress(); this.dragAnchor = null; }
       }
       if (this.pan !== null && this.pan.moved) {
-        this.scrollBy(-(ev.clientX - this.pan.x), -(ev.clientY - this.pan.y));
+        // scrollBy is INCREMENTAL: feed the delta from the LAST pointer
+        // position (absolute-from-origin would re-scroll the whole distance
+        // every move — 10 moves of 30px scrolled 1650px).
+        this.scrollBy(-dx, -dy);
+        this.pan = { ...this.pan, x: ev.clientX, y: ev.clientY };
         return;
       }
     }

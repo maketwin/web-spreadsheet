@@ -61,9 +61,10 @@ describe('touch gestures (pan / long-press / tap)', () => {
 
     const from = cellPoint(1, 0);
     canvas.dispatchEvent(pointerEvent('pointerdown', from));
-    // 100px of finger travel upward = 100px of scroll down.
-    for (let i = 1; i <= 10; i += 1) window.dispatchEvent(pointerEvent('pointermove', { x: from.x, y: from.y - i * 10 }));
-    window.dispatchEvent(pointerEvent('pointerup', { x: from.x, y: from.y - 100 }));
+    // 300px of finger travel upward = 300px of scroll down (increments, not
+    // cumulative-from-origin — see the pan scroll fix).
+    for (let i = 1; i <= 10; i += 1) window.dispatchEvent(pointerEvent('pointermove', { x: from.x, y: from.y - i * 30 }));
+    window.dispatchEvent(pointerEvent('pointerup', { x: from.x, y: from.y - 300 }));
     expect(renderer.getCellViewportRect(40, 0).y).toBeLessThan(600);
     // A pan is not a selection gesture: no drag-origin flip reported.
     expect(onSelectionChange).not.toHaveBeenCalled();

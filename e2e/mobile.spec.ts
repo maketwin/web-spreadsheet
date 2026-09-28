@@ -89,10 +89,15 @@ test('one-finger drag pans the sheet: the top-left cell is now a far row', async
   steps.push({ type: 'pointerup', x: start.x, y: start.y - 300 });
   await touchSequence(page, steps);
   // 拖移 300px（≈15 行）后点左上角：名称框不再是 A1，公式栏是远端行文本。
-  const topLeft = cell(origin, 0, 0);
-  await page.touchscreen.tap(topLeft.x, topLeft.y);
-  await expect(page.locator('.ss-formula-name')).not.toHaveValue(/A1$/i);
-  await expect(page.locator('.ss-formula-input')).toHaveValue(/^r\d+$/);
+  // 布局在字体/antd 样式就绪前后可能微移——每轮重读画布原点再点，轮询到命中。
+  await expect(async () => {
+    const o = await canvasOrigin(page);
+    await page.touchscreen.tap(o.x + 46 + 35, o.y + 30);
+    const name = await page.locator('.ss-formula-name').inputValue();
+    const bar = await page.locator('.ss-formula-input').inputValue();
+    expect(name).not.toMatch(/A1$/i);
+    expect(bar).toMatch(/^r\d+$/);
+  }).toPass({ timeout: 15_000 });
 });
 
 test('two-finger pinch changes the zoom level', async ({ page }) => {
