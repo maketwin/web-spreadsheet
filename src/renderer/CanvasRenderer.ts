@@ -204,6 +204,7 @@ export class CanvasRenderer {
   public destroy(): void {
     if (this.rafId !== null) window.cancelAnimationFrame(this.rafId);
     this.rafId = null; this.resizeHandler.destroy(); this.fillHandle.destroy(); this.unsubscribe(); this.unbindEvents();
+    this.clearLongPress(); this.pan = null; this.pointers.clear(); this.pinchBase = null;
     this.overlayCanvas?.remove(); this.overlayCanvas = null; this.octx = null;
     if (this.antsTimer !== null) { window.clearInterval(this.antsTimer); this.antsTimer = null; }
   }
@@ -357,12 +358,43 @@ export class CanvasRenderer {
   private readonly pointers = new Map<number, { x: number; y: number }>();
   private pinchBase: { dist: number; zoom: number } | null = null;
   private lastTap: { x: number; y: number; time: number } | null = null;
+  /** Touch one-finger pan: the drag scrolls the sheet instead of pulling a
+   * selection rectangle (every mobile spreadsheet works this way — without it
+   * a 1000-row sheet is unreachable on a phone). Selection stays available
+   * through tap, row/column header drags and the fill handle. */
+  private pan: { id: number; x: number; y: number; moved: boolean } | null = null;
+  /** Touch long-press → synthetic contextmenu (the right-click menu path). */
+  private longPress: { id: number; x: number; y: number; timer: number } | null = null;
   /** Timestamp of the last touch/pen pointerdown — touch fires compatibility
    * mouse events right after, which must not double-handle the gesture. */
   private touchPointerAt = 0;
+  private static readonly TOUCH_SLOP = 6;
+  private static readonly LONG_PRESS_MS = 550;
+  private static readonly LONG_PRESS_SLOP = 12;
+  /** Extra hit radius for handle/border hot zones under touch (fat fingers). */
+  private static readonly TOUCH_HIT_TOLERANCE = 18;
   private mouseAfterTouch(): boolean {
     return this.touchPointerAt !== 0 && performance.now() - this.touchPointerAt < 150;
   }
+
+  private clearLongPress(): void {
+    if (this.longPress !== null) { window.clearTimeout(this.longPress.timer); this.longPress = null; }
+  }
+  private readonly fireLongPress = (): void => {
+    const lp = this.longPress;
+    this.longPress = null;
+    this.pan = null;
+    if (lp === null) return;
+    // In-flight object drags own the gesture — no menu mid-resize/move/fill.
+    if (this.fillHandle.isDragging() || this.resizeHandler.isResizing() || this.moveDrag !== null) return;
+    this.dragAnchor = null;
+    // The touch-down already selected the cell under the finger; the mouseup
+    // that eventually follows must not re-run the drag-origin selection flip.
+    this.suppressMouseUpSelection = true;
+    // Route through the ordinary contextmenu listener: header vs cell vs
+    // filter-button routing stays in exactly one place.
+    this.opts.canvas.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: lp.x, clientY: lp.y, button: 2 }));
+  };
 
   private readonly handlePointerDown = (ev: PointerEvent): void => {
     // Mouse input keeps flowing through the classic mouse listeners; the
@@ -374,16 +406,23 @@ export class CanvasRenderer {
       // Second finger: switch to pinch zoom and abort the in-progress drag.
       this.dragAnchor = null;
       this.moveDrag = null;
+      this.pan = null;
+      this.clearLongPress();
             const pts = [...this.pointers.values()];
       const a = pts[0];
       const b = pts[1];
       if (a !== undefined && b !== undefined) {
-        this.pinchBase = { dist: Math.hypot(a.x - b.x, a.y - b.y), zoom: this.zoom() };
+        // pinchBase.zoom is a PERCENT (onZoomTo's unit) — zoom() is a fraction.
+        this.pinchBase = { dist: Math.hypot(a.x - b.x, a.y - b.y), zoom: this.opts.zoom ?? 100 };
       }
       return;
     }
     if (this.pointers.size > 2) return;
+    this.pan = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, moved: false };
     this.handleMouseDown(ev, true);
+    // Arm after handleMouseDown: an in-flight fill/resize/move drag (started by
+    // this same press on a handle/border) cancels the pending menu on fire.
+    if (this.pan !== null) this.longPress = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, timer: window.setTimeout(this.fireLongPress, CanvasRenderer.LONG_PRESS_MS) };
   };
 
   private readonly handlePointerMove = (ev: PointerEvent): void => {
@@ -400,6 +439,22 @@ export class CanvasRenderer {
       this.opts.onZoomTo?.(target);
       return;
     }
+    if (this.longPress !== null && Math.hypot(ev.clientX - this.longPress.x, ev.clientY - this.longPress.y) > CanvasRenderer.LONG_PRESS_SLOP) this.clearLongPress();
+    if (this.pan !== null && ev.pointerId === this.pan.id) {
+      const dx = ev.clientX - this.pan.x;
+      const dy = ev.clientY - this.pan.y;
+      if (!this.pan.moved) {
+        if (Math.hypot(dx, dy) < CanvasRenderer.TOUCH_SLOP) return;
+        // Object drags (move-range / fill / resize) and header drags keep the
+        // classic path; only plain cell gestures become pans.
+        if (this.fillHandle.isDragging() || this.resizeHandler.isResizing() || this.moveDrag !== null || (this.dragAnchor !== null && this.dragAnchor.type !== 'cell')) { this.pan = null; }
+        else { this.pan = { ...this.pan, moved: true }; this.clearLongPress(); this.dragAnchor = null; }
+      }
+      if (this.pan !== null && this.pan.moved) {
+        this.scrollBy(-(ev.clientX - this.pan.x), -(ev.clientY - this.pan.y));
+        return;
+      }
+    }
     this.handleMouseMove(ev);
   };
 
@@ -409,7 +464,26 @@ export class CanvasRenderer {
     this.pointers.delete(ev.pointerId);
     if (wasMulti) {
       if (this.pointers.size < 2) this.pinchBase = null;
+      this.clearLongPress();
+      this.pan = null;
       return;
+    }
+    const finishedPan = this.pan !== null && ev.pointerId === this.pan.id;
+    if (finishedPan) {
+      const moved = this.pan?.moved === true;
+      this.pan = null;
+      this.clearLongPress();
+      if (moved) {
+        // A pan is not a selection gesture: null the drag anchor so the
+        // mouseup selection flip never runs.
+        this.dragAnchor = null;
+        this.handleMouseUp();
+        return;
+      }
+      // Finger stayed put → fall through to the tap path below.
+    } else {
+      this.clearLongPress();
+      this.pan = null;
     }
     // Touch double-tap → synthesize a DOM dblclick so the React onDoubleClick
     // handler (cell edit entry) fires, exactly like a mouse double-click.
@@ -418,7 +492,7 @@ export class CanvasRenderer {
       this.lastTap = null;
       this.handleMouseUp();
       const target = ev.target instanceof Element ? ev.target : this.opts.canvas;
-      target.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, clientX: ev.clientX, clientY: ev.clientY, button: 0, view: window }));
+      target.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, clientX: ev.clientX, clientY: ev.clientY, button: 0 }));
       return;
     }
     const moved = Math.hypot(ev.clientX - (this.lastTap?.x ?? -999), ev.clientY - (this.lastTap?.y ?? -999));
@@ -432,6 +506,8 @@ export class CanvasRenderer {
     if (this.pointers.size < 2) this.pinchBase = null;
     this.dragAnchor = null;
     this.moveDrag = null;
+    this.pan = null;
+    this.clearLongPress();
       };
 
   private readonly handleMouseDown = (ev: MouseEvent, fromPointer = false): void => {
@@ -450,8 +526,8 @@ export class CanvasRenderer {
     // focus to the canvas and blur-commit the editor before the click decides
     // between point-insert and commit — suppress it.
     if (this.editing) ev.preventDefault();
-    if (this.resizeHandler.onMouseDown(ev)) return;
-    if (this.fillHandle.onMouseDown(ev)) { this.dragAnchor = null; return; }
+    if (this.resizeHandler.onMouseDown(ev, fromPointer ? CanvasRenderer.TOUCH_HIT_TOLERANCE : undefined)) return;
+    if (this.fillHandle.onMouseDown(ev, fromPointer ? CanvasRenderer.TOUCH_HIT_TOLERANCE : 0)) { this.dragAnchor = null; return; }
     const h = this.headerAtPoint(ev.clientX, ev.clientY);
     if (h?.type === 'sheet') { this.focusCanvas(); this.dragAnchor = null; this.opts.onSheetSelect?.(); return; }
     if (h?.type === 'column') { this.focusCanvas(); this.dragAnchor = { type: 'column', c: h.c }; this.opts.onColumnSelect?.(h.c, ev.shiftKey); return; }
@@ -1877,6 +1953,25 @@ export class CanvasRenderer {
     if (merge !== undefined) return this.rangeRect(parseRange(merge));
     const { x, y } = this.cellVP(r, c);
     return { x, y, w: this.scroller.getColWidth(c), h: this.scroller.getRowHeight(r) };
+  }
+
+  /** Scroll the sheet so the cell is fully visible inside the grid area.
+   * `visibleHeight` limits the usable grid height — pass the soft-keyboard-
+   * reduced visual viewport height so the editing cell lands ABOVE the
+   * keyboard (Excel mobile). Frozen-region cells are already on screen and
+   * never trigger scrolling. */
+  public scrollCellIntoView(r: number, c: number, visibleHeight?: number): void {
+    const { x, y } = this.cellVP(r, c);
+    const w = this.scroller.getColWidth(c);
+    const h = this.scroller.getRowHeight(r);
+    const usableH = Math.max(ROW_HEIGHT, Math.min(this.gridH(), visibleHeight ?? this.gridH()));
+    let dy = 0;
+    if (y < COL_HEADER_HEIGHT) dy = y - COL_HEADER_HEIGHT;
+    else if (y + h > COL_HEADER_HEIGHT + usableH) dy = y + h - (COL_HEADER_HEIGHT + usableH);
+    let dx = 0;
+    if (x < ROW_HEADER_WIDTH) dx = x - ROW_HEADER_WIDTH;
+    else if (x + w > ROW_HEADER_WIDTH + this.gridW()) dx = x + w - (ROW_HEADER_WIDTH + this.gridW());
+    if (dy !== 0 || dx !== 0) this.scrollBy(dx, dy);
   }
 
   /** Floating chart-object rect for a two-cell anchor (canvas-space px, freeze/scroll/zoom aware). */

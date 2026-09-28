@@ -22,8 +22,10 @@ export class FillHandle {
 
   public constructor(private readonly opts: FillHandleOptions) {}
 
-  public onMouseDown(event: MouseEvent): boolean {
-    if (!this.isOverHandle(event.clientX, event.clientY)) return false;
+  /** `touchTolerance` widens the handle's hit square for fat-finger presses
+   * (the pointer path passes the renderer's touch slop; mouse keeps 0). */
+  public onMouseDown(event: MouseEvent, touchTolerance = 0): boolean {
+    if (!this.isOverHandle(event.clientX, event.clientY, touchTolerance)) return false;
     this.dragging = true;
     this.ctrlKey = event.ctrlKey || event.metaKey;
     this.opts.canvas.focus();
@@ -66,7 +68,7 @@ export class FillHandle {
 
   public destroy(): void { this.dragging = false; this.fillTarget = undefined; }
 
-  private isOverHandle(clientX: number, clientY: number): boolean {
+  private isOverHandle(clientX: number, clientY: number, tolerance = 0): boolean {
     const range = this.opts.selectedRange();
     if (range === undefined) return false;
     const rect = this.opts.canvas.getBoundingClientRect();
@@ -78,7 +80,8 @@ export class FillHandle {
       : this.scrollerCellVP(range.r2, range.c2);
     const hx = pos.x + this.opts.scroller.getColWidth(range.c2);
     const hy = pos.y + this.opts.scroller.getRowHeight(range.r2);
-    return Math.abs(mx - hx) <= HANDLE_SIZE && Math.abs(my - hy) <= HANDLE_SIZE;
+    const reach = HANDLE_SIZE + tolerance;
+    return Math.abs(mx - hx) <= reach && Math.abs(my - hy) <= reach;
   }
 
   private clientToCell(clientX: number, clientY: number): { r: number; c: number } | null {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, type CSSProperties, type FC, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type RefObject } from 'react';
-import { CanvasRenderer, COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS, type CellAddress, type FormulaRefHighlight } from '../renderer/CanvasRenderer';
+import { COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS, type CellAddress, type FormulaRefHighlight } from '../renderer/CanvasRenderer';
+import type { CanvasRenderer } from '../renderer/CanvasRenderer';
 import { useFormulaAssist, parseFormulaRefs, REF_HIGHLIGHT_PALETTE } from './formulaAssist';
 import { cycleDollars, endsWithRef, isPointTrigger, refAtCaret, upsertRef } from '../formula/pointMode';
 import { caretOffsetFromLocalPoint } from '../util/caretHit';
@@ -16,7 +17,7 @@ export interface EditingCell extends CellAddress { readonly value: string; /** E
 
 export function clampVal(v: number, min: number, max: number): number { return Math.max(min, Math.min(max, v)); }
 
-interface EditorOverlayProps { readonly refEl: RefObject<HTMLTextAreaElement | null>; readonly editingRefSetter: (cell: EditingCell) => void; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly cancel: () => void; readonly commit: (value: string, moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection?: boolean, runs?: RichTextRun[]) => void; readonly zoom: number; readonly store: Store; readonly cellRect?: { x: number; y: number; w: number; h: number }; readonly richApiRef: MutableRefObject<RichEditorApi | null>; readonly onCharStyleKey?: (key: 'bold' | 'italic' | 'underline') => void; readonly onRefHighlights?: (ranges: readonly FormulaRefHighlight[] | null) => void }
+interface EditorOverlayProps { readonly refEl: RefObject<HTMLTextAreaElement | null>; readonly editingRefSetter: (cell: EditingCell) => void; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly cancel: () => void; readonly commit: (value: string, moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection?: boolean, runs?: RichTextRun[]) => void; readonly zoom: number; readonly store: Store; readonly cellRect?: { x: number; y: number; w: number; h: number }; readonly richApiRef: MutableRefObject<RichEditorApi | null>; readonly onCharStyleKey?: (key: 'bold' | 'italic' | 'underline') => void; readonly onRefHighlights?: (ranges: readonly FormulaRefHighlight[] | null) => void; /** Bumped by the host when the editor must reposition (soft-keyboard visualViewport sync). */ readonly layoutTick?: number }
 export const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editing, setEditing, cancel, commit, zoom, store, cellRect, richApiRef, onCharStyleKey, onRefHighlights }) => {
   const composing = useRef(false);
   const assist = useFormulaAssist();

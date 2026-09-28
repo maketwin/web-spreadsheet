@@ -50,8 +50,8 @@ export class ResizeHandler {
 
   public constructor(private readonly opts: ResizeHandlerOptions) {}
 
-  public onMouseDown(event: MouseEvent): boolean {
-    const hit = this.hitTestBorder(event.clientX, event.clientY);
+  public onMouseDown(event: MouseEvent, borderTolerance = BORDER_THRESHOLD): boolean {
+    const hit = this.hitTestBorder(event.clientX, event.clientY, borderTolerance);
     if (hit === null) return false;
     this.opts.canvas.focus();
     const size = hit.type === 'row'
@@ -123,7 +123,7 @@ export class ResizeHandler {
     this.opts.invalidate();
   }
 
-  private hitTestBorder(clientX: number, clientY: number): BorderHit | null {
+  private hitTestBorder(clientX: number, clientY: number, threshold = BORDER_THRESHOLD): BorderHit | null {
     const rect = this.opts.canvas.getBoundingClientRect();
     const mx = clientX - rect.left;
     const my = clientY - rect.top;
@@ -132,7 +132,7 @@ export class ResizeHandler {
       const rEnd = Math.max(range.endRow, this.opts.frozenRows?.() ?? 0);
       for (let r = 0; r < rEnd; r += 1) {
         const edge = this.rowTopAt(r) + this.opts.scroller.getRowHeight(r);
-        if (Math.abs(my - edge) <= BORDER_THRESHOLD) {
+        if (Math.abs(my - edge) <= threshold) {
           return { type: 'row', index: r, canvasPos: edge };
         }
       }
@@ -142,7 +142,7 @@ export class ResizeHandler {
       const cEnd = Math.max(range.endCol, this.opts.frozenCols?.() ?? 0);
       for (let c = 0; c < cEnd; c += 1) {
         const edge = this.colLeftAt(c) + this.opts.scroller.getColWidth(c);
-        if (Math.abs(mx - edge) <= BORDER_THRESHOLD) {
+        if (Math.abs(mx - edge) <= threshold) {
           return { type: 'col', index: c, canvasPos: edge };
         }
       }

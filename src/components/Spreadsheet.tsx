@@ -19,7 +19,7 @@ import { FormulaEngine } from '../formula/FormulaEngine';
 import { resolveEditAnchor, snapClickSelection, snapRangeSelection } from '../selection/mergeSnap';
 import type { FindMatch } from '../find/FindReplaceService';
 import { PluginManager, type Plugin } from '../plugin/PluginManager';
-import { TOTAL_COLS, TOTAL_ROWS, type CellAddress, type FormulaRefHighlight } from '../renderer/CanvasRenderer';
+import { TOTAL_COLS, TOTAL_ROWS, COL_HEADER_HEIGHT, type CellAddress, type FormulaRefHighlight } from '../renderer/CanvasRenderer';
 import { RemoveChartCommand } from '../commands/impl/RemoveChart';
 import { SetChartAnchorCommand } from '../commands/impl/SetChartAnchor';
 import { RemoveImageCommand, SetImageAnchorCommand } from '../commands/impl/ImageObject';
@@ -255,6 +255,28 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   }, [findHighlights, activeSheetId, store]);
   rendererApiRef.current = { setExtraRanges: (ranges) => rendererRef.current?.setExtraRanges(ranges) };
   useEffect(() => rendererRef.current?.setEditing(editing !== null), [editing, rendererRef]);
+  // 移动端软键盘：visualViewport 收缩/平移时把编辑中的单元格滚到键盘上方的
+  // 可视区，并 bump 一次布局让编辑浮层按新的 cellRect 重定位。桌面（无
+  // visualViewport 或键盘不改变布局）不受影响。
+  const [editorLayoutTick, setEditorLayoutTick] = useState(0);
+  useEffect(() => {
+    if (editing === null) return;
+    const vv = window.visualViewport;
+    if (vv == null) return undefined;
+    const sync = (): void => {
+      const canvas = canvasRef.current;
+      const renderer = rendererRef.current;
+      if (canvas === null || renderer === null) return;
+      const vvBottom = vv.height + vv.offsetTop;
+      const canvasTop = canvas.getBoundingClientRect().top + window.scrollY;
+      const available = Math.max(120, vvBottom - canvasTop - COL_HEADER_HEIGHT);
+      renderer.scrollCellIntoView(editing.r, editing.c, available);
+      setEditorLayoutTick((n) => n + 1);
+    };
+    vv.addEventListener('resize', sync);
+    vv.addEventListener('scroll', sync);
+    return () => { vv.removeEventListener('resize', sync); vv.removeEventListener('scroll', sync); };
+  }, [editing]);
   // Excel clipboard session: copy/cut mark a source (marching ants); cut clears the source
   // only when the paste lands. Copy sessions allow repeated pastes; cut pastes once.
   // Excel "End mode": End arms the next arrow key to edge-jump (like Ctrl+arrow).
@@ -635,7 +657,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
         const caret = caretOffsetAtClick(rendererRef.current, store, cell, e.clientX, e.clientY, view.zoom);
         startEditing(cell, undefined, true, caret);
       }} />
-      {editing !== null && <EditorOverlay refEl={inputRef} editingRefSetter={(cell) => { editingRef.current = cell; setEditing(cell); }} editing={editing} setEditing={setEditing} cancel={cancelEditing} commit={commitEditing} zoom={view.zoom} store={store} richApiRef={richApiRef} onCharStyleKey={applyCharStyleKey} onRefHighlights={handleRefHighlights} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}
+      {editing !== null && <EditorOverlay layoutTick={editorLayoutTick} refEl={inputRef} editingRefSetter={(cell) => { editingRef.current = cell; setEditing(cell); }} editing={editing} setEditing={setEditing} cancel={cancelEditing} commit={commitEditing} zoom={view.zoom} store={store} richApiRef={richApiRef} onCharStyleKey={applyCharStyleKey} onRefHighlights={handleRefHighlights} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}
       <div className="ss-chart-layer">{store.getCharts().map((spec) => <FloatingChart key={spec.id} spec={spec} store={store} renderer={rendererRef.current} selected={selectedChartId === spec.id} onSelect={setSelectedChartId} onGeometry={(id, anchor) => execCmd(new SetChartAnchorCommand({ id, anchor }))} onRemove={(id) => { execCmd(new RemoveChartCommand({ id })); setSelectedChartId((current) => current === id ? null : current); canvasRef.current?.focus(); }} onUndo={() => cmdManager?.undo()} onRedo={() => cmdManager?.redo()} />)}
         {store.getImages().map((img) => <FloatingImage key={img.id} spec={img} renderer={rendererRef.current} selected={selectedImageId === img.id} onSelect={setSelectedImageId} onGeometry={(id, anchor) => execCmd(new SetImageAnchorCommand({ id, anchor }))} onRemove={(id) => { execCmd(new RemoveImageCommand({ id })); setSelectedImageId((current) => current === id ? null : current); canvasRef.current?.focus(); }} onUndo={() => cmdManager?.undo()} onRedo={() => cmdManager?.redo()} />)}
       </div></div>

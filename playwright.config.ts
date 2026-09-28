@@ -23,5 +23,13 @@ export default defineConfig({
         reuseExistingServer: true,
         timeout: 30_000,
       },
-  projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
+  projects: [
+    { name: 'chromium', use: { browserName: 'chromium' }, testIgnore: /mobile\.spec\.ts/ },
+    {
+      // 触屏视口（手机竖屏）跑移动端手势剧本：点选/长按菜单/平移滚动/双击编辑。
+      name: 'chromium-touch',
+      use: { browserName: 'chromium', hasTouch: true, viewport: { width: 390, height: 844 } },
+      testMatch: /mobile\.spec\.ts/,
+    },
+  ],
 });

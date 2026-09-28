@@ -62,6 +62,14 @@ export const BottomBar: FC<BottomBarProps> = ({
   const [dragId, setDragId] = useState<string | null>(null);
   const menuRef = useRef<HTMLUListElement | null>(null);
   const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null);
+  // 触摸长按 → contextmenu（移动端没有右键）。长按后跟随的合成 click 必须被
+  // 吞掉：window 的 click 监听会把刚打开的菜单立刻关掉。
+  const tabLongPress = useRef<{ x: number; y: number; timer: number } | null>(null);
+  const suppressTabClick = useRef(false);
+  const clearTabLongPress = (): void => {
+    if (tabLongPress.current !== null) { window.clearTimeout(tabLongPress.current.timer); tabLongPress.current = null; }
+  };
+  useEffect(() => clearTabLongPress, []);
   useEffect(() => {
     if (menu === null) return undefined;
     const close = (): void => setMenu(null);
@@ -104,8 +112,33 @@ export const BottomBar: FC<BottomBarProps> = ({
             aria-selected={active}
             draggable={onMoveSheet !== undefined}
             style={tabStyle}
-            onClick={() => onSheetChange?.(info.id)}
+            onClick={(event) => {
+              if (suppressTabClick.current) { suppressTabClick.current = false; event.stopPropagation(); return; }
+              onSheetChange?.(info.id);
+            }}
             onDoubleClick={() => onRenameSheet?.(info.id)}
+            onPointerDown={(event) => {
+              if (event.pointerType === 'mouse') return;
+              const el = event.currentTarget;
+              const x = event.clientX;
+              const y = event.clientY;
+              clearTabLongPress();
+              tabLongPress.current = {
+                x, y,
+                timer: window.setTimeout(() => {
+                  tabLongPress.current = null;
+                  suppressTabClick.current = true;
+                  el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2 }));
+                }, 550),
+              };
+            }}
+            onPointerMove={(event) => {
+              const lp = tabLongPress.current;
+              if (lp !== null && Math.hypot(event.clientX - lp.x, event.clientY - lp.y) > 12) clearTabLongPress();
+            }}
+            onPointerUp={clearTabLongPress}
+            onPointerCancel={clearTabLongPress}
+            onPointerLeave={clearTabLongPress}
             onContextMenu={(event) => {
               event.preventDefault();
               setMenu({ id: info.id, x: event.clientX, y: event.clientY });

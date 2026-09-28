@@ -1,5 +1,45 @@
 # Changelog
 
+## v2.2.0 — 开发中（移动端适配）
+
+### Features
+
+- **Touch gesture layer (canvas)** — one-finger drag now PANS the sheet
+  (touch devices previously had no way to scroll the grid); it disengages
+  the tap-selection drag after a 6px slop and never triggers the drag-origin
+  selection flip. A 550ms long-press opens the context menu through the
+  ordinary right-click routing (cell / row / column headers); movement
+  >12px, a second finger, lift, or any in-flight object drag cancels it.
+  Sheet tabs gain the same long-press menu (with the trailing synthetic
+  click suppressed so the menu doesn't instantly close). Mouse behavior is
+  untouched — the whole layer lives behind `pointerType !== 'mouse'`.
+- **Soft-keyboard support** — while a cell editor is open, `visualViewport`
+  resize/scroll scrolls the editing cell above the keyboard
+  (`CanvasRenderer.scrollCellIntoView` with the reduced visible height) and
+  repositions the editor overlay. Desktop (no visualViewport) is unaffected.
+- **Responsive demo shell** — `dvh` viewport height, `viewport-fit=cover` +
+  `interactive-widget=resizes-content`, `@media (pointer: coarse)` touch
+  targets (32–36px buttons, 34px menu items, taller tabs/formula bar),
+  `@media (max-width: 768px)` narrow-screen compaction, bottom safe-area
+  inset, `overscroll-behavior: none`.
+
+### Fixes
+
+- **Pinch zoom clamped to the floor** — `pinchBase.zoom` was captured from
+  `zoom()` (a fraction) but `onZoomTo` expects a percent, so every pinch
+  collapsed the zoom to the 50% minimum. Caught by the new mobile e2e.
+
+### Testing
+
+- Playwright `chromium-touch` project (390×844): 5 specs — tap-select +
+  double-tap edit, long-press context menu + 清除内容, one-finger pan
+  (top-left cell becomes a far row), two-finger pinch > 100% via the status
+  bar, sheet-tab long-press menu. jsdom gesture unit tests (pan/tap/
+  long-press/cancel paths, `scrollCellIntoView` incl. keyboard-reduced
+  height and frozen panes), BottomBar long-press suite, FillHandle touch
+  tolerance. Suite 183 files / 1213 tests; desktop e2e unchanged (8/8).
+  Real-device QA checklist: docs/plan/2026-09-28-mobile-adaptation.md.
+
 ## v2.1.0 — 2026-09-28
 
 > 发布要点：动态数组溢出（SEQUENCE/FILTER/UNIQUE/SORT/XLOOKUP 向量）、

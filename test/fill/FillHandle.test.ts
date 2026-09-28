@@ -102,6 +102,19 @@ describe('FillHandle Ctrl tracking', () => {
   });
 });
 
+describe('FillHandle touch tolerance', () => {
+  it('a press 15px off the handle misses at mouse precision but hits with touch slop', () => {
+    const calls: Array<[RangeAddress, RangeAddress, boolean]> = [];
+    const selected: RangeAddress = { r1: 0, c1: 0, r2: 0, c2: 0 };
+    // Handle center sits exactly on (c2+1)*CELL_W, (r2+1)*CELL_H; press short of it.
+    const offHandle = { x: ROW_HEADER_WIDTH + CELL_W - 15, y: COL_HEADER_HEIGHT + CELL_H - 15 };
+    const strict = makeHandle(selected, (s, t, c) => calls.push([s, t, c]));
+    expect(strict.onMouseDown(new MouseEvent('mousedown', { clientX: offHandle.x, clientY: offHandle.y }))).toBe(false);
+    const forgiving = makeHandle(selected, (s, t, c) => calls.push([s, t, c]));
+    expect(forgiving.onMouseDown(new MouseEvent('mousedown', { clientX: offHandle.x, clientY: offHandle.y }), 18)).toBe(true);
+  });
+});
+
 describe('selectionAfterFill (Excel: selection lands on the fill result)', () => {
   it('a down fill extends the range with the pivot on the far edge', () => {
     const next = selectionAfterFill({ r1: 0, c1: 0, r2: 2, c2: 0 }, { r1: 0, c1: 0, r2: 4, c2: 0 }, { r: 0, c: 0 });

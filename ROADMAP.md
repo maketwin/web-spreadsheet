@@ -52,7 +52,16 @@
 - [x] Hot formulas +24: SUMPRODUCT, XLOOKUP, SUBTOTAL, TEXTJOIN, DATEDIF, RANK.EQ, STDEV.S/P, MAXIFS/MINIFS, ROW/COLUMN …
 - [x] Array-aware binary operators (`SUMPRODUCT((区域="x")*区域)`)
 
-## v2.1 — Parity Completion (2026-09, current)
+## v2.2 — Mobile Adaptation（2026-09-28，当前）
+- [x] 响应式布局：dvh、pointer:coarse 触控目标、窄屏压缩、safe-area（docs/plan/2026-09-28-mobile-adaptation.md）
+- [x] 触摸手势：单指平移滚动、长按上下文菜单（画布 + sheet 标签）、双指捏合修复（pinchBase 单位 bug）、双 tap 编辑
+- [x] 触控热区：填充柄/行列边框命中容差放大（touch/pen 专属）
+- [x] 软键盘适配：visualViewport → scrollCellIntoView 编辑格滚动到键盘上方
+- [x] Playwright chromium-touch project（390×844）5 条手势 e2e + jsdom 手势单测
+- [ ] 真机 QA 清单执行（iOS Safari / Android Chrome / 嵌入式 webview，见 plan 文档）
+- [ ] 下一档（Excel 移动级）：触摸选择手柄、平移动量、移动端底部公式栏
+
+## v2.1 — Parity Completion（2026-09-28，released）
 - [x] Rich text: in-cell runs, formula-bar edits, theme tints, Ctrl+Enter fill
 - [x] Hyperlinks: insert / Ctrl+click / paste / fill, SheetJS round-trip (comments removed by product decision)
 - [x] Conditional formatting: icon sets, highlight shortcuts, 管理规则 dialog (single-step undo)
