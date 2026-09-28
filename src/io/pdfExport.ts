@@ -1,5 +1,4 @@
 import { paperPx, type PrintSettings } from '../print/types';
-import type { PrintPagesResult } from '../print/PrintPipeline';
 
 /**
  * 手写最小 PDF 导出：把打印预览的每页画布转成 JPEG，以 DCTDecode 内嵌到
@@ -9,7 +8,7 @@ import type { PrintPagesResult } from '../print/PrintPipeline';
 
 const PT_PER_PX = 0.75; // 96dpi CSS px → 72dpi PDF pt
 
-export async function exportPagesToPdf(result: PrintPagesResult, settings: PrintSettings): Promise<Blob> {
+export async function exportPagesToPdf(result: { readonly canvases: readonly HTMLCanvasElement[] }, settings: PrintSettings): Promise<Blob> {
   const jpegs: Uint8Array[] = [];
   for (const canvas of result.canvases) {
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));

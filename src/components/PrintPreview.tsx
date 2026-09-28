@@ -1,7 +1,7 @@
 import { PrinterOutlined, FilePdfOutlined } from '@ant-design/icons';
-import { Button, Input, InputNumber, Modal, Radio, Select, Switch } from 'antd';
+import { Button, Input, InputNumber, Modal, Radio, Select, Switch, Tooltip } from 'antd';
 import { useEffect, useMemo, useState, type FC } from 'react';
-import { printPages, renderPrintPages } from '../print/PrintPipeline';
+import { printPages, renderWorkbookPrintPages, type PrintScope } from '../print/PrintPipeline';
 import { DEFAULT_PRINT_SETTINGS, PAPER_MM, type MarginPreset, type Orientation, type PaperSize, type PrintSettings, type ScaleMode } from '../print/types';
 import { exportPagesToPdf } from '../io/pdfExport';
 import type { Store } from '../store/Store';
@@ -27,6 +27,7 @@ const MARGIN_OPTIONS: Array<{ readonly value: MarginPreset; readonly label: stri
 /** Print preview: settings on the left, paginated page thumbnails on the right. */
 export const PrintPreview: FC<PrintPreviewProps> = ({ open, onCancel, store }) => {
   const [settings, setSettings] = useState<PrintSettings>(DEFAULT_PRINT_SETTINGS);
+  const [scope, setScope] = useState<PrintScope>('active');
   // Repainting every page synchronously per settings change (e.g. each digit
   // typed into the scale input) stalls the dialog on large sheets — debounce.
   const [renderSettings, setRenderSettings] = useState(settings);
@@ -35,13 +36,14 @@ export const PrintPreview: FC<PrintPreviewProps> = ({ open, onCancel, store }) =
     return () => window.clearTimeout(timer);
   }, [settings]);
   const result = useMemo(
-    () => (open ? renderPrintPages(store, store.getActiveSheetId(), renderSettings) : null),
-    [open, store, renderSettings],
+    () => (open ? renderWorkbookPrintPages(store, renderSettings, scope) : null),
+    [open, store, renderSettings, scope],
   );
   const update = <K extends keyof PrintSettings>(key: K, value: PrintSettings[K]): void => {
     setSettings((current) => ({ ...current, [key]: value }));
   };
-  const totalPages = result?.geometry.pages.length ?? 0;
+  const totalPages = result?.totalPages ?? 0;
+  const workbookScope = scope === 'workbook';
   const paperMm = PAPER_MM[settings.paper];
 
   const handlePrint = (): void => {
@@ -59,7 +61,9 @@ export const PrintPreview: FC<PrintPreviewProps> = ({ open, onCancel, store }) =
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${store.getSheets().find((s) => s.id === store.getActiveSheetId())?.name ?? '工作表'}.pdf`;
+      a.download = workbookScope
+        ? '工作簿.pdf'
+        : `${store.getSheets().find((s) => s.id === store.getActiveSheetId())?.name ?? '工作表'}.pdf`;
       a.click();
       URL.revokeObjectURL(url);
     } finally {
@@ -82,6 +86,13 @@ export const PrintPreview: FC<PrintPreviewProps> = ({ open, onCancel, store }) =
   >
     <div style={{ display: 'flex', gap: 16, minHeight: 420 }}>
       <div style={{ width: 230, flexShrink: 0, borderRight: '1px solid var(--ss-border)', paddingRight: 16 }}>
+        <div className="ss-print-setting">
+          <label>范围</label>
+          <Radio.Group size="small" value={scope} onChange={(e) => setScope(e.target.value as PrintScope)}>
+            <Radio.Button value="active">当前工作表</Radio.Button>
+            <Radio.Button value="workbook">整个工作簿</Radio.Button>
+          </Radio.Group>
+        </div>
         <div className="ss-print-setting">
           <label htmlFor="ss-print-paper">纸张</label>
           <Select id="ss-print-paper" size="small" style={{ width: '100%' }} value={settings.paper} options={PAPER_OPTIONS} onChange={(paper) => update('paper', paper)} />
@@ -116,7 +127,9 @@ export const PrintPreview: FC<PrintPreviewProps> = ({ open, onCancel, store }) =
         </div>
         <div className="ss-print-setting">
           <label htmlFor="ss-print-area">打印区域</label>
-          <Input id="ss-print-area" size="small" placeholder="如 A1:F20，留空为全部" value={settings.printArea ?? ''} onChange={(e) => update('printArea', e.target.value)} />
+          <Tooltip title={workbookScope ? '打印区域仅对当前工作表生效' : undefined}>
+            <Input id="ss-print-area" size="small" disabled={workbookScope} placeholder="如 A1:F20，留空为全部" value={settings.printArea ?? ''} onChange={(e) => update('printArea', e.target.value)} />
+          </Tooltip>
         </div>
         <div className="ss-print-setting">
           <label htmlFor="ss-print-header">页眉</label>
@@ -127,8 +140,10 @@ export const PrintPreview: FC<PrintPreviewProps> = ({ open, onCancel, store }) =
           <Input id="ss-print-footer" size="small" placeholder="支持 {page} {pages} {sheet}" value={settings.footerText ?? ''} onChange={(e) => update('footerText', e.target.value)} />
         </div>
         <div style={{ marginTop: 16, color: 'var(--ss-text-light)', fontSize: 12, lineHeight: '20px' }}>
-          共 {totalPages} 页 · 打印比例 {Math.round((result?.geometry.scale ?? 1) * 100)}%<br />
-          {settings.paper} {settings.orientation === 'portrait' ? `${paperMm.w}×${paperMm.h}` : `${paperMm.h}×${paperMm.w}`} mm · 仅当前工作表
+          共 {totalPages} 页{workbookScope
+            ? ` · ${result?.parts.length ?? 0} 个工作表`
+            : <> · 打印比例 {Math.round((result?.parts[0]?.geometry.scale ?? 1) * 100)}%</>}<br />
+          {settings.paper} {settings.orientation === 'portrait' ? `${paperMm.w}×${paperMm.h}` : `${paperMm.h}×${paperMm.w}`} mm · {workbookScope ? '全部工作簿按标签顺序' : '仅当前工作表'}
         </div>
       </div>
       <div className="ss-print-pages" aria-label="打印页面预览">

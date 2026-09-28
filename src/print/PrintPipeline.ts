@@ -50,12 +50,58 @@ export function renderPrintPages(store: Store, sheetId: string, settings: PrintS
   return { geometry, canvases };
 }
 
+/** 打印范围：当前工作表 / 整个工作簿（按标签顺序）。 */
+export type PrintScope = 'active' | 'workbook';
+
+export interface SheetPrintPart {
+  readonly sheetId: string;
+  readonly sheetName: string;
+  readonly geometry: PrintGeometry;
+  readonly canvases: readonly HTMLCanvasElement[];
+}
+
+export interface WorkbookPrintResult {
+  readonly parts: readonly SheetPrintPart[];
+  /** Flat page canvases in print order (per sheet: down-then-across; sheets in tab order). */
+  readonly canvases: readonly HTMLCanvasElement[];
+  readonly totalPages: number;
+}
+
+/** Paginate + paint the active sheet or the whole workbook.
+ * Page numbers in header/footer text ({page}/{pages}) are workbook-global. */
+export function renderWorkbookPrintPages(store: Store, settings: PrintSettings, scope: PrintScope = 'active'): WorkbookPrintResult {
+  const sheets = scope === 'workbook' ? store.getSheets() : store.getSheets().filter((s) => s.id === store.getActiveSheetId());
+  // First pass paginates every sheet so {pages} can carry the global total.
+  const paginated = sheets.map((sheet) => {
+    const used = resolvePrintArea(store, sheet.id, settings);
+    return { sheet, geometry: paginate(store, sheet.id, used, settings) };
+  });
+  const totalPages = paginated.reduce((sum, part) => sum + part.geometry.pages.length, 0);
+  const parts: SheetPrintPart[] = [];
+  const canvases: HTMLCanvasElement[] = [];
+  let pageIndex = 0;
+  for (const { sheet, geometry } of paginated) {
+    const painter = new PrintPainter(store, sheet.id);
+    const sheetCanvases = geometry.pages.map((page) => {
+      // The painter reads page.index for {page} — renumber against the
+      // workbook-global running count (single-sheet scope: unchanged).
+      const global = page.index + pageIndex;
+      const numbered = global === page.index ? page : { ...page, index: global };
+      return painter.paint(numbered, geometry.scale, settings, totalPages);
+    });
+    parts.push({ sheetId: sheet.id, sheetName: sheet.name, geometry, canvases: sheetCanvases });
+    canvases.push(...sheetCanvases);
+    pageIndex += geometry.pages.length;
+  }
+  return { parts, canvases, totalPages };
+}
+
 const PRINT_ROOT_ID = 'ss-print-root';
 const PRINT_STYLE_ID = 'ss-print-style';
 /** Fallback cleanup delay when afterprint never fires (some embedded WebViews). */
 const CLEANUP_FALLBACK_MS = 60_000;
 
-export function printPages(result: PrintPagesResult, settings: PrintSettings): void {
+export function printPages(result: { readonly canvases: readonly HTMLCanvasElement[] }, settings: PrintSettings): void {
   cleanupPrintDocument();
   const paper = paperPx(settings);
   const content = contentPx(settings);

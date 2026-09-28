@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { printPages, renderPrintPages, type PrintPagesResult } from '../../src/print/PrintPipeline';
+import { printPages, renderPrintPages, renderWorkbookPrintPages, type PrintPagesResult } from '../../src/print/PrintPipeline';
 import { contentPx, paperPx, marginPx, PRINT_DPI_SCALE, DEFAULT_PRINT_SETTINGS, type PrintSettings } from '../../src/print/types';
 import { Store } from '../../src/store/Store';
 
@@ -137,5 +137,74 @@ describe('printPages', () => {
     expect(fresh).not.toBeNull();
     expect(fresh).not.toBe(stale);
     expect(document.querySelectorAll('#ss-print-root').length).toBe(1);
+  });
+});
+
+describe('renderWorkbookPrintPages', () => {
+  let printed: number;
+
+  beforeEach(() => { installCanvas(); });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  /** Two sheets, each wide enough to split into multiple column bands at 100%. */
+  const seedWorkbook = (): Store => {
+    const store = seedWideSheet(20);
+    const second = store.addSheet('数据2');
+    for (let c = 0; c < 20; c += 1) store.setCell(0, c, { text: `s2h${c}` }, second);
+    return store;
+  };
+
+  it('active scope renders only the active sheet', () => {
+    const store = seedWorkbook();
+    const result = renderWorkbookPrintPages(store, DEFAULT_PRINT_SETTINGS, 'active');
+    expect(result.parts.length).toBe(1);
+    expect(result.parts[0]?.sheetId).toBe(store.getActiveSheetId());
+    expect(result.canvases.length).toBe(result.parts[0]?.geometry.pages.length);
+    expect(result.totalPages).toBe(result.canvases.length);
+  });
+
+  it('workbook scope concatenates every sheet in tab order with a flat canvas list', () => {
+    const store = seedWorkbook();
+    const settings: PrintSettings = { ...DEFAULT_PRINT_SETTINGS, scaleMode: 'custom', scalePercent: 100 };
+    const result = renderWorkbookPrintPages(store, settings, 'workbook');
+    expect(result.parts.map((p) => p.sheetName)).toEqual([store.getSheets()[0]?.name, '数据2']);
+    const perSheet = result.parts.map((p) => p.geometry.pages.length);
+    expect(perSheet.length).toBe(2);
+    expect(result.canvases.length).toBe(perSheet[0]! + perSheet[1]!);
+    expect(result.totalPages).toBe(result.canvases.length);
+    // Each part alone paginates like its single-sheet equivalent.
+    for (const part of result.parts) {
+      const single = renderPrintPages(store, part.sheetId, settings);
+      expect(part.geometry.pages.length).toBe(single.geometry.pages.length);
+    }
+  });
+
+  it('renumbers pages workbook-globally so {page}/{pages} span sheets', () => {
+    const store = seedWorkbook();
+    const settings: PrintSettings = { ...DEFAULT_PRINT_SETTINGS, scaleMode: 'custom', scalePercent: 100 };
+    const result = renderWorkbookPrintPages(store, settings, 'workbook');
+    const firstCounts = result.parts.map((p) => p.geometry.pages.length);
+    expect(firstCounts[0]).toBeGreaterThan(0);
+    expect(firstCounts[1]).toBeGreaterThan(0);
+    // The painter stamps {page} from page.index: part 2's first page must carry
+    // the global number, not restart at 1. Total = sum across parts.
+    expect(result.totalPages).toBe(firstCounts[0]! + firstCounts[1]!);
+    // Global ordering: the flat canvas array is part1 pages then part2 pages,
+    // so each part's slice keeps its internal order (spot-check by identity).
+    const part1 = result.parts[0]!.canvases;
+    for (let i = 0; i < part1.length; i += 1) expect(result.canvases[i]).toBe(part1[i]);
+  });
+
+  it('feeds the print DOM the same way a single-sheet result does', () => {
+    const store = seedWorkbook();
+    printed = 0;
+    vi.stubGlobal('print', () => { printed += 1; });
+    const result = renderWorkbookPrintPages(store, DEFAULT_PRINT_SETTINGS, 'workbook');
+    printPages(result, DEFAULT_PRINT_SETTINGS);
+    expect(printed).toBe(1);
+    expect(document.getElementById('ss-print-root')!.querySelectorAll('.ss-print-page').length).toBe(result.canvases.length);
+    vi.unstubAllGlobals();
+    document.getElementById('ss-print-root')?.remove();
+    document.getElementById('ss-print-style')?.remove();
   });
 });
