@@ -8,3 +8,5 @@ coverage
 .mimosa
 gui-test-screenshots
 .zcode/
+test-results/
+playwright-report/

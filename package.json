@@ -29,7 +29,8 @@
     "typecheck:js": "tsc --noEmit -p tsconfig.checkjs.json",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
-    "docs:preview": "vitepress preview docs"
+    "docs:preview": "vitepress preview docs",
+    "e2e": "playwright test"
   },
   "keywords": [
     "spreadsheet",
@@ -45,6 +46,7 @@
     "url": "git+https://github.com/maketwin/web-spreadsheet.git"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@types/node": "^22.0.0",

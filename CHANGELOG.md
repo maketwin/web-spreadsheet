@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Testing
+
+- **Real-browser e2e (Playwright/Chromium)** — `pnpm e2e` runs 8 specs in
+  ~8s covering the surfaces jsdom cannot reach: canvas/contextmenu via
+  real right-click (cell menu 清除内容/插入-dialog insert, row/column
+  header hide), the sheet-tab context menu into 移动或复制工作表, 插入 →
+  迷你图 (store-level assertion), 分列/图标集 dialogs incl. the
+  hover-submenu chain. Config reuses a running :5199 dev server (or boots
+  one); assertions lean on the demo `window.__ss` handle. Playwright's
+  native events handle the antd-6 popups fine — the earlier
+  actionability timeouts were a limitation of the in-app browser tooling,
+  not the app.
+
 ### Fixes
 
 - **Invalid print area collapsed to A1** — `util/cell.parseRange` is
