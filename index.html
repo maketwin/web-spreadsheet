@@ -200,6 +200,17 @@
       transition: none !important;
       animation: none !important;
     }
+    /* 模态框同理（同源问题）：关闭动画若在 webview 里收不到 animationend，
+       .ant-modal-mask 冻结在 ant-fade-leave-start、.ant-modal 冻结在
+       ant-zoom-leave，而全屏 .ant-modal-wrap(pointer-events:auto) 会残留并
+       吞掉整页所有点击/键盘 —— 应用假死到只能刷新。离场中的模态层立即隐藏；
+       wrap 的隐藏由 body 里的脚本把子模态的离场态镜像成 .ss-modal-leave-hide
+       （:has 在老 webview 里不可用；脚本版在离场类消失/模态框重开时自动摘除）。 */
+    .ant-modal.ant-zoom-leave,
+    .ant-modal-mask.ant-fade-leave,
+    .ant-modal-wrap.ss-modal-leave-hide {
+      display: none !important;
+    }
     /* 触控：画布自己接管触摸手势（选区拖拽/双指缩放），不交给浏览器滚动 */
     .ss-canvas { touch-action: none; }
     /* 浮动图片对象：浮层是 pointer-events:none，图片必须自己恢复事件，
@@ -240,6 +251,16 @@
   </style>
 </head>
 <body>
+  <script>
+    // 把离场中的模态 wrap 一并隐藏：CSS 表达不了"子离场态 → 父隐藏"
+    // （:has 老引擎不支持），这里观察 class 变化把离场态镜像到 wrap；
+    // 离场类消失（模态框重开）时同步摘除，重开不受影响。
+    new MutationObserver(() => {
+      for (const wrap of document.querySelectorAll('.ant-modal-wrap')) {
+        wrap.classList.toggle('ss-modal-leave-hide', wrap.querySelector(':scope > .ant-modal.ant-zoom-leave') !== null);
+      }
+    }).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] });
+  </script>
   <script type="module" src="/demo/main.ts"></script>
 </body>
 </html>

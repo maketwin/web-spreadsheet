@@ -772,4 +772,67 @@ describe('CanvasRenderer collapsed (hidden) rows', () => {
     expect(hit).toBe(3);
     renderer.destroy();
   });
+
+  it('Ctrl+click on a hyperlink cell: mouseup must not re-select the clicked cell over the follow target', () => {
+    installCanvasContext();
+    installAnimationFrames();
+    const onCellClick = vi.fn();
+    const onSelectionChange = vi.fn();
+    const store = new Store();
+    store.setCell(0, 1, { text: 'link', hyperlink: { target: '#F5' } }); // B1
+    const canvas = makeCanvas();
+    const renderer = new CanvasRenderer({ canvas, store, onCellClick, onSelectionChange });
+
+    // Ctrl+click B1 — the follow navigates during mousedown; the trailing
+    // mouseup used to re-apply B1 via onSelectionChange and stomp the target.
+    fireEvent.mouseDown(canvas, { clientX: 10 + ROW_HEADER_WIDTH + COL_WIDTH + 5, clientY: 20 + COL_HEADER_HEIGHT + 5, ctrlKey: true });
+    fireEvent.mouseUp(window);
+
+    expect(onCellClick).toHaveBeenCalledWith({ r: 0, c: 1 }, false, true);
+    expect(onSelectionChange).not.toHaveBeenCalled();
+    renderer.destroy();
+  });
+
+  it('plain click on a hyperlink cell still selects (no auto-follow)', () => {
+    installCanvasContext();
+    installAnimationFrames();
+    const onCellClick = vi.fn();
+    const store = new Store();
+    store.setCell(0, 1, { text: 'link', hyperlink: { target: '#F5' } }); // B1
+    const canvas = makeCanvas();
+    const renderer = new CanvasRenderer({ canvas, store, onCellClick });
+
+    fireEvent.mouseDown(canvas, { clientX: 10 + ROW_HEADER_WIDTH + COL_WIDTH + 5, clientY: 20 + COL_HEADER_HEIGHT + 5 });
+    fireEvent.mouseUp(window);
+
+    expect(onCellClick).toHaveBeenCalledWith({ r: 0, c: 1 }, false, false);
+    renderer.destroy();
+  });
+
+  it('a hyperlink-suppress flag left stale by a mouseup-less Ctrl+click does not eat the next drag', () => {
+    installCanvasContext();
+    installAnimationFrames();
+    const onCellClick = vi.fn();
+    const onSelectionChange = vi.fn();
+    const store = new Store();
+    store.setCell(0, 1, { text: 'link', hyperlink: { target: '#F5' } }); // B1
+    const canvas = makeCanvas();
+    const renderer = new CanvasRenderer({ canvas, store, onCellClick, onSelectionChange });
+
+    // Ctrl+click B1 sets the suppress flag; its mouseup never arrives (macOS:
+    // Ctrl+click is the system right-click and the menu swallows the mouseup).
+    fireEvent.mouseDown(canvas, { clientX: 10 + ROW_HEADER_WIDTH + COL_WIDTH + 5, clientY: 20 + COL_HEADER_HEIGHT + 5, ctrlKey: true });
+    // A later plain drag C1→D1: its mouseup must still apply the Excel
+    // drag-origin selection instead of being silenced by the stale flag.
+    fireEvent.mouseDown(canvas, { clientX: 10 + ROW_HEADER_WIDTH + 2 * COL_WIDTH + 5, clientY: 20 + COL_HEADER_HEIGHT + 5 });
+    fireEvent.mouseMove(window, { clientX: 10 + ROW_HEADER_WIDTH + 3 * COL_WIDTH + 5, clientY: 20 + COL_HEADER_HEIGHT + 5 });
+    fireEvent.mouseUp(window);
+
+    // The move reports the far end as active; the mouseup re-applies the drag
+    // origin as active (Excel). The second call proves the mouseup block ran.
+    const calls = onSelectionChange.mock.calls;
+    expect(calls.length).toBe(2);
+    expect(calls[1]).toEqual([{ r1: 0, c1: 2, r2: 0, c2: 3 }, { r: 0, c: 2 }, { r: 0, c: 3 }]);
+    renderer.destroy();
+  });
 });

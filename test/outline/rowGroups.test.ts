@@ -23,13 +23,33 @@ describe('row groups (outline)', () => {
     const store = new Store();
     store.setCell(9, 0, { text: 'x', value: 'x' });
     applyGroupRows(store, 9, 11);
-    applyCollapseGroup(store, 10);
+    applyCollapseGroup(store, 10, 10);
     expect(store.getRow(9)?.hide).toBe(true);
     expect(store.getRow(10)?.hide).toBe(true);
     expect(store.getRow(11)?.hide).toBe(true);
-    applyExpandGroup(store, 10);
+    applyExpandGroup(store, 10, 10);
     expect(store.getRow(9)?.hide).toBe(false);
     expect(store.getRow(10)?.hide).toBe(false);
+  });
+
+  it('expand works from a selection that merely intersects the group (collapsed rows are invisible)', () => {
+    const store = new Store();
+    applyGroupRows(store, 1, 3); // rows 2-4
+    applyCollapseGroup(store, 1, 3);
+    expect(store.getRow(2)?.hide).toBe(true);
+    // Group rows are hidden — a user can only select visible neighbours.
+    // Selecting rows 1..5 must still expand the intersecting group.
+    applyExpandGroup(store, 0, 4);
+    expect(store.getRow(1)?.hide).toBe(false);
+    expect(store.getRow(2)?.hide).toBe(false);
+    expect(store.getRow(3)?.hide).toBe(false);
+  });
+
+  it('collapse/expand outside any group is a no-op', () => {
+    const store = new Store();
+    applyGroupRows(store, 1, 3);
+    applyCollapseGroup(store, 10, 12);
+    expect(store.getRow(2)?.hide).toBeUndefined();
   });
 
   it('ungroup removes covering groups only', () => {

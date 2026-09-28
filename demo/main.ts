@@ -1,4 +1,4 @@
-import { Spreadsheet } from '../src/index';
+import { DEFAULT_ID, Spreadsheet, loadWorkbook } from '../src/index';
 
 const data = [
   [{ text: '产品' }, { text: 'Q1' }, { text: 'Q2' }, { text: 'Q3' }, { text: 'Q4' }, { text: '总计' }],
@@ -23,6 +23,24 @@ document.body.append(root);
 const ss = new Spreadsheet(root, { data, theme: 'light' });
 ss.mount();
 (window as unknown as { __ss: Spreadsheet }).__ss = ss; // debug/test handle
+// The demo seeds initial data, which opts the SDK out of its own restore
+// (explicit data wins). Restore the last autosave here so a refresh keeps the
+// user's work — the seed table only shows when nothing was saved yet. A user
+// edit landing before the async load completes wins over the restore.
+let touched = false;
+const offTouchOnce = ss.store.subscribe(() => { touched = true; offTouchOnce(); });
+void loadWorkbook(DEFAULT_ID).then((saved) => {
+  if (saved === undefined || touched) return;
+  ss.store.replaceAll(saved);
+  ss.store.setWorkbookPasswordHash(saved.passwordHash);
+  // Parity with the SDK's own restore (tryRestoreFromDB): the undo stack must
+  // not cross the restore boundary — Ctrl+Z must not resurrect the seed table
+  // over the restored workbook.
+  ss.cmdManager.clear();
+}).catch((err) => {
+  // Private mode / blocked IndexedDB rejects; the seed table simply stays.
+  console.error('Failed to restore workbook from IndexedDB:', err);
+});
 
 const info = document.createElement('div');
 info.id = 'info';

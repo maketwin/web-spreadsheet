@@ -46,11 +46,7 @@ export interface CanvasRendererOptions {
   activeCell?: CellAddress; zoom?: number; showGrid?: boolean; showFormula?: boolean;
   frozenRows?: number; frozenCols?: number;
   onCellClick?: (cell: CellAddress, shiftKey?: boolean, ctrlKey?: boolean) => void;
-  /** Plain (no-modifier) mouseup on a hyperlink cell without a drag — the
-   * Google-Sheets "click the link to open it" gesture. Fires only when the
-   * press and release landed on the same cell. */
-  onHyperlinkClick?: (cell: CellAddress) => void;
-  onSelectionChange?: (range: RangeAddress, activeCell?: CellAddress, anchorCell?: CellAddress) => void;
+  onSelectionChange?: (range: RangeAddress, activeCell?: CellAddress, anchorCell?: CellAddress, kind?: SelectionKind) => void;
   onColumnSelect?: (c: number, shiftKey: boolean) => void; onRowSelect?: (r: number, shiftKey: boolean) => void;
   onSheetSelect?: () => void; onRowResize?: (r: number, height: number) => void; onColResize?: (c: number, width: number) => void;
   onRowDblClick?: (r: number) => void; onColDblClick?: (c: number) => void;
@@ -109,6 +105,9 @@ export class CanvasRenderer {
   private selectionKind: SelectionKind | undefined;
   private activeCell: CellAddress | undefined;
   private dragAnchor: DragAnchor | null = null;
+  /** Ctrl/Cmd+click followed a hyperlink during mousedown — the next mouseup
+   *  must not re-apply the renderer-local selection over the navigation target. */
+  private suppressMouseUpSelection = false;
   private moveDrag: MoveDragState | null = null;
   /** Trackpad pinch accumulator (fractional ctrl+wheel deltas → ±10 zoom steps). */
   private pinchAccum = 0;
@@ -436,6 +435,10 @@ export class CanvasRenderer {
       };
 
   private readonly handleMouseDown = (ev: MouseEvent, fromPointer = false): void => {
+    // Every new press starts a fresh gesture: a suppress flag left stale by a
+    // Ctrl+click whose mouseup never arrived (macOS contextmenu path) must not
+    // eat the next click's selection re-apply.
+    this.suppressMouseUpSelection = false;
     // Excel: only primary button starts selection / drag. Right-click selection is handled in contextmenu
     // so a multi-cell selection is not collapsed before the menu opens.
     if (ev.button !== 0) return;
@@ -475,6 +478,9 @@ export class CanvasRenderer {
     }
     this.dragAnchor = { type: 'cell', ...cell }; this.setSelectedCell(cell);
     // Excel / docs: plain click selects; Ctrl/Cmd+click follows hyperlink (handled in onCellClick).
+    // The follow navigates during mousedown, so the upcoming mouseup must NOT
+    // re-apply this renderer-local selection on top of the navigation target.
+    if ((ev.ctrlKey || ev.metaKey) && this.opts.store.getCell(cell.r, cell.c)?.hyperlink !== undefined) this.suppressMouseUpSelection = true;
     if (ev.shiftKey) this.opts.onCellClick?.(cell, true); else this.opts.onCellClick?.(cell, false, ev.ctrlKey || ev.metaKey);
   };
   private readonly handleMouseMove = (ev: MouseEvent): void => {
@@ -515,12 +521,30 @@ export class CanvasRenderer {
     // Excel: after a drag the active cell lands on the drag ORIGIN (name box /
     // formula bar follow it), while the far end becomes the pivot that the next
     // Shift+Arrow extends against.
+    const suppressSelection = this.suppressMouseUpSelection;
+    this.suppressMouseUpSelection = false;
     const dragOrigin = this.dragAnchor;
-    if (dragOrigin?.type === 'cell' && this.selectionKind === 'range' && this.selectedRange !== undefined) {
+    if (!suppressSelection && dragOrigin?.type === 'cell' && this.selectionKind === 'range' && this.selectedRange !== undefined) {
       const origin = { r: dragOrigin.r, c: dragOrigin.c };
       const end = this.activeCell ?? origin;
       this.setSelection(this.selectedRange, 'range', origin);
       this.opts.onSelectionChange?.(this.selectedRange, origin, end);
+    }
+    // Row/column drags follow the same Excel rule as cell drags: the active
+    // cell lands on the drag ORIGIN row/column (A2 for rows 2:4), and the far
+    // end becomes the Shift+Arrow pivot. rangeSelection would flatten the kind,
+    // so the kind travels with the callback.
+    if (!suppressSelection && dragOrigin?.type === 'row' && this.selectionKind === 'row' && this.selectedRange !== undefined) {
+      const origin = { r: dragOrigin.r, c: 0 };
+      const end = { r: dragOrigin.r === this.selectedRange.r1 ? this.selectedRange.r2 : this.selectedRange.r1, c: 0 };
+      this.setSelection(this.selectedRange, 'row', origin);
+      this.opts.onSelectionChange?.(this.selectedRange, origin, end, 'row');
+    }
+    if (!suppressSelection && dragOrigin?.type === 'column' && this.selectionKind === 'column' && this.selectedRange !== undefined) {
+      const origin = { r: 0, c: dragOrigin.c };
+      const end = { r: 0, c: dragOrigin.c === this.selectedRange.c1 ? this.selectedRange.c2 : this.selectedRange.c1 };
+      this.setSelection(this.selectedRange, 'column', origin);
+      this.opts.onSelectionChange?.(this.selectedRange, origin, end, 'column');
     }
     this.dragAnchor = null;
   };

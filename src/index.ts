@@ -79,6 +79,11 @@ export { NamedRangeService } from './namedrange/NamedRangeService';
 export type { NamedRangeDef } from './namedrange/types';
 export { hashPassword, protectSheet, unprotectSheet, verifyPassword } from './protection/SheetProtection';
 export type { SheetProtectionState } from './protection/SheetProtection';
+// IndexedDB persistence: hosts that seed initial data (options.data/options.sheets)
+// opt the SDK out of its own restore — they can still read the last autosave
+// and apply it themselves.
+export { loadWorkbook } from './db/WorkbookDB';
+export { DEFAULT_ID } from './db/WorkbookDB';
 
 export class Spreadsheet extends SpreadsheetImpl {
   public constructor(root: HTMLElement | string, options: SpreadsheetOptions = {}) {

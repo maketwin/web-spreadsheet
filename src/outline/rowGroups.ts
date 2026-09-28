@@ -12,8 +12,10 @@ import type { Store } from '../store/Store';
  * undoable in this version (matches 隐藏行 semantics).
  */
 
-function coveredGroups(groups: readonly RowGroupDef[], r: number): RowGroupDef | undefined {
-  return groups.find((g) => g.start <= r && g.end >= r);
+/** All groups intersecting the [r1, r2] row span — collapse/expand act on the
+ *  selection, so a collapsed group stays reachable via its visible neighbours. */
+function intersectingGroups(groups: readonly RowGroupDef[], r1: number, r2: number): RowGroupDef[] {
+  return groups.filter((g) => g.start <= r2 && g.end >= r1);
 }
 
 export function applyGroupRows(store: Store, r1: number, r2: number): void {
@@ -36,27 +38,37 @@ export function applyUngroupRows(store: Store, r1: number, r2: number): void {
   store.setRowGroups(store.getRowGroups().filter((g) => g.end < r1 || g.start > r2));
 }
 
-export function applyCollapseGroup(store: Store, r: number): void {
-  const target = coveredGroups(store.getRowGroups(), r);
-  if (target === undefined) {
-    message.info('活动单元格不在任何行组内');
+export function applyCollapseGroup(store: Store, r1: number, r2: number): void {
+  const targets = intersectingGroups(store.getRowGroups(), r1, r2);
+  if (targets.length === 0) {
+    message.info('选区不在任何行组内');
     return;
   }
-  for (let r0 = target.start; r0 <= target.end; r0 += 1) {
-    const meta = store.getRow(r0);
-    store.setRow(r0, { ...meta, hide: true });
-  }
+  // One coalesced store event for the whole span instead of one per row —
+  // formula recalc and rendering must not see thousands of half-updated states.
+  store.batch(() => {
+    for (const target of targets) {
+      for (let r0 = target.start; r0 <= target.end; r0 += 1) {
+        const meta = store.getRow(r0);
+        store.setRow(r0, { ...meta, hide: true });
+      }
+    }
+  });
 }
 
-export function applyExpandGroup(store: Store, r: number): void {
-  const target = coveredGroups(store.getRowGroups(), r);
-  if (target === undefined) {
-    message.info('活动单元格不在任何行组内');
+export function applyExpandGroup(store: Store, r1: number, r2: number): void {
+  const targets = intersectingGroups(store.getRowGroups(), r1, r2);
+  if (targets.length === 0) {
+    message.info('选区不在任何行组内');
     return;
   }
-  for (let r0 = target.start; r0 <= target.end; r0 += 1) {
-    const meta = store.getRow(r0);
-    // 注意：展开会取消组内所有行的隐藏标记——包括被筛选器隐藏的行（Excel 同样如此）。
-    store.setRow(r0, { ...meta, hide: false });
-  }
+  store.batch(() => {
+    for (const target of targets) {
+      for (let r0 = target.start; r0 <= target.end; r0 += 1) {
+        const meta = store.getRow(r0);
+        // 注意：展开会取消组内所有行的隐藏标记——包括被筛选器隐藏的行（Excel 同样如此）。
+        store.setRow(r0, { ...meta, hide: false });
+      }
+    }
+  });
 }
