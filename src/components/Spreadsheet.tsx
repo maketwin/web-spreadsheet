@@ -2,38 +2,33 @@ import { Button, ColorPicker, Divider, Dropdown, Form, Input, Modal, Select, Spa
 import { DownOutlined, AlignCenterOutlined, AlignLeftOutlined, AlignRightOutlined, BgColorsOutlined, BoldOutlined, BorderBottomOutlined, BorderInnerOutlined, BorderLeftOutlined, BorderOuterOutlined, BorderRightOutlined, BorderTopOutlined, ClearOutlined, ColumnHeightOutlined, FontColorsOutlined, FormatPainterOutlined, ItalicOutlined, LockOutlined, SelectOutlined, UnderlineOutlined, StrikethroughOutlined, ZoomInOutlined, ZoomOutOutlined, TableOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, MergeCellsOutlined } from '@ant-design/icons';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
-import { useCallback, useEffect, useRef, useState, type Dispatch, type FC, type KeyboardEvent as ReactKeyboardEvent, type RefObject, type SetStateAction } from 'react';
-import { applyMatrix, clearRange, clearRangeCmd, CompositeCommand } from '../util/rangeValues';
+import { useCallback, useEffect, useRef, useState, type Dispatch, type FC, type RefObject, type SetStateAction } from 'react';
+import { applyMatrix, clearRange } from '../util/rangeValues';
 import { fillSelectionPatches } from '../fill/fillSelection';
 import { openHyperlink } from '../util/hyperlink';
-import { repeatOnRange } from '../commands/repeat';
+
 import { useMultiSelection } from './hooks/useMultiSelection';
 import { useClipboardSession } from './hooks/useClipboardSession';
 import type { Command } from '../commands/Command';
 import type { DialogName } from './menu/types';
 import { CommandManager } from '../commands/CommandManager';
-import { SetCellText } from '../commands/impl/SetCellText';
+
 import { hashPassword } from '../util/passwordHash';
 import { SetRangeStyleCommand } from '../commands/impl/SetRangeStyle';
-import { SetRangeBorderCommand, type BorderPreset, type BorderLine } from '../commands/impl/SetRangeBorder';
+import { type BorderPreset } from '../commands/impl/SetRangeBorder';
 import { SetRangeValues } from '../commands/impl/SetRangeValues';
 import { EventBus } from '../events/EventBus';
 import { FormulaEngine } from '../formula/FormulaEngine';
 import { isSingleMergeSelection, mergeSelection } from './mergeActions';
-import { isExactlyOneMerge, moveDirection, resolveArrowTarget, resolveEditAnchor, snapClickSelection, snapRangeSelection } from '../selection/mergeSnap';
-import { sameRange, skipHiddenCells } from '../selection/visibleStep';
-import { KeyboardHandler, type MenuShortcutCommand } from '../keys/KeyboardHandler';
+import { resolveEditAnchor, snapClickSelection, snapRangeSelection } from '../selection/mergeSnap';
 import type { FindMatch } from '../find/FindReplaceService';
 import { PluginManager, type Plugin } from '../plugin/PluginManager';
-import { CanvasRenderer, COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS, type CellAddress, type FormulaRefHighlight } from '../renderer/CanvasRenderer';
+import { CanvasRenderer, COL_WIDTH, TOTAL_COLS, TOTAL_ROWS, type CellAddress, type FormulaRefHighlight } from '../renderer/CanvasRenderer';
 import { FillRangeCommand } from '../commands/impl/FillRange';
 import { adjustDecimalPlaces } from '../format/decimalPlaces';
-import { CreateChartCommand } from '../commands/impl/CreateChart';
 import { RemoveChartCommand } from '../commands/impl/RemoveChart';
 import { SetChartAnchorCommand } from '../commands/impl/SetChartAnchor';
-import { AddImageCommand, RemoveImageCommand, SetImageAnchorCommand } from '../commands/impl/ImageObject';
-import { SetRowsHiddenCommand, SetColsHiddenCommand } from '../commands/impl/SetHidden';
-import { SetSparklineCommand } from '../commands/impl/SetSparkline';
+import { RemoveImageCommand, SetImageAnchorCommand } from '../commands/impl/ImageObject';
 import { makeMoveRange } from '../commands/commandFactories';
 import { SetColWidth } from '../commands/impl/SetColWidth';
 import { SetRowHeight } from '../commands/impl/SetRowHeight';
@@ -46,8 +41,7 @@ import { Store, type SheetInfo } from '../store/Store';
 import { applyStoredTheme, setTheme, type Theme } from '../theme';
 import { DataValidationService } from '../validation/DataValidationService';
 import { protectSheet, unprotectSheet, verifyPassword } from '../protection/SheetProtection';
-import { cellFromText, cellId, cellIdCoords, formulaDependencies, formulaText, normalizeCellInput, type CellInput as CellDataInput } from '../util/cell';
-import { num2alpha } from '../util/alphabet';
+import { cellId, formulaDependencies, formulaText, normalizeCellInput, type CellInput as CellDataInput } from '../util/cell';
 import { cellSelection, columnSelection, extendSelection, rangeSelection, rowSelection, sheetSelection, type Selection, type SelectionKind } from '../selection/Selection';
 import { CellContextMenu, HeaderContextMenu } from './ContextMenu';
 import { PasteSpecialDialog } from './PasteSpecialDialog';
@@ -57,24 +51,24 @@ import { StatusBar } from './StatusBar';
 import { FormulaBar, type FormulaBarHandle } from './FormulaBar';
 import { MoveOrCopySheetDialog } from './menu/dialogs/MoveOrCopySheetDialog';
 import { MenuBar, allSheetRange } from './menu/MenuBar';
-import { excelSelectAll, edgeJump, currentRegion } from '../selection/currentRegion';
-import { parseNameBoxInput } from '../selection/nameBox';
-import { toggleAutoFilterCommand } from '../filter/toggleFilter';
 import { FloatingChart } from '../charts/FloatingChart';
 import { FloatingImage } from '../charts/FloatingImage';
-import { CHART_DEFAULT_H, CHART_DEFAULT_W, CHART_MIN_H, CHART_MIN_W, type ChartAnchor, type ChartType } from '../charts/types';
-import { normalizeAnchor } from '../charts/geometry';
-import type { SparklineType } from '../sparkline/types';
 import { FilterDropdown } from './FilterDropdown';
 import { startAutoSave } from '../db/autoSave';
 import { loadWorkbook, DEFAULT_ID, saveWorkbook as saveToDB } from '../db/WorkbookDB';
 import type { Cell, Style, RichTextRun } from '../types';
-import { autoFitRowHeight, autofitRowHeights } from '../util/rowAutofit';
+import { autoFitRowHeight } from '../util/rowAutofit';
+import { num2alpha } from '../util/alphabet';
 import { DEFAULT_FONT_SIZE } from '../util/defaults';
-import { fillShortcut } from '../fill/fillShortcut';
 import { endsWithRef, isPointTrigger, upsertRef } from '../formula/pointMode';
 import type { RichEditorApi } from './RichEditor';
 import { EditorOverlay, caretOffsetAtClick, clampVal, type EditingCell } from './EditorOverlay';
+import { handleCanvasKeyDown, handleEndMode, type ViewState } from './keyboard';
+import {
+  applyRangeBorder, applyShortcutStyle, cellEditValue, commitFormulaValue, editorRunStyleIntercept, growRowsToContent,
+  jumpNameBox, setCellText, submitCreateChart, submitCreateImage, submitInsertSparkline,
+  unhideOrHideCols, unhideOrHideRows,
+} from './spreadsheetActions';
 import { applyRunStyle, applyTextChangeToRuns, charsAllHave, flattenRuns, isRich, normalizeRuns, runsFromText, type RunStylePatch } from '../util/richText';
 
 export { snapshotCells, buildSessionPasteValues, tilePlainCells, combineMultiRanges } from '../clipboard/session';
@@ -83,10 +77,8 @@ export type CellInput = CellDataInput;
 export interface SheetInput { readonly id?: string; readonly name: string; readonly data?: readonly (readonly CellInput[])[] }
 export interface SpreadsheetOptions { readonly data?: readonly (readonly CellInput[])[]; readonly sheets?: readonly SheetInput[]; readonly theme?: Theme | false }
 export interface SpreadsheetProps { readonly store: Store; readonly cmdManager?: CommandManager; readonly formulaEngine?: FormulaEngine; readonly theme?: Theme | false | undefined; readonly onClose?: () => void }
-interface ViewState { readonly zoom: number; readonly showFormula: boolean; readonly showGrid: boolean; readonly frozenRows: number; readonly frozenCols: number }
 interface FilterPopupState { readonly r: number; readonly c: number; readonly x: number; readonly y: number }
 /** Module-level hook the active instance registers so applyShortcutStyle can offer run-level styling to the open cell editor. */
-const editorRunStyleIntercept: { current: ((style: Partial<Style>) => boolean) | null } = { current: null };
 type SpreadsheetContextMenu =
   | { readonly kind: 'cell'; readonly x: number; readonly y: number; readonly r: number; readonly c: number }
   | { readonly kind: 'row'; readonly index: number; readonly count: number; readonly x: number; readonly y: number }
@@ -642,7 +634,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
           return;
         }
         if (handleEndMode(e, selectedRef.current, store, endModeRef, selectSelection, selectRange)) return;
-        handleCanvasKeyDown(e, selectedRef.current, store, cmdManager, startEditing, selectSelection, selectRange, setView, setFindDialogOpen, runClipboard, clearClipboardSession, execCmd, view.frozenRows, view.frozenCols, view.zoom, () => setMulti([]), () => multiRef.current);
+        handleCanvasKeyDown(e, selectedRef.current, { store, cmdManager, startEditing, selectSelection, selectRange, setView, setFindDialog: setFindDialogOpen, runClipboard, clearClipboardSession, execCmd, frozenRows: view.frozenRows, frozenCols: view.frozenCols, zoom: view.zoom, clearMulti: () => setMulti([]), multiRanges: () => multiRef.current });
       }} onDoubleClick={(e) => {
         const cell = rendererRef.current?.cellAtPoint(e.clientX, e.clientY);
         if (cell == null) return;
@@ -860,149 +852,18 @@ export function createFormulaSync(store: Store, engine: FormulaEngine): { readon
 }
 
 /** Excel Ctrl+End target: bottom-right of the used range (any cell with content). */
-function lastUsedCell(store: Store): { readonly r: number; readonly c: number } {
-  let maxR = 0;
-  let maxC = 0;
-  for (const [id, cell] of store.getCells()) {
-    if (cell.text === '' && cell.formula === undefined) continue;
-    const coords = cellIdCoords(id);
-    if (coords === null) continue;
-    if (coords.r > maxR) maxR = coords.r;
-    if (coords.c > maxC) maxC = coords.c;
-  }
-  return { r: maxR, c: maxC };
-}
 
 /**
  * Excel End mode: pressing End arms it; the next plain arrow edge-jumps (like
  * Ctrl+arrow, Shift extends) and disarms. Any other key just disarms.
  * Returns true when the event was consumed.
  */
-function handleEndMode(
-  event: ReactKeyboardEvent<HTMLCanvasElement>,
-  selected: Selection | null,
-  store: Store,
-  endModeRef: { current: boolean },
-  selectSelection: (selection: Selection) => void,
-  selectRange: (range: RangeAddress) => void,
-): boolean {
-  if (event.key === 'End' && !event.ctrlKey && !event.metaKey) {
-    endModeRef.current = true;
-    event.preventDefault();
-    return true;
-  }
-  if (!endModeRef.current) return false;
-  endModeRef.current = false;
-  if (selected === null || event.ctrlKey || event.metaKey) return false;
-  const dirs: Record<string, { dr: number; dc: number }> = { ArrowUp: { dr: -1, dc: 0 }, ArrowDown: { dr: 1, dc: 0 }, ArrowLeft: { dr: 0, dc: -1 }, ArrowRight: { dr: 0, dc: 1 } };
-  const dir = dirs[event.key];
-  if (dir === undefined) return false;
-  event.preventDefault();
-  const target = edgeJump(store, selected.active, dir.dr, dir.dc, TOTAL_ROWS, TOTAL_COLS);
-  if (event.shiftKey) selectSelection(extendSelection(selected, target));
-  else selectRange(Range.single(target.r, target.c).toAddress());
-  return true;
-}
 
-function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selected: Selection | null, store: Store, cmdManager: CommandManager | undefined, startEditing: (cell: CellAddress, value?: string, editMode?: boolean) => void, selectSelection: (selection: Selection) => void, selectRange: (range: RangeAddress) => void, setView: Dispatch<SetStateAction<ViewState>>, setFindDialog: (name: DialogName | null) => void, runClipboard: (type: 'cut' | 'copy' | 'paste', range: RangeAddress) => void, clearClipboardSession: () => boolean, execCmd: (cmd: Command) => void, frozenRows = 0, frozenCols = 0, zoom = 100, clearMulti?: () => void, multiRanges?: () => readonly RangeAddress[]): void {
-  // Excel: Alt+= inserts an AutoSum formula for the column/row around the active cell.
-  if (event.altKey && (event.key === '=' || event.key === '＝')) {
-    if (selected === null) return;
-    event.preventDefault();
-    const active = selected.active;
-    startEditing({ r: active.r, c: active.c }, autoSumFormula(store, active.r, active.c), true);
-    return;
-  }
-  if (selected === null || event.altKey) return;
-  const range = selected.range;
-  const keyboardBase = event.shiftKey ? Range.single(selected.active.r, selected.active.c).toAddress() : range;
-  const action = KeyboardHandler.fromReactEvent(event, keyboardBase);
-  if (action === null) return;
-  event.preventDefault();
-  if (action.type === 'move' && action.range !== undefined && (event.key === 'Enter' || event.key === 'Tab') && (range.r1 !== range.r2 || range.c1 !== range.c2) && !isExactlyOneMerge(store, range)) {
-    // Excel: Enter/Tab walk the active cell through a multi-cell selection.
-    selectSelection(rangeSelection(range, selected.anchor, cycleActive(range, selected.active, event.key, event.shiftKey)));
-  }
-  else if (action.type === 'move' && action.range !== undefined && event.shiftKey) {
-    // Excel: shift+arrow extension also skips hidden rows/columns.
-    const { dr, dc } = moveDirection(range, action.range);
-    const visible = skipHiddenCells(store, Range.single(selected.active.r, selected.active.c).toAddress(), action.range, dr, dc);
-    clearMulti?.();
-    selectSelection(snapRangeSelection(store, extendSelection(selected, { r: visible.r1, c: visible.c1 })));
-  }
-  else if (action.type === 'move' && action.range !== undefined) {
-    clearMulti?.();
-    const { dr, dc } = moveDirection(range, action.range);
-    selectRange(moveArrowTarget(store, range, action.range, dr, dc));
-  }
-  else if (action.type === 'moveEdge') {
-    // Excel Ctrl+arrow: jump to the data-region edge; Shift extends the selection to it.
-    const target = edgeJump(store, selected.active, action.dr ?? 0, action.dc ?? 0, TOTAL_ROWS, TOTAL_COLS);
-    clearMulti?.();
-    if (event.shiftKey) selectSelection(extendSelection(selected, target));
-    else selectRange(Range.single(target.r, target.c).toAddress());
-  }
-  else if (action.type === 'jump') {
-    // Ctrl+Home: first unfrozen cell (Excel freeze-aware); Ctrl+End: last used cell.
-    clearMulti?.();
-    const target = action.jump === 'home' ? { r: frozenRows, c: frozenCols } : lastUsedCell(store);
-    if (event.shiftKey) selectSelection(extendSelection(selected, target));
-    else selectRange(Range.single(target.r, target.c).toAddress());
-  }
-  else if (action.type === 'fill' && action.fillDir !== undefined) { const op = fillShortcut(range, action.fillDir); if (op !== undefined) execCmd(op); }
-  else if (action.type === 'repeat') {
-    // Excel F4: replay the last command against the current selection.
-    const last = cmdManager?.getLastExecuted();
-    const rebound = last !== undefined ? repeatOnRange(last, range) : undefined;
-    if (rebound !== undefined) execCmd(rebound);
-  }
-  else if (action.type === 'fillSelection') {
-    // Excel Ctrl+Enter (no pending edit): re-enter the anchor cell's content across
-    // the selection (Excel's active cell stays at the anchor after Shift+arrows/drag).
-    const text = cellEditValue(store, selected.anchor);
-    const anchorCell = store.getCell(selected.anchor.r, selected.anchor.c);
-    applyMatrix(store, cmdManager, range.r1, range.c1, fillSelectionPatches(range, selected.anchor, text, anchorCell?.richText));
-  }
-  else if (action.type === 'selectColumn') { clearMulti?.(); selectSelection(columnSelection(selected.range.c2, TOTAL_ROWS, selected.range.c1)); }
-  else if (action.type === 'selectRow') { clearMulti?.(); selectSelection(rowSelection(selected.range.r2, TOTAL_COLS, selected.range.r1)); }
-  else if (action.type === 'edit') startEditing({ r: range.r1, c: range.c1 }, undefined, true);
-  else if (action.type === 'page' && action.pageDir !== undefined) {
-    // Excel: PageUp/PageDown move one screen (viewport rows at the current zoom).
-    const canvas = event.currentTarget;
-    const rows = Math.max(1, Math.floor((canvas.clientHeight - COL_HEADER_HEIGHT) / (ROW_HEIGHT * (zoom / 100))));
-    clearMulti?.();
-    const target = { r: clampVal(selected.active.r + action.pageDir * rows, 0, TOTAL_ROWS - 1), c: selected.active.c };
-    if (event.shiftKey) selectSelection(extendSelection(selected, target));
-    else selectRange(Range.single(target.r, target.c).toAddress());
-  }
-  else if (action.type === 'backspace') { clearRange(store, cmdManager, range); startEditing({ r: range.r1, c: range.c1 }, '', true); }
-  else if (action.type === 'insertDate') { const now = new Date(); setCellText(store, cmdManager, { r: range.r1, c: range.c1 }, `${now.getFullYear()}/${now.getMonth() + 1}/${now.getDate()}`); }
-  else if (action.type === 'clear') {
-    const extras = multiRanges?.() ?? [];
-    if (extras.length === 0) clearRange(store, cmdManager, range);
-    else execCmd(new CompositeCommand([clearRangeCmd(range), ...extras.map(clearRangeCmd)]));
-  }
-  // Excel: Esc cancels the clipboard session but never changes the selection.
-  else if (action.type === 'cancel') clearClipboardSession();
-  else if (action.type === 'type' && action.text !== undefined) { startEditing({ r: range.r1, c: range.c1 }, action.text); }
-  else if (action.type === 'menu' && action.command === 'selectAll') selectSelection(excelSelectAll(store, selected, TOTAL_ROWS, TOTAL_COLS));
-  else if (action.type === 'menu' && action.command !== undefined) handleMenuShortcut(action.command, store, cmdManager, range, selectRange, setView, setFindDialog, execCmd);
-  else if (action.type === 'copy' || action.type === 'cut' || action.type === 'paste') runClipboard(action.type, range);
-}
+function loadData(store: Store, cmd: CommandManager, formula: FormulaEngine, data: readonly (readonly CellInput[])[]): void { loadValues(cmd, data); syncExistingFormulas(store, formula); }
+function loadSheets(store: Store, cmd: CommandManager, formula: FormulaEngine, sheets: readonly SheetInput[]): void { sheets.forEach((sheet, index) => { const id = index === 0 ? store.getActiveSheetId() : store.addSheet(sheet.name); store.renameSheet(id, sheet.name); store.activateSheet(id); loadValues(cmd, sheet.data ?? []); syncExistingFormulas(store, formula); }); const first = store.getSheets()[0]; if (first !== undefined) store.activateSheet(first.id); }
+function loadValues(cmd: CommandManager, data: readonly (readonly CellInput[])[]): void { const values = data.map((row) => row.map(normalizeCellInput)); const maxCols = values.reduce((max, row) => Math.max(max, row.length), 0); if (values.length === 0 || maxCols === 0) return; cmd.execute(new SetRangeValues({ r1: 0, c1: 0, r2: values.length - 1, c2: maxCols - 1, values })); }
 
-function setCellText(store: Store, cmdManager: CommandManager | undefined, cell: CellAddress, text: string, runs?: RichTextRun[]): void {
-  if (cmdManager === undefined) {
-    const next = cellFromText(store.getCell(cell.r, cell.c), text);
-    if (runs !== undefined) next.richText = runs;
-    store.setCell(cell.r, cell.c, next);
-    return;
-  }
-  const cmd = new SetCellText({ r: cell.r, c: cell.c, text, richText: runs });
-  cmdManager.execute.bind(cmdManager)(cmd);
-}
-function cellEditValue(store: Store, cell: CellAddress): string { const current = store.getCell(cell.r, cell.c); return current?.formula ?? current?.text ?? ''; }
-function syncExistingFormulas(store: Store, engine: FormulaEngine): void { const sheetId = store.getActiveSheetId(); store.getCells().forEach(([id, cell]) => { const formula = formulaText(cell); if (formula !== undefined) engine.setFormula(id, formula, formulaDependencies(formula), sheetId); }); }
-function syncCellFormula(engine: FormulaEngine, r: number, c: number, cell: Cell | undefined, sheetId?: string): void { const formula = formulaText(cell); const id = cellId(r, c); if (formula === undefined) engine.removeFormula(id, sheetId); else engine.setFormula(id, formula, formulaDependencies(formula), sheetId); }
+/** Excel: rows grow to fit a just-applied font size / wrap. Direct write — see growRowsToContent note in MenuBar. */
 
 function deleteSheet(store: Store, id: string): void {
   // window.confirm is suppressed (auto-dismissed) in embedded browsers — use
@@ -1016,17 +877,15 @@ function deleteSheet(store: Store, id: string): void {
     onOk: () => store.deleteSheet(id),
   });
 }
-function loadData(store: Store, cmd: CommandManager, formula: FormulaEngine, data: readonly (readonly CellInput[])[]): void { loadValues(cmd, data); syncExistingFormulas(store, formula); }
-function loadSheets(store: Store, cmd: CommandManager, formula: FormulaEngine, sheets: readonly SheetInput[]): void { sheets.forEach((sheet, index) => { const id = index === 0 ? store.getActiveSheetId() : store.addSheet(sheet.name); store.renameSheet(id, sheet.name); store.activateSheet(id); loadValues(cmd, sheet.data ?? []); syncExistingFormulas(store, formula); }); const first = store.getSheets()[0]; if (first !== undefined) store.activateSheet(first.id); }
-function loadValues(cmd: CommandManager, data: readonly (readonly CellInput[])[]): void { const values = data.map((row) => row.map(normalizeCellInput)); const maxCols = values.reduce((max, row) => Math.max(max, row.length), 0); if (values.length === 0 || maxCols === 0) return; cmd.execute(new SetRangeValues({ r1: 0, c1: 0, r2: values.length - 1, c2: maxCols - 1, values })); }
 
-/** Excel: rows grow to fit a just-applied font size / wrap. Direct write — see growRowsToContent note in MenuBar. */
-function growRowsToContent(store: Store, range: RangeAddress): void {
-  for (const { r, height } of autofitRowHeights(store, range)) {
-    const meta = store.getRow(r);
-    store.setRow(r, { ...meta, height });
-  }
-}
+function dispatchThemeChanged(): void { window.dispatchEvent(new CustomEvent('ss:theme-changed')); }
+
+function syncExistingFormulas(store: Store, engine: FormulaEngine): void { const sheetId = store.getActiveSheetId(); store.getCells().forEach(([id, cell]) => { const formula = formulaText(cell); if (formula !== undefined) engine.setFormula(id, formula, formulaDependencies(formula), sheetId); }); }
+
+function syncCellFormula(engine: FormulaEngine, r: number, c: number, cell: Cell | undefined, sheetId?: string): void { const formula = formulaText(cell); const id = cellId(r, c); if (formula === undefined) engine.removeFormula(id, sheetId); else engine.setFormula(id, formula, formulaDependencies(formula), sheetId); }
+
+
+
 
 function menuBarProps(store: Store, cmdManager: CommandManager | undefined, selected: Selection | null, selectRange: (range: RangeAddress) => void, allRange: () => void, onClose: (() => void) | undefined, applyRunStyleToEditor: (style: Partial<Style>) => boolean): React.ComponentProps<typeof MenuBar> {
   const range = selected?.range ?? null;
@@ -1039,81 +898,10 @@ function withClose<T extends Omit<React.ComponentProps<typeof MenuBar>, 'closeDe
 }
 
 /** Excel: Enter/Tab cycle the active cell through a multi-cell selection (Shift reverses). */
-function cycleActive(range: RangeAddress, active: { readonly r: number; readonly c: number }, key: 'Enter' | 'Tab', shiftKey: boolean): { r: number; c: number } {
-  let { r, c } = active;
-  const d = shiftKey ? -1 : 1;
-  if (key === 'Enter') {
-    r += d;
-    if (r > range.r2) { r = range.r1; c += 1; }
-    if (r < range.r1) { r = range.r2; c -= 1; }
-    if (c > range.c2) c = range.c1;
-    if (c < range.c1) c = range.c2;
-  } else {
-    c += d;
-    if (c > range.c2) { c = range.c1; r += 1; }
-    if (c < range.c1) { c = range.c2; r -= 1; }
-    if (r > range.r2) r = range.r1;
-    if (r < range.r1) r = range.r2;
-  }
-  return { r, c };
-}
 
 /** Excel Alt+=: SUM over the contiguous numbers above the active cell, else to its left. */
-function autoSumFormula(store: Store, r: number, c: number): string {
-  const numericAt = (rr: number, cc: number): boolean => {
-    const cell = store.getCell(rr, cc);
-    if (cell === undefined) return false;
-    return typeof cell.value === 'number' || (cell.text.trim() !== '' && !Number.isNaN(Number(cell.text)));
-  };
-  let top = r - 1;
-  while (top >= 0 && numericAt(top, c)) top -= 1;
-  if (top < r - 1) return `=SUM(${num2alpha(c)}${top + 2}:${num2alpha(c)}${r})`;
-  let left = c - 1;
-  while (left >= 0 && numericAt(r, left)) left -= 1;
-  if (left < c - 1) return `=SUM(${num2alpha(left + 1)}${r + 1}:${num2alpha(c - 1)}${r + 1})`;
-  return '=SUM()';
-}
 
-function switchSheet(store: Store, delta: 1 | -1): void {
-  const sheets = store.getSheets();
-  if (sheets.length < 2) return;
-  const index = sheets.findIndex((sheet) => sheet.id === store.getActiveSheetId());
-  const next = sheets[(index + delta + sheets.length) % sheets.length];
-  if (next !== undefined) store.activateSheet(next.id);
-}
 
-function handleMenuShortcut(command: MenuShortcutCommand, store: Store, cmdManager: CommandManager | undefined, selected: RangeAddress, selectRange: (range: RangeAddress) => void, setView: Dispatch<SetStateAction<ViewState>>, setFindDialog: (name: DialogName | null) => void, execCmd: (cmd: Command) => void): void {
-  const openDialog = (name: DialogName): void => { setFindDialog(null); queueMicrotask(() => setFindDialog(name)); };
-  const map: Record<MenuShortcutCommand, () => void> = { save: () => saveToLocal(store), find: () => openDialog('find'), replace: () => openDialog('replace'), selectAll: () => selectRange(allSheetRange()), bold: () => applyShortcutStyle(store, cmdManager, selected, { bold: true }), italic: () => applyShortcutStyle(store, cmdManager, selected, { italic: true }), underline: () => applyShortcutStyle(store, cmdManager, selected, { underline: true }), zoom100: () => setView((current) => ({ ...current, zoom: 100 })), zoomIn: () => setView((current) => ({ ...current, zoom: Math.min(200, current.zoom + 10) })), zoomOut: () => setView((current) => ({ ...current, zoom: Math.max(50, current.zoom - 10) })), undo: () => cmdManager?.undo(), redo: () => cmdManager?.redo(), formatCells: () => openDialog('numberFormat'), nextSheet: () => switchSheet(store, 1), prevSheet: () => switchSheet(store, -1), toggleFilter: () => { const cmd = toggleAutoFilterCommand(store, selected); if (cmd !== null) execCmd(cmd); } };
-  map[command]();
-}
-function applyShortcutStyle(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress, style: Partial<Style>): void {
-  // Excel: run-level style keys with a cell editor open + text selection apply
-  // to the selected characters of the draft instead of the cells.
-  if (editorRunStyleIntercept.current?.(style) === true) return;
-  const cmd = new SetRangeStyleCommand({ ...range, style });
-  if (cmdManager === undefined) cmd.execute.bind(cmd)(store);
-  else cmdManager.execute.bind(cmdManager)(cmd);
-}
-function applyRangeBorder(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress, preset: BorderPreset, line: BorderLine = 'solid'): void { const cmd = new SetRangeBorderCommand({ ...range, preset, line }); if (cmdManager === undefined) cmd.execute(store); else cmdManager.execute(cmd); }
-function saveToLocal(store: Store): void { void saveToDB(DEFAULT_ID, store.serialize()).then(() => message.success('已保存到 IndexedDB')); }
-function dispatchThemeChanged(): void { window.dispatchEvent(new CustomEvent('ss:theme-changed')); }
-function commitFormulaValue(selected: Selection | null, value: string, store: Store, cmdManager: CommandManager | undefined, runs?: readonly RichTextRun[]): void {
-  if (selected === null) return;
-  if (store.isSheetProtected()) { message.warning('工作表已保护，无法编辑'); return; }
-  const active = selected.active ?? { r: selected.range.r1, c: selected.range.c1 };
-  const rule = store.getValidationRule(active.r, active.c);
-  if (rule !== undefined) {
-    const result = new DataValidationService().validate(value, rule);
-    if (!result.valid) { message.warning(result.message ?? '输入值不符合验证规则'); return; }
-  }
-  if (value.startsWith('=')) {
-    setCellText(store, cmdManager, active, value);
-    return;
-  }
-  const normalized = runs !== undefined ? normalizeRuns([...runs]) : undefined;
-  setCellText(store, cmdManager, active, value, normalized ?? undefined);
-}
 
 /**
  * Excel arrow-key landing: hidden rows/columns are skipped in the step
@@ -1121,101 +909,24 @@ function commitFormulaValue(selected: Selection | null, value: string, store: St
  * merged cell remains one navigation stop — including when the step-out lands
  * on a hidden cell.
  */
-function moveArrowTarget(store: Store, current: RangeAddress, target: RangeAddress, dr: number, dc: number): RangeAddress {
-  const visible = skipHiddenCells(store, current, target, dr, dc);
-  if (sameRange(visible, current)) return current; // nothing visible ahead — Excel stays put
-  const merged = resolveArrowTarget(store, current, visible, dr, dc);
-  if (sameRange(merged, visible)) return merged;
-  const isSingle = merged.r1 === merged.r2 && merged.c1 === merged.c2;
-  return isSingle ? skipHiddenCells(store, current, merged, dr, dc) : merged;
-}
 
 /** 插入 → 图表: data range is the current selection; the object lands centered over the visible grid (Excel), selected. */
-function submitCreateChart(type: ChartType, title: string, store: Store, selected: Selection | null, execCmd: (cmd: Command) => void, renderer: CanvasRenderer | null, selectChart: (id: string) => void): void {
-  let sel = selected?.range ?? Range.single(0, 0).toAddress();
-  // Excel: a single-cell selection charts the surrounding contiguous data region.
-  if (sel.r1 === sel.r2 && sel.c1 === sel.c2) {
-    sel = currentRegion(store, { r: sel.r1, c: sel.c1 }, TOTAL_ROWS, TOTAL_COLS) ?? sel;
-  }
-  const cmd = new CreateChartCommand({
-    ...sel,
-    type,
-    title: title === '' ? undefined : title,
-    anchor: renderer !== null ? anchorCenteredInGrid(renderer) : undefined,
-  });
-  execCmd(cmd);
-  selectChart(cmd.chartId);
-}
 
 /** 插入 → 图片: anchored at the active cell, default size 4×6 cells, selected. */
-function submitCreateImage(src: string, name: string, selected: Selection | null, execCmd: (cmd: Command) => void, selectImage: (id: string) => void): void {
-  const active = selected?.active ?? { r: 0, c: 0 };
-  const anchor: ChartAnchor = {
-    from: { r: active.r, c: active.c, offX: 0, offY: 0 },
-    to: { r: Math.min(active.r + 6, TOTAL_ROWS - 1), c: Math.min(active.c + 3, TOTAL_COLS - 1), offX: 0, offY: 0 },
-  };
-  const cmd = new AddImageCommand({ spec: { id: '', name: name === '' ? '图片' : name, src, anchor } });
-  execCmd(cmd);
-  selectImage(cmd.imageId);
-}
 
 /** Excel inserts a new chart centered on the visible grid with the default 15×7.5cm size. */
-function anchorCenteredInGrid(renderer: CanvasRenderer): ChartAnchor {
-  const grid = renderer.gridClientRect();
-  const w = Math.max(CHART_MIN_W, Math.min(CHART_DEFAULT_W, grid.w - 8));
-  const h = Math.max(CHART_MIN_H, Math.min(CHART_DEFAULT_H, grid.h - 8));
-  const x = grid.x + Math.max(0, (grid.w - w) / 2);
-  const y = grid.y + Math.max(0, (grid.h - h) / 2);
-  return normalizeAnchor(renderer.anchorFromRect({ x, y, w, h }), TOTAL_ROWS, TOTAL_COLS);
-}
 
 /** 插入 → 迷你图: anchored at the active cell; returns false (dialog stays open) on a bad range. */
-function submitInsertSparkline(type: SparklineType, rangeInput: string, store: Store, selected: Selection | null, execCmd: (cmd: Command) => void): boolean {
-  const target = parseNameBoxInput(store, rangeInput);
-  if (target === null) { message.error('数据范围无效，请输入如 A1:E1 的引用'); return false; }
-  const anchor = selected?.active ?? { r: target.range.r1, c: target.range.c1 };
-  execCmd(new SetSparklineCommand({ ...target.range, type, targetRow: anchor.r, targetCol: anchor.c }));
-  return true;
-}
 
 /** Excel name box: jump to an A1 ref / range / defined name, switching sheets when prefixed. */
-function jumpNameBox(store: Store, input: string, selectRange: (range: RangeAddress) => void): void {
-  const target = parseNameBoxInput(store, input);
-  if (target === null) { message.error('引用或名称无效，示例：A1、B2:D5、Sheet2!A1'); return; }
-  if (target.sheetId !== null && target.sheetId !== store.getActiveSheetId()) store.activateSheet(target.sheetId);
-  selectRange(target.range);
-}
 
 /**
  * 隐藏行: hide the clicked span. 取消隐藏 (Excel): restores the hidden rows
  * covered by the header selection — to unhide, select across the collapsed
  * gap (or a wider span) and choose 取消隐藏, exactly like Excel.
  */
-function unhideOrHideRows(store: Store, execCmd: (cmd: Command) => void, r: number, count: number, hidden: boolean): void {
-  if (hidden) {
-    execCmd(new SetRowsHiddenCommand({ r1: r, r2: r + count - 1, hidden: true }));
-    return;
-  }
-  // Excel: 取消隐藏只作用于选区覆盖的隐藏行 — the header selection's address
-  // span already includes the collapsed gap, so restore hidden rows inside it.
-  let any = false;
-  for (let i = r; i < r + count; i += 1) if (store.getRow(i)?.hide === true) { any = true; break; }
-  if (!any) { message.info('选区内没有隐藏的行'); return; }
-  execCmd(new SetRowsHiddenCommand({ r1: r, r2: r + count - 1, hidden: false }));
-}
 
 /** 隐藏列 / 取消隐藏列: same selection-scoped unhide semantics as rows (Excel). */
-function unhideOrHideCols(store: Store, execCmd: (cmd: Command) => void, c: number, count: number, hidden: boolean): void {
-  if (hidden) {
-    execCmd(new SetColsHiddenCommand({ c1: c, c2: c + count - 1, hidden: true }));
-    return;
-  }
-  // Excel: 取消隐藏只作用于选区覆盖的隐藏列（同行语义）。
-  let any = false;
-  for (let i = c; i < c + count; i += 1) if (store.getCol(i)?.hide === true) { any = true; break; }
-  if (!any) { message.info('选区内没有隐藏的列'); return; }
-  execCmd(new SetColsHiddenCommand({ c1: c, c2: c + count - 1, hidden: false }));
-}
 
 
 const ProtectionModal: FC<{ readonly open: boolean; readonly onClose: () => void; readonly store: Store }> = ({ open, onClose, store }) => {

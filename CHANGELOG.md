@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Refactor
+
+- **Spreadsheet.tsx split phase 2 (1449 → 1160 lines)** — the canvas
+  keyboard dispatch (`handleCanvasKeyDown`/`handleEndMode`, dependency-
+  injected via `KeyboardContext`) and the ~20 pure spreadsheet actions
+  (AutoSum, menu shortcuts, chart/image/sparkline submits, name-box jump,
+  hide/unhide, last-used-cell, commitFormulaValue …) now live in
+  `components/keyboard.ts` and `components/spreadsheetActions.ts`, both
+  React-free and unit-testable. New `keyboard.test.ts` pins the key →
+  action routing (arrows/shift-extend/edge jumps, F2, printable seeding,
+  Delete, clipboard cut/paste, menu undo, Ctrl+;, Alt+=, Ctrl+D,
+  Ctrl/Shift+Space, End-mode arming/consumption) — 16 dispatch tests,
+  suite now 178 files / 1142 tests.
+
 ### Features
 
 - **Dynamic-array spill (P0-1)** — `SEQUENCE` / `FILTER` / `UNIQUE` / `SORT`
