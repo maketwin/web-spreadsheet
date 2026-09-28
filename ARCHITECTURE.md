@@ -20,7 +20,21 @@ web-spreadsheet is organized as a modern TypeScript spreadsheet SDK with a small
 
 ### Layer 1: Renderer / UI
 
-`src/renderer/` contains virtual scrolling, dirty-region tracking, and canvas painting. `src/components/` provides the React UI shell around the canvas, toolbar, bottom bar, editor, and menu.
+`src/renderer/` contains virtual scrolling, dirty-region tracking, and canvas painting. `src/components/` is the React UI shell around the canvas. After the EditorOverlay and Spreadsheet.tsx splits it is organized as:
+
+```text
+src/components/
+├── Spreadsheet.tsx         Orchestration root — state wiring, canvas gestures, dialog scheduling
+├── keyboard.ts             Key → action dispatch table (pure function, injected via KeyboardContext)
+├── spreadsheetActions.ts   Pure actions: AutoSum, menu shortcuts, chart/image/sparkline
+│                           submits, name-box jump, hide/unhide, commitFormulaValue …
+├── EditorOverlay.tsx       In-cell editor surface (plain / rich text / point mode)
+├── menu/                   MenuBar + dialog components
+├── hooks/                  useClipboardSession, useMultiSelection
+└── Toolbar / FormulaBar / BottomBar / StatusBar / ContextMenu / PrintPreview / …
+```
+
+`keyboard.ts` and `spreadsheetActions.ts` are React-free and unit-tested; `Spreadsheet.tsx` keeps only React wiring (handlers delegate into the two modules).
 
 ### Layer 2: Store / Formula / Events
 
@@ -52,6 +66,11 @@ web-spreadsheet is organized as a modern TypeScript spreadsheet SDK with a small
 - Store subscribers can observe low-level `StoreEvent` changes.
 - Themes can extend the CSS variable tokens under `src/theme/`.
 
+## Testing
+
+- **Unit** — vitest + jsdom (`test/`): 179 files / 1149 tests; `pnpm coverage` reports ≈92% on `src/`. Canvas paths use a stubbed 2D context; IndexedDB uses `fake-indexeddb`.
+- **E2E** — Playwright chromium (`e2e/`, `pnpm e2e`) for the interaction surfaces jsdom cannot reach: right-click context menus, row/column-header menus, the sheet-tab menu, hover submenus and the dialogs behind them. The config reuses a dev server on `:5199` when one is running, otherwise boots one for the run.
+
 ## File map
 
 | Path | Purpose |
@@ -60,8 +79,9 @@ web-spreadsheet is organized as a modern TypeScript spreadsheet SDK with a small
 | `src/commands/` | Command interface, command manager, undo/redo operations |
 | `src/formula/` | Parser, evaluator, registry, dependency graph, formula engine |
 | `src/renderer/` | Virtual scroller, dirty-region tracker, canvas renderer |
-| `src/components/` | React shell and user-facing UI components |
+| `src/components/` | React shell: Spreadsheet root, keyboard dispatch, pure actions, editor overlay, menu/dialogs, toolbar chrome |
 | `src/print/` | Print pipeline: used-range detection, page pagination, offscreen page painter, print DOM + `@page` injection |
 | `src/plugin/` | PluginManager, PluginAPI, public plugin contract |
 | `src/events/` | EventBus with direct and wildcard subscriptions |
 | `src/theme/` | CSS variables, light/dark theme utilities |
+| `e2e/` | Playwright e2e scripts (real-browser context menus, dialogs) |

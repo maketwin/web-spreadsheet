@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## v2.1.0 — 候选（未发布）
+
+> 发布要点：动态数组溢出（SEQUENCE/FILTER/UNIQUE/SORT/XLOOKUP 向量）、
+> antd 6 + React 19 升级、打印与查找替换重建、Excel 对齐大批量特性
+> （富文本、超链接、条件格式、名称管理器、行组、工作表保护、分列/去重）、
+> Playwright e2e 基建。对应 post-A+ 计划 M1 里程碑
+> （docs/plan/2026-09-28-post-a-plus-roadmap.md）。
 
 ### Testing
 
@@ -76,7 +82,7 @@
   `vite build` clean; browser smoke: canvas clicks, menu open, hover submenu,
   data-bar apply + paint all verified.
 
-### Fixes
+### Fixes (P0 回归与体验批)
 
 - **React 18.3 `findDOMNode` deprecation warning — diagnosed, dev-only.** The
   toolbar-mount console warning comes from the antd 5.29 dependency chain's

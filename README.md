@@ -1,9 +1,9 @@
 # web-spreadsheet
 
-![version](https://img.shields.io/badge/version-v1.5.0-brightgreen)
+![version](https://img.shields.io/badge/version-v2.0.0-brightgreen)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![typescript](https://img.shields.io/badge/TypeScript-strict%20%7C%20zero--any-3178c6)
-![tests](https://img.shields.io/badge/tests-748%20passed-brightgreen)
+![tests](https://img.shields.io/badge/tests-1149%20passed-brightgreen)
 
 A modern, lightweight TypeScript spreadsheet SDK — a canvas-rendered,
 Excel-compatible grid with a formula engine, full undo/redo, and a plugin
@@ -42,7 +42,8 @@ ss.mount();
 - Formula references shift along the fill (`$A$1` / `$A1` / `A$1` absolute semantics respected); cell styles carry over
 
 **Formula engine**
-- 32 built-in functions (SUM, AVERAGE, IF, VLOOKUP, INDEX/MATCH, date/time, text, …)
+- 76 built-in functions (SUM, AVERAGE, IF, VLOOKUP, XLOOKUP, INDEX/MATCH, SUBTOTAL, date/time, text, …)
+- Dynamic-array spill, Excel-365 style: `SEQUENCE` / `FILTER` / `UNIQUE` / `SORT` and multi-cell `XLOOKUP` results overflow into neighbouring cells (`#SPILL!` when blocked, auto-recovers)
 - Dependency graph with automatic recalculation
 - Cross-sheet references (`=Sheet2!A1`, `=SUM(Sheet2!A1:A5)`)
 
@@ -88,7 +89,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full breakdown.
 
 ```bash
 # Install (not yet on npm — install from git)
-# React 18+ is a peer dependency and must be installed in the host app.
+# React 18 or 19 is a peer dependency and must be installed in the host app.
 pnpm add react react-dom
 pnpm add github:maketwin/web-spreadsheet
 
@@ -107,7 +108,8 @@ The `Spreadsheet` facade accepts an element (or selector) plus options
 
 ```bash
 pnpm dev            # dev server with HMR
-pnpm test           # vitest — 748 tests, 119 files
+pnpm test           # vitest — 1149 tests, 179 files
+pnpm e2e            # Playwright (chromium) — context menus & dialogs in a real browser
 pnpm typecheck      # tsc --noEmit (strict, noUncheckedIndexedAccess)
 pnpm lint           # eslint
 pnpm build          # typecheck + library build (ESM/UMD + d.ts)
