@@ -47,7 +47,7 @@ export interface RichEditorProps {
   readonly ariaLabel?: string;
 }
 
-export function RichEditor({ initialRuns, css, cellStyle, initialSelection, editMode, registerApi, commit, cancel, onValueChange, onBlur, ariaLabel, onUpgradeEditMode }: RichEditorProps): JSX.Element {
+export function RichEditor({ initialRuns, css, cellStyle, initialSelection, editMode, registerApi, commit, cancel, onValueChange, onBlur, ariaLabel, onUpgradeEditMode }: RichEditorProps): React.JSX.Element {
   const rootRef = useRef<HTMLDivElement | null>(null);
   const composingRef = useRef(false);
   const runsRef = useRef<RichTextRun[]>([...initialRuns]);

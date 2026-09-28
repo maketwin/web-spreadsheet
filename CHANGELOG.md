@@ -2,9 +2,95 @@
 
 ## Unreleased
 
+### Dependencies
+
+- **React 18.3.1 → 19.3.0 (+ @types 19)** — the codebase was already on the
+  modern APIs (createRoot, no findDOMNode/render/UNSAFE lifecycles/defaultProps),
+  so the port is two global `JSX.Element` → `React.JSX.Element` annotations and
+  widening two `RefObject<T>` prop types for React 19's nullable
+  `useRef<T>(null)`. Full suite 176 files / 1117 tests green on React 19;
+  `tsc` and `vite build` clean; browser smoke (click / F2 / Esc-refocus /
+  arrows) verified. SDK peer range stays `react >= 18` — hosts on 18 keep
+  working.
+- **antd 5.29.3 → 6.6.5 (+ @ant-design/icons 5.6.1 → 6.3.4)** — the rc-\*
+  family moves to `@rc-component/*`, which also removes the React 18.3
+  `findDOMNode` deprecation warning at its source (zero occurrences in the
+  loaded module graph). App-side adaptations: `Dropdown overlayClassName` →
+  `classNames.root`, last `destroyOnClose` → `destroyOnHidden`; tests gained a
+  global jsdom env (`test/setupEnv.ts`) stubbing `ResizeObserver` (antd 6
+  popup alignment) and `matchMedia`, and one Select test no longer depends on
+  the removed `.ant-select-selector` internal node (antd 6 renders
+  `.ant-select-content`). Full suite 176 files / 1117 tests green; tsc and
+  `vite build` clean; browser smoke: canvas clicks, menu open, hover submenu,
+  data-bar apply + paint all verified.
+
 ### Fixes
 
-- **Hyperlink click** — plain click selects; Ctrl/Cmd+click opens (matches docs; no accidental navigate).
+- **React 18.3 `findDOMNode` deprecation warning — diagnosed, dev-only.** The
+  toolbar-mount console warning comes from the antd 5.29 dependency chain's
+  defensive fallback (rc-motion 2.9.5 / rc-resize-observer resolve a motion
+  child without a forwarded ref via `findDOMNode`); our own code calls it
+  nowhere, rc-select already avoids it, and rc-motion 2.9.5 is the latest
+  2.x — no fixed upgrade exists below antd 6. Production builds never
+  include it (verified: zero occurrences in `dist`), and it has no
+  functional effect; the clean removal path is the antd v6 upgrade.
+- **Corrupt autosave bricked the app on load (P0)** — `Store.replaceAll`
+  cleared the sheet maps BEFORE deserializing the incoming sheets, so a
+  corrupt autosave blob (sheet data missing `cells` — e.g. saved from a
+  half-dead HMR page) aborted the swap mid-way with `activeSheetId` still
+  pointing at a cleared sheet. The demo's restore `.catch` swallowed the
+  error and every later read threw `Unknown sheet: sheet-1` — a canvas
+  double-click crashed the React tree and the page went dead. `replaceAll`
+  now deserializes every sheet first and swaps atomically: corrupt data
+  throws with the live store untouched; `caretOffsetAtClick` additionally
+  degrades to caret 0 instead of crashing on a transiently broken store.
+- **Protected sheet edit entry (UX)** — with sheet protection on, F2 /
+  double-click / typing now refuse to open the cell editor outright (one
+  warning per attempt, Excel semantics) instead of opening it and rejecting
+  each keystroke on commit — which spammed one toast per character typed.
+  The commit-path guard remains as a backstop for protection enabled mid-edit.
+- **Editor Escape dropped grid focus (P0)** — after cancelling a cell edit with
+  Escape, focus fell to `<body>` (the unmounting textarea takes it with it):
+  arrows, F2 and undo stayed dead until the next canvas click. Cancel now
+  refocuses the canvas exactly like commit does, clearing `editingRef` first so
+  the refocus-blur cannot re-commit the cancelled draft through the editor's
+  blur-commit path. Covers the plain editor, the rich editor and the formula
+  bar's Escape (which also returns to the grid now). Regression-tested in
+  `Spreadsheet.test.tsx` (cell stays empty + `activeElement` is the canvas).
+- **Name box first-click select-all** — clicking into an already-focused name
+  box placed the caret mid-reference, so typing produced `Z7B774`-style garbage
+  refs. The first click into an unfocused name box now selects all (Excel
+  semantics); a second click positions the caret as before.
+- **Modal close freeze (P0)** — rc-motion leave animations can freeze in
+  embedded webviews (no `animationend`); a closed dialog left a full-viewport
+  `.ant-modal-wrap` swallowing every click until reload. Closed modal layers
+  now hide immediately via the same guard the dropdown fix uses
+  (`.ant-modal.ant-zoom-leave` / `.ant-modal-mask.ant-fade-leave` / wrap
+  `.ss-modal-leave-hide`, mirrored onto the wrap by a page script — engines
+  without `:has()` stay covered and re-open still works).
+- **Editor caret regression (P0)** — re-opening the same cell (F2 / double-click
+  after a committed edit) left the caret at position 0, so typing prepended
+  (`SUM(B2:B4)=`). Root cause: the caret guard key never reset on unmount.
+- **Hyperlink Ctrl/Cmd+click follow** — the follow navigates during mousedown,
+  but the trailing mouseup re-applied the clicked cell and stomped the target;
+  navigation now survives the mouseup (macOS: use Cmd+click — Ctrl+click is the
+  system right-click). The mouseup-suppress flag is scoped to a single gesture
+  (reset on the next mousedown), so a swallowed mouseup cannot leak into later
+  clicks. Dead `onHyperlinkClick` gesture option removed.
+- **Demo autosave restore** — the demo seeded `options.data`, which opts the
+  SDK out of its own restore; a refresh silently lost all edits while IndexedDB
+  held them. The demo now restores the last autosave itself (`loadWorkbook`
+  exported for hosts with the same need); restore failures are caught
+  (private-mode IndexedDB) and the undo stack is cleared across the restore
+  boundary, matching the SDK's own restore.
+- **Row/column drag origin** — dragging row headers 2:4 left the active cell on
+  the LAST row (formula bar showed A4); Excel puts it on the drag origin (A2).
+  `onSelectionChange` now carries the selection kind so row/column drags keep
+  their kind.
+- **Collapse/expand row groups by intersection** — after collapsing, the
+  member rows are invisible so "展开选区组" could never fire; it now acts on
+  every group intersecting the selection (Excel's outline `[+]` substitute),
+  emitting one coalesced store event (`store.batch`) instead of one per row.
 - **Hyperlink paste/fill** — session + system clipboard carry `hyperlink`; overwrite clears stale links; fill handle keeps links on straight copy; clipboard HTML uses `<a href>`.
 - **In-sheet link sheet names** — Excel-style `'O''Brien'!A1` apostrophe escaping.
 - **Comments UI removed** — context menu / dialog / red-triangle paint dropped (product: no comments).

@@ -143,8 +143,9 @@ describe('FilterDropdown', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '条件筛选' }));
     // Pick 包含 first: antd Input change before opening leaves the Select closed in jsdom.
-    fireEvent.mouseDown(document.querySelector('.ss-filter-dropdown__cond .ant-select-selector') as Element);
-    fireEvent.click(await screen.findByText('包含', { selector: '.ant-select-item-option-content' }));
+    // antd 6 dropped the inner `.ant-select-selector` node — target the root.
+    fireEvent.mouseDown(document.querySelector('.ss-filter-dropdown__cond .ant-select') as Element);
+    fireEvent.click(await screen.findByText('包含'));
     fireEvent.change(screen.getByPlaceholderText('值'), { target: { value: 'ali' } });
     const buttons = screen.getAllByRole('button', { name: /确\s*定/ });
     fireEvent.click(buttons[0]); // the condition editor's 确定

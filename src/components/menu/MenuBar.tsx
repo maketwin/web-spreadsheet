@@ -122,7 +122,7 @@ export const MenuBar: FC<MenuBarProps> = (props) => {
   };
   return <div className="ss-menu-bar" role="menubar" aria-orientation="horizontal" aria-label="Spreadsheet menu">
     <div className="ss-menu-strip">
-      {menus.map((menu) => <Dropdown key={menu.key} trigger={['click']} placement="bottomLeft" overlayClassName="ss-menu-dropdown"
+      {menus.map((menu) => <Dropdown key={menu.key} trigger={['click']} placement="bottomLeft" classNames={{ root: 'ss-menu-dropdown' }}
         open={openKey === menu.key}
         onOpenChange={(open) => setOpenKey(open ? menu.key : (current) => (current === menu.key ? null : current))}
         menu={{ items: menu.items, onClick: ({ key }) => menuClick(String(key)) }}>
@@ -544,8 +544,10 @@ function runDataAction(key: string, ctx: MenuContext, openDialog: (name: DialogN
   }
   if (key === 'data:groupRows' && ctx.selected !== null) applyGroupRows(ctx.store, ctx.selected.r1, ctx.selected.r2);
   if (key === 'data:ungroupRows' && ctx.selected !== null) applyUngroupRows(ctx.store, ctx.selected.r1, ctx.selected.r2);
-  if (key === 'data:collapseGroup' && ctx.activeCell !== null && ctx.activeCell !== undefined) applyCollapseGroup(ctx.store, ctx.activeCell.r);
-  if (key === 'data:expandGroup' && ctx.activeCell !== null && ctx.activeCell !== undefined) applyExpandGroup(ctx.store, ctx.activeCell.r);
+  // 折叠/展开作用于与选区相交的所有行组——折叠后组内行不可见，活动格
+  // 永远落在组外，只看活动格会让"展开"无从下手（Excel 由大纲条 [+] 承担）。
+  if (key === 'data:collapseGroup' && ctx.selected !== null) applyCollapseGroup(ctx.store, ctx.selected.r1, ctx.selected.r2);
+  if (key === 'data:expandGroup' && ctx.selected !== null) applyExpandGroup(ctx.store, ctx.selected.r1, ctx.selected.r2);
 }
 
 function reapplyAutoFilter(store: Store): void {

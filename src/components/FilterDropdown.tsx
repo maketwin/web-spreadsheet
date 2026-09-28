@@ -172,7 +172,7 @@ export const FilterDropdown: FC<FilterDropdownProps> = ({ store, cmdManagerExecu
     cond: FilterCondition,
     onChange: (next: FilterCondition | undefined) => void,
     removable: boolean,
-  ): JSX.Element => (
+  ): React.JSX.Element => (
     <div className="ss-filter-dropdown__cond-row">
       <Select
         size="small"

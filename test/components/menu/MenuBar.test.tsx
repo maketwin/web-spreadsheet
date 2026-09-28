@@ -1,8 +1,18 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MenuBar } from '../../../src/components/menu/MenuBar';
 import { Range } from '../../../src/selection/Range';
 import { Store } from '../../../src/store/Store';
+
+/** antd 6 popups (rc-trigger/CSSMotion) require matchMedia in jsdom. */
+function mockMatchMedia(): void {
+  vi.stubGlobal('matchMedia', (query: string): MediaQueryList => ({
+    matches: false, media: query, onchange: null,
+    addListener: vi.fn(), removeListener: vi.fn(),
+    addEventListener: vi.fn(), removeEventListener: vi.fn(),
+    dispatchEvent: vi.fn(),
+  }));
+}
 
 /** jsdom has no canvas implementation — stub the 2D context for the print preview. */
 function installCanvasContext(): void {
@@ -26,9 +36,11 @@ function installCanvasContext(): void {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe('MenuBar', () => {
+  beforeEach(() => { mockMatchMedia(); });
   it('renders 8 menu items', () => {
     render(<MenuBar store={new Store()} selected={Range.single(0, 0).toAddress()} selectRange={() => undefined} clearRange={() => undefined} allRange={() => undefined} />);
 

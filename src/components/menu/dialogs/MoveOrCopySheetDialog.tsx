@@ -34,7 +34,7 @@ export const MoveOrCopySheetDialog: FC<MoveOrCopySheetDialogProps> = ({
       onOk={() => { void form.validateFields().then(onSubmit); }}
       okText="确定"
       cancelText="取消"
-      destroyOnClose
+      destroyOnHidden
       afterOpenChange={(visible) => {
         if (visible) form.setFieldsValue({ beforeSheetId: 'end', createCopy: false });
       }}
