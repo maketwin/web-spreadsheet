@@ -1,4 +1,4 @@
-import { DEFAULT_ID, Spreadsheet, loadWorkbook } from '../src/index';
+import { DEFAULT_ID, Spreadsheet, deleteWorkbook, loadWorkbook } from '../src/index';
 
 const data = [
   [{ text: '产品' }, { text: 'Q1' }, { text: 'Q2' }, { text: 'Q3' }, { text: 'Q4' }, { text: '总计' }],
@@ -39,8 +39,40 @@ void loadWorkbook(DEFAULT_ID).then((saved) => {
   ss.cmdManager.clear();
 }).catch((err) => {
   // Private mode / blocked IndexedDB rejects; the seed table simply stays.
+  // Surface it visibly — a silent console error looks like the app ignoring
+  // the user's saved work.
   console.error('Failed to restore workbook from IndexedDB:', err);
+  showRestoreError();
 });
+
+/** 恢复失败提示条：说明现状并提供「清除本地存档并刷新」的自救动作。 */
+function showRestoreError(): void {
+  if (document.getElementById('ss-restore-error') !== null) return;
+  const bar = document.createElement('div');
+  bar.id = 'ss-restore-error';
+  bar.setAttribute('role', 'alert');
+  bar.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:3000;display:flex;gap:12px;align-items:center;padding:8px 16px;'
+    + 'background:#fff7e6;border-bottom:1px solid #ffd591;color:#874d00;font:13px "Segoe UI","Microsoft YaHei",sans-serif;';
+  const text = document.createElement('span');
+  text.style.flex = '1';
+  text.textContent = '本地自动存档读取失败，当前显示内置示例数据。';
+  const clear = document.createElement('button');
+  clear.type = 'button';
+  clear.textContent = '清除本地存档并刷新';
+  clear.style.cssText = 'padding:2px 10px;border:1px solid #ffd591;border-radius:4px;background:#ffffff;color:#874d00;cursor:pointer;';
+  clear.onclick = (): void => {
+    const reload = (): void => { window.location.reload(); };
+    deleteWorkbook(DEFAULT_ID).then(reload).catch(() => {
+      // The store itself may be unreadable — drop the whole database.
+      const req = indexedDB.deleteDatabase('web-spreadsheet');
+      req.onsuccess = reload;
+      req.onerror = reload;
+      req.onblocked = reload;
+    });
+  };
+  bar.append(text, clear);
+  document.body.append(bar);
+}
 
 const info = document.createElement('div');
 info.id = 'info';
