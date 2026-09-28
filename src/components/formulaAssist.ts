@@ -20,9 +20,12 @@ export interface AssistSignature {
 const PALETTE = ['#e67c73', '#33b679', '#7986cb', '#f4511e', '#039be5', '#8e24aa', '#c0ca33'];
 
 /** Strip string literals so quotes/commas inside text do not confuse the
- * paren scanner and reference regexes. */
+ * paren scanner and reference regexes. The mask keeps the literal's length
+ * (caret offsets stay valid) and its outer quotes (the scanner skips the
+ * whole literal), but replaces the content — quote-stuffing would make the
+ * scanner swallow real separators between adjacent literals. */
 function stripLiterals(value: string): string {
-  return value.replace(/"(?:[^"]|"")*"/g, (m) => '"'.repeat(m.length));
+  return value.replace(/"(?:[^"]|"")*"/g, (m) => `"${'_'.repeat(Math.max(0, m.length - 2))}"`);
 }
 
 function colToIndex(token: string): number {
