@@ -1,9 +1,9 @@
 # web-spreadsheet
 
-![version](https://img.shields.io/badge/version-v2.0.0-brightgreen)
+![version](https://img.shields.io/badge/version-v2.1.0-brightgreen)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![typescript](https://img.shields.io/badge/TypeScript-strict%20%7C%20zero--any-3178c6)
-![tests](https://img.shields.io/badge/tests-1149%20passed-brightgreen)
+![tests](https://img.shields.io/badge/tests-1201%20passed-brightgreen)
 
 A modern, lightweight TypeScript spreadsheet SDK — a canvas-rendered,
 Excel-compatible grid with a formula engine, full undo/redo, and a plugin

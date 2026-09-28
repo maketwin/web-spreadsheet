@@ -1,6 +1,6 @@
 # Changelog
 
-## v2.1.0 — 候选（未发布）
+## v2.1.0 — 2026-09-28
 
 > 发布要点：动态数组溢出（SEQUENCE/FILTER/UNIQUE/SORT/XLOOKUP 向量）、
 > antd 6 + React 19 升级、打印与查找替换重建、Excel 对齐大批量特性
