@@ -19,10 +19,13 @@ export interface PrintPagesResult {
 }
 
 /** Intersect the configured print area with the used range (invalid → used range). */
+const A1_RANGE_RE = /^[A-Za-z]{1,3}[1-9]\d*(:[A-Za-z]{1,3}[1-9]\d*)?$/;
 function resolvePrintArea(store: Store, sheetId: string, settings: PrintSettings): UsedRange {
   const base = usedRange(store, sheetId);
   const area = settings.printArea?.trim();
-  if (area === undefined || area === '') return base;
+  // util/cell.parseRange is forgiving (garbage collapses to A1) — validate the
+  // A1 shape first so an invalid print area falls back to the whole used range.
+  if (area === undefined || area === '' || !A1_RANGE_RE.test(area)) return base;
   try {
     const parsed = parseRange(area);
     const coords = [parsed.r1, parsed.c1, parsed.r2, parsed.c2];

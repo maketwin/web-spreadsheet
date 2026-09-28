@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Fixes
+
+- **Invalid print area collapsed to A1** — `util/cell.parseRange` is
+  forgiving (garbage resolves to {0,0}), so a typo like `not a range` in the
+  打印区域 input silently shrunk the printout to a single empty cell instead
+  of falling back to the used range. The pipeline now validates the A1 shape
+  before parsing; covered in the new PrintPipeline suite (19.5% → 97.7%:
+  per-page canvas sizing at print DPI, printArea intersect/clamp/fallback,
+  landscape band math, print DOM structure, @page rule, afterprint cleanup
+  idempotence, stale-DOM removal on reprint).
+
 ### Refactor
 
 - **Spreadsheet.tsx split phase 2 (1449 → 1160 lines)** — the canvas
