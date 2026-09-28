@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FillHandle } from '../../src/fill/FillHandle';
+import { FillHandle, selectionAfterFill } from '../../src/fill/FillHandle';
 import { COL_HEADER_HEIGHT, ROW_HEADER_WIDTH } from '../../src/renderer/coordinate';
 import type { RangeAddress } from '../../src/selection/Range';
 import type { VirtualScroller } from '../../src/renderer/VirtualScroller';
@@ -99,5 +99,36 @@ describe('FillHandle Ctrl tracking', () => {
   it('reports Ctrl not held for a plain drag', () => {
     const calls = drag({ r1: 0, c1: 0, r2: 0, c2: 0 }, 2, 0);
     expect(calls[0]![2]).toBe(false);
+  });
+});
+
+describe('selectionAfterFill (Excel: selection lands on the fill result)', () => {
+  it('a down fill extends the range with the pivot on the far edge', () => {
+    const next = selectionAfterFill({ r1: 0, c1: 0, r2: 2, c2: 0 }, { r1: 0, c1: 0, r2: 4, c2: 0 }, { r: 0, c: 0 });
+    expect(next).toEqual({ range: { r1: 0, c1: 0, r2: 4, c2: 0 }, active: { r: 0, c: 0 }, anchor: { r: 4, c: 0 } });
+  });
+
+  it('an up fill extends upward and pivots to the top edge', () => {
+    const next = selectionAfterFill({ r1: 2, c1: 0, r2: 4, c2: 0 }, { r1: 0, c1: 0, r2: 4, c2: 0 }, { r: 2, c: 0 });
+    expect(next).toEqual({ range: { r1: 0, c1: 0, r2: 4, c2: 0 }, active: { r: 2, c: 0 }, anchor: { r: 0, c: 0 } });
+  });
+
+  it('a right fill pivots to the right edge', () => {
+    const next = selectionAfterFill({ r1: 0, c1: 0, r2: 0, c2: 1 }, { r1: 0, c1: 0, r2: 0, c2: 4 }, { r: 0, c: 0 });
+    expect(next).toEqual({ range: { r1: 0, c1: 0, r2: 0, c2: 4 }, active: { r: 0, c: 0 }, anchor: { r: 0, c: 4 } });
+  });
+
+  it('keeps the active cell where it was (inside the source)', () => {
+    const next = selectionAfterFill({ r1: 0, c1: 0, r2: 2, c2: 1 }, { r1: 0, c1: 0, r2: 6, c2: 1 }, { r: 1, c: 1 });
+    expect(next?.active).toEqual({ r: 1, c: 1 });
+  });
+
+  it('a no-op fill (target equals source) leaves the selection untouched', () => {
+    expect(selectionAfterFill({ r1: 2, c1: 2, r2: 5, c2: 5 }, { r1: 2, c1: 2, r2: 5, c2: 5 }, { r: 2, c: 2 })).toBeUndefined();
+  });
+
+  it('falls back to the source top-left when no active cell is known', () => {
+    const next = selectionAfterFill({ r1: 3, c1: 1, r2: 4, c2: 1 }, { r1: 3, c1: 1, r2: 8, c2: 1 }, undefined);
+    expect(next?.active).toEqual({ r: 3, c: 1 });
   });
 });

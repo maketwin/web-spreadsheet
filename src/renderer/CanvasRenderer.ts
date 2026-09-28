@@ -17,7 +17,7 @@ export interface FormulaRefHighlight {
 import { TOTAL_ROWS, TOTAL_COLS, ROW_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, COL_HEADER_HEIGHT, type CellAddress, type HeaderHit, canvasPointToCell, canvasPointToHeader, canvasPointToColumn, canvasPointToRow, clamp, type CanvasTheme, readCanvasTheme, headerSelectionColor } from './coordinate';
 import { collectCellBorderEdges, edgesToPaintSegs, hasBorderOnEdge, strokeBorderSegs, type LogicalBorderEdge } from './BorderPainter';
 import { DirtyRegionTracker, type Rect } from './DirtyRegionTracker';
-import { FillHandle } from '../fill/FillHandle';
+import { FillHandle, selectionAfterFill } from '../fill/FillHandle';
 import { doubleClickFillTarget } from '../fill/dblclickFill';
 import { FreezeManager } from '../freeze/FreezeManager';
 import { ResizeHandler } from './ResizeHandler';
@@ -151,7 +151,7 @@ export class CanvasRenderer {
     this.resizeHandler = new ResizeHandler({ canvas: opts.canvas, scroller: this.scroller, store: opts.store, zoom: () => this.zoom(), onRowResize: opts.onRowResize, onColResize: opts.onColResize, onRowDblClick: opts.onRowDblClick, onColDblClick: opts.onColDblClick, invalidate: () => this.invalidateAll(), rowTopAt: (r) => this.cellVP(r, 0).y, colLeftAt: (c) => this.cellVP(0, c).x, frozenRows: () => this.freeze.getFrozenRows(), frozenCols: () => this.freeze.getFrozenCols() });
     // While ants replace the selection border the fill handle is hidden (Excel):
     // report no selection so its hit-test and crosshair cursor stay inactive.
-    this.fillHandle = new FillHandle({ canvas: opts.canvas, scroller: this.scroller, selectedRange: () => this.antsReplaceSelection(this.selectedRange) ? undefined : this.selectedRange, onFill: opts.onFill, invalidate: () => this.invalidateAll(), cellVP: (r, c) => this.cellVP(r, c), cellAtPoint: (x, y) => this.pointerCell(x, y) });
+    this.fillHandle = new FillHandle({ canvas: opts.canvas, scroller: this.scroller, selectedRange: () => this.antsReplaceSelection(this.selectedRange) ? undefined : this.selectedRange, onFill: (source, target, ctrlKey) => { opts.onFill?.(source, target, ctrlKey); this.selectAfterFill(source, target); }, invalidate: () => this.invalidateAll(), cellVP: (r, c) => this.cellVP(r, c), cellAtPoint: (x, y) => this.pointerCell(x, y) });
     this.unsubscribe = opts.store.subscribe((e: StoreEvent) => this.onStoreEvent(e));
     this.setupCanvas(); this.setupOverlay(); this.bindEvents(); this.invalidateAll();
   }
@@ -553,9 +553,19 @@ export class CanvasRenderer {
     // Excel: double-clicking the fill handle fills down to match adjacent columns.
     if (this.fillHandle.isHandleAt(ev.clientX, ev.clientY) && this.selectedRange !== undefined) {
       const target = doubleClickFillTarget(this.opts.store, this.selectedRange, TOTAL_ROWS);
-      if (target !== undefined) this.opts.onFill?.(this.selectedRange, target, false);
+      if (target !== undefined) { this.opts.onFill?.(this.selectedRange, target, false); this.selectAfterFill(this.selectedRange, target); }
     }
   };
+
+  /** Excel: after a fill the selection covers the fill result (source ∪ target).
+   * Reported through onSelectionChange so the React layer (name box / formula
+   * bar / next Shift+Arrow pivot) follows the filled area. */
+  private selectAfterFill(source: RangeAddress, target: RangeAddress): void {
+    const next = selectionAfterFill(source, target, this.activeCell);
+    if (next === undefined) return;
+    this.setSelection(next.range, 'range', next.active);
+    this.opts.onSelectionChange?.(next.range, next.active, next.anchor);
+  }
   /** Excel: wheel scrolls vertically, Shift+wheel horizontally; deltaMode lines (Firefox) scale to pixels. */
   private readonly handleWheel = (ev: WheelEvent): void => {
     ev.preventDefault();

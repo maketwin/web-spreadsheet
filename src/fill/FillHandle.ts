@@ -1,4 +1,4 @@
-import { COL_HEADER_HEIGHT, ROW_HEADER_WIDTH, TOTAL_COLS, TOTAL_ROWS } from '../renderer/CanvasRenderer';
+import { COL_HEADER_HEIGHT, ROW_HEADER_WIDTH, TOTAL_COLS, TOTAL_ROWS, type CellAddress } from '../renderer/CanvasRenderer';
 import type { VirtualScroller } from '../renderer/VirtualScroller';
 import type { RangeAddress } from '../selection/Range';
 
@@ -128,4 +128,24 @@ function normalizeFillTarget(source: RangeAddress, target: RangeAddress): RangeA
     r2: Math.max(source.r2, target.r2),
     c2: Math.max(source.c2, target.c2),
   };
+}
+
+/** Excel: after a fill the selection lands on the fill result (source ∪ target).
+ * The active cell stays in the source; the Shift+Arrow pivot (anchor) moves to
+ * the far edge the fill extended to. Undefined when the fill was a no-op
+ * (target equals the source) — then the selection is left untouched. */
+export function selectionAfterFill(source: RangeAddress, target: RangeAddress, active: CellAddress | undefined): { readonly range: RangeAddress; readonly active: CellAddress; readonly anchor: CellAddress } | undefined {
+  const range = {
+    r1: Math.min(source.r1, target.r1),
+    c1: Math.min(source.c1, target.c1),
+    r2: Math.max(source.r2, target.r2),
+    c2: Math.max(source.c2, target.c2),
+  };
+  if (range.r1 === source.r1 && range.r2 === source.r2 && range.c1 === source.c1 && range.c2 === source.c2) return undefined;
+  const act = active ?? { r: source.r1, c: source.c1 };
+  const anchor = {
+    r: target.r2 > source.r2 ? range.r2 : target.r1 < source.r1 ? range.r1 : act.r,
+    c: target.c2 > source.c2 ? range.c2 : target.c1 < source.c1 ? range.c1 : act.c,
+  };
+  return { range, active: act, anchor };
 }
