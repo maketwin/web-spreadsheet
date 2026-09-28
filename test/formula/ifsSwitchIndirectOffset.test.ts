@@ -3,7 +3,7 @@ import { FormulaParser } from '../../src/formula/parser';
 import { evaluate } from '../../src/formula/evaluator';
 import type { AstNode, CellResolver, FormulaValue } from '../../src/formula/types';
 
-function run(formula: string, cells: Record<string, FormulaValue> = {}, resolveName?: (name: string) => AstNode | null): FormulaValue | readonly FormulaValue[] {
+function run(formula: string, cells: Record<string, FormulaValue> = {}, resolveName?: (name: string) => AstNode | null): FormulaValue | readonly FormulaValue[] | import('../../src/formula/types').MatrixValue {
   const ast = new FormulaParser().parse(formula);
   expect(ast).not.toBeNull();
   const resolver: CellResolver = (x, y) => cells[`${x},${y}`] ?? null;

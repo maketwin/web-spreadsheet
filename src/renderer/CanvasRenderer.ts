@@ -1207,6 +1207,12 @@ export class CanvasRenderer {
     if (merged.bgcolor !== undefined) { this.ctx.fillStyle = merged.bgcolor; this.ctx.fillRect(x + 1, y + 1, cw - 2, rh - 2); }
     if (overlay.dataBar !== undefined) { this.paintDataBar(x, y, cw, rh, overlay.dataBar.ratio, overlay.dataBar.color); }
     if (overlay.icon !== undefined) { this.paintIconSetIcon(x, y, rh, overlay.icon.icons, overlay.icon.level); }
+    // Dynamic-array spill shadow: Excel paints the whole spilled range with a
+    // light accent tint; per-cell tint reads the same at v1.
+    if (this.opts.store.getCell(r, c)?.spillOf !== undefined) {
+      this.ctx.fillStyle = 'rgba(74, 144, 217, 0.10)';
+      this.ctx.fillRect(x + 1, y + 1, cw - 2, rh - 2);
+    }
   }
 
   /** Excel icon-set glyph at the left edge of the cell: arrows3 = ▲►▼, lights3 = ●●●. */

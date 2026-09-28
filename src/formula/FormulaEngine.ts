@@ -3,7 +3,8 @@ import { formulaDependencies, type NamedDepArea } from '../util/cell';
 import { DependencyGraph } from './dependency';
 import { evaluate } from './evaluator';
 import { FormulaParser } from './parser';
-import type { AstNode, FormulaArgument, FormulaValue } from './types';
+import { isMatrix, type AstNode, type FormulaArgument, type FormulaValue, type MatrixValue } from './types';
+import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
 import type { NamedRangeDef } from '../namedrange/types';
 
 export class FormulaEngine {
@@ -12,6 +13,14 @@ export class FormulaEngine {
   private readonly evalStack = new Set<string>();
   private formulas = new Map<string, string>();
   private parser = new FormulaParser();
+  /**
+   * Dynamic-array spill bookkeeping: anchor scopedId -> expected extent
+   * (bottom-right, INCLUSIVE of the anchor, recorded even while #SPILL!).
+   * A cell change landing inside an extent re-evaluates that anchor, which
+   * is how clearing a blocker recovers the spill and typing over a shadow
+   * collapses it.
+   */
+  private readonly spills = new Map<string, { readonly r2: number; readonly c2: number }>();
 
   constructor(private store: Store) {}
 
@@ -45,6 +54,12 @@ export class FormulaEngine {
     const scopedId = scopedKey(cellId, sheetId ?? this.store.getActiveSheetId());
     this.graph.clearDependencies(scopedId);
     this.formulas.delete(scopedId);
+    // A deleted/moved anchor takes its spill shadows with it.
+    const extent = this.spills.get(scopedId);
+    if (extent !== undefined) {
+      this.spills.delete(scopedId);
+      this.clearSpillShadows(scopedId, extent);
+    }
   }
 
   recalculate(scopedId: string): void {
@@ -67,7 +82,7 @@ export class FormulaEngine {
     if (this.evalStack.has(scopedId)) return;
     this.evalStack.add(scopedId);
     try {
-      const value = scalar(evaluate(
+      const raw: FormulaArgument = evaluate(
         ast,
         (x, y, sheetName) => this.resolveCell(x, y, sheetName, sheetId),
         (name) => this.resolveNamedRange(name, sheetId),
@@ -83,7 +98,9 @@ export class FormulaEngine {
             return this.store.getRow(row, sid)?.hide === true;
           },
         },
-      ));
+      );
+      if (isMatrix(raw)) { this.writeSpill(scopedId, sheetId, r, c, raw); return; }
+      const value = scalar(raw);
       const existing = this.store.getCell(r, c, sheetId);
       this.store.setCell(r, c, { ...existing, text: String(value ?? ''), value }, sheetId);
     } catch (err) {
@@ -115,6 +132,20 @@ export class FormulaEngine {
     }
 
     for (const id of affected) this.recalculate(id);
+
+    // Dynamic-array anchors: a change landing inside an expected spill extent
+    // (blocker typed in, blocker cleared, shadow overwritten) re-evaluates the
+    // anchor. recalculate's evalStack guard makes the anchor's own shadow
+    // writes a no-op; the idempotent spill writer makes the post-batch echo
+    // converge without writing again.
+    const here = parseCellId(cellId);
+    if (here !== null) {
+      for (const [anchor, extent] of this.spills) {
+        const { sheetId: anchorSheet, r: ar, c: ac } = parseScopedKey(anchor);
+        if (anchorSheet !== sid) continue;
+        if (here.r >= ar && here.r <= extent.r2 && here.c >= ac && here.c <= extent.c2) this.recalculate(anchor);
+      }
+    }
   }
 
   /** Unscoped references resolve against the formula's own sheet, not the active one. */
@@ -200,6 +231,95 @@ export class FormulaEngine {
     };
   }
 
+  /**
+   * Excel dynamic-array spill: write the matrix with its anchor at (r,c).
+   * Blocked targets (any non-empty cell that is not this anchor's own shadow)
+   * collapse the whole spill to `#SPILL!` on the anchor; the expected extent
+   * is still recorded so clearing the blocker recovers it. Fully idempotent:
+   * when every target already holds the exact result, nothing is written and
+   * no store event fires (this is what stops the batch-end echo loop).
+   */
+  private writeSpill(scopedId: string, sheetId: string, r: number, c: number, m: MatrixValue): void {
+    const r2 = r + m.rows - 1;
+    const c2 = c + m.cols - 1;
+    const overflow = r2 >= TOTAL_ROWS || c2 >= TOTAL_COLS;
+    const extent = { r2: Math.min(r2, TOTAL_ROWS - 1), c2: Math.min(c2, TOTAL_COLS - 1) };
+
+    // Retire the previous shadows first (values may shift anywhere in the box).
+    const prev = this.spills.get(scopedId);
+    if (prev !== undefined) this.clearSpillShadows(scopedId, prev);
+    this.spills.set(scopedId, extent);
+
+    const blocked = overflow || this.spillBlocked(sheetId, r, c, extent, scopedId);
+    if (blocked) {
+      const anchor = this.store.getCell(r, c, sheetId);
+      const err = '#SPILL!';
+      if (anchor?.text !== err) this.store.setCell(r, c, { ...anchor, text: err, value: err }, sheetId);
+      return;
+    }
+
+    // Idempotence probe: identical text/value/spillOf everywhere → skip writes.
+    let identical = true;
+    for (let y = r; y <= extent.r2 && identical; y += 1) {
+      for (let x = c; x <= extent.c2; x += 1) {
+        const idx = (y - r) * m.cols + (x - c);
+        const v = m.data[idx] ?? null;
+        const text = String(v ?? '');
+        const value = typeof v === 'object' ? text : v;
+        const cell = this.store.getCell(y, x, sheetId);
+        const isAnchor = y === r && x === c;
+        if (cell === undefined || cell.text !== text || cell.value !== value || cell.spillOf !== (isAnchor ? undefined : scopedId) || cell.formula !== (isAnchor ? this.formulas.get(scopedId) : undefined)) {
+          identical = false;
+          break;
+        }
+      }
+    }
+    if (identical) return;
+
+    this.store.batch(() => {
+      for (let y = r; y <= extent.r2; y += 1) {
+        for (let x = c; x <= extent.c2; x += 1) {
+          const idx = (y - r) * m.cols + (x - c);
+          const v = m.data[idx] ?? null;
+          const text = String(v ?? '');
+          const value = typeof v === 'object' ? text : v;
+          const isAnchor = y === r && x === c;
+          const existing = this.store.getCell(y, x, sheetId);
+          if (isAnchor) this.store.setCell(y, x, { ...existing, text, value }, sheetId);
+          else this.store.setCell(y, x, { text, value, spillOf: scopedId }, sheetId);
+        }
+      }
+    });
+  }
+
+  /** Any non-empty cell in the extent that is not this anchor's own shadow. */
+  private spillBlocked(sheetId: string, r: number, c: number, extent: { r2: number; c2: number }, scopedId: string): boolean {
+    for (let y = r; y <= extent.r2; y += 1) {
+      for (let x = c; x <= extent.c2; x += 1) {
+        if (y === r && x === c) continue;
+        const cell = this.store.getCell(y, x, sheetId);
+        if (cell === undefined) continue;
+        if (cell.spillOf === scopedId) continue;
+        if (cell.text === '' && cell.value === undefined) continue;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Remove this anchor's shadow cells (spillOf match) inside the extent. */
+  private clearSpillShadows(scopedId: string, extent: { r2: number; c2: number }): void {
+    const { sheetId, r, c } = parseScopedKey(scopedId);
+    this.store.batch(() => {
+      for (let y = r; y <= extent.r2; y += 1) {
+        for (let x = c; x <= extent.c2; x += 1) {
+          if (y === r && x === c) continue;
+          if (this.store.getCell(y, x, sheetId)?.spillOf === scopedId) this.store.setCell(y, x, undefined, sheetId);
+        }
+      }
+    });
+  }
+
   /** Cross-sheet dep keys use the canonical sheet name so `sheet2!A1` still recalcs. */
   private canonicalDep(dep: string): string {
     const colon = dep.indexOf(':');
@@ -244,6 +364,7 @@ function parseScopedKey(scopedId: string): { sheetId: string; r: number; c: numb
 
 function scalar(value: FormulaArgument): FormulaValue {
   if (isFormulaList(value)) return value[0] ?? null;
+  if (isMatrix(value)) return value.data[0] ?? null;
   return value;
 }
 

@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Features
+
+- **Dynamic-array spill (P0-1)** — `SEQUENCE` / `FILTER` / `UNIQUE` / `SORT`
+  now return a shaped matrix and a TOP-LEVEL matrix result spills into the
+  neighbouring cells Excel-365 style: shadows carry `spillOf` (anchor ref,
+  serialized with the workbook), any blocker collapses the spill to
+  `#SPILL!` with the expected extent still recorded — clearing the blocker
+  or deleting the anchor retracts/rewrites the shadows via the ordinary
+  cell-change recalc path; `XLOOKUP` with a multi-column/-row return array
+  spills the aligned vector. Inside expressions matrices flatten (SUM over
+  SEQUENCE nests), the spill writer is idempotent (no event echo loops) and
+  circular-recalc is guarded by the eval stack. Shadows render with a light
+  accent tint. v1 scope: FILTER/SORT/UNIQUE treat their input as a column.
+
 ### Dependencies
 
 - **React 18.3.1 → 19.3.0 (+ @types 19)** — the codebase was already on the

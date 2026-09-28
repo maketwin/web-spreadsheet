@@ -3,7 +3,7 @@ import { FormulaParser } from '../../src/formula/parser';
 import { evaluate } from '../../src/formula/evaluator';
 import type { CellResolver, FormulaValue } from '../../src/formula/types';
 
-function run(formula: string, cells: Record<string, FormulaValue> = {}): FormulaValue | readonly FormulaValue[] {
+function run(formula: string, cells: Record<string, FormulaValue> = {}): FormulaValue | readonly FormulaValue[] | import('../../src/formula/types').MatrixValue {
   const ast = new FormulaParser().parse(formula);
   expect(ast).not.toBeNull();
   const resolver: CellResolver = (x, y) => cells[`${x},${y}`] ?? null;
@@ -12,24 +12,26 @@ function run(formula: string, cells: Record<string, FormulaValue> = {}): Formula
 
 describe('UNIQUE', () => {
   it('dedupes case-insensitively and preserves first-seen order', () => {
-    expect(run('=UNIQUE(A1:A5)', { '0,0': 'a', '0,1': 'A', '0,2': 'b', '0,3': 1, '0,4': 'a' })).toEqual(['a', 'b', 1]);
+    const u = run('=UNIQUE(A1:A5)', { '0,0': 'a', '0,1': 'A', '0,2': 'b', '0,3': 1, '0,4': 'a' }) as unknown as { rows: number; cols: number; data: unknown[] };
+    expect(u.data).toEqual(['a', 'b', 1]);
+    expect(u.rows).toBe(3); expect(u.cols).toBe(1);
   });
 });
 
 describe('SORT', () => {
   it('sorts numbers before text, ascending by default', () => {
-    expect(run('=SORT(A1:A4)', { '0,0': 3, '0,1': 'b', '0,2': 1, '0,3': 'A' })).toEqual([1, 3, 'A', 'b']);
+    expect((run('=SORT(A1:A4)', { '0,0': 3, '0,1': 'b', '0,2': 1, '0,3': 'A' }) as unknown as { data: unknown[] }).data).toEqual([1, 3, 'A', 'b']);
   });
 
   it('supports descending order and rejects unknown order', () => {
-    expect(run('=SORT(A1:A3,-1)', { '0,0': 1, '0,1': 3, '0,2': 2 })).toEqual([3, 2, 1]);
+    expect((run('=SORT(A1:A3,-1)', { '0,0': 1, '0,1': 3, '0,2': 2 }) as unknown as { data: unknown[] }).data).toEqual([3, 2, 1]);
     expect(run('=SORT(A1:A3,5)', { '0,0': 1 })).toBe('#VALUE!');
   });
 });
 
 describe('FILTER', () => {
   it('picks values whose mask entry is truthy', () => {
-    expect(run('=FILTER(A1:A4,A1:A4>100)', { '0,0': 50, '0,1': 150, '0,2': 200, '0,3': 80 })).toEqual([150, 200]);
+    expect((run('=FILTER(A1:A4,A1:A4>100)', { '0,0': 50, '0,1': 150, '0,2': 200, '0,3': 80 }) as unknown as { data: unknown[] }).data).toEqual([150, 200]);
   });
 
   it('returns if_empty when nothing matches, #CALC! otherwise', () => {
@@ -40,8 +42,12 @@ describe('FILTER', () => {
 
 describe('SEQUENCE', () => {
   it('generates a row-major sequence with start/step', () => {
-    expect(run('=SEQUENCE(2,3,10,5)')).toEqual([10, 15, 20, 25, 30, 35]);
-    expect(run('=SEQUENCE(3)')).toEqual([1, 2, 3]);
+    const m = run('=SEQUENCE(2,3,10,5)') as unknown as { rows: number; cols: number; data: unknown[] };
+    expect(m.data).toEqual([10, 15, 20, 25, 30, 35]);
+    expect(m.rows).toBe(2); expect(m.cols).toBe(3);
+    const s3 = run('=SEQUENCE(3)') as unknown as { rows: number; cols: number; data: unknown[] };
+    expect(s3.data).toEqual([1, 2, 3]);
+    expect(s3.rows).toBe(3); expect(s3.cols).toBe(1);
   });
 
   it('rejects non-positive or fractional dimensions', () => {

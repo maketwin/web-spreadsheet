@@ -1,3 +1,4 @@
+import { isMatrix, matrix, type MatrixValue } from './types';
 import { registry } from './registry';
 import type { AstNode, CellResolver, FormulaArgument, FormulaValue } from './types';
 
@@ -311,7 +312,7 @@ function firstErrorIn(value: FormulaArgument): string | undefined {
     }
     return undefined;
   }
-  return errorValueOf(value);
+  return errorValueOf(scalar(value));
 }
 
 /**
@@ -389,7 +390,7 @@ function hlookup(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver
  * This build: exact (0) + wildcard (2); search first-to-last (1) or last-to-first (-1).
  * Multi-cell return arrays yield the aligned single cell (no spill).
  */
-function xlookup(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver, resolveName?: NamedRangeResolver, ctx?: EvalContext): FormulaValue {
+function xlookup(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver, resolveName?: NamedRangeResolver, ctx?: EvalContext): FormulaValue | MatrixValue {
   const [lookupArg, lookupArrArg, returnArrArg, ifNotFoundArg, matchModeArg, searchModeArg] = node.args;
   if (lookupArg === undefined || lookupArrArg === undefined || returnArrArg === undefined) return null;
   const lookupArr = unwrapRef(lookupArrArg, resolveName);
@@ -435,11 +436,21 @@ function xlookup(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver
       : excelEquals(key, lookup);
     if (!matched) continue;
     if (lookupIsCol) {
-      const retX = rx1; // first return column when multi-col (no spill)
-      return resolve(retX, ry1 + hit.index, returnArr.sheetName);
+      // Multi-column return_array spills a row vector (Excel dynamic arrays).
+      if (rx2 > rx1) {
+        const row: FormulaValue[] = [];
+        for (let x = rx1; x <= rx2; x += 1) row.push(resolve(x, ry1 + hit.index, returnArr.sheetName));
+        return matrix(1, row.length, row);
+      }
+      return resolve(rx1, ry1 + hit.index, returnArr.sheetName);
     }
-    const retY = ry1;
-    return resolve(rx1 + hit.index, retY, returnArr.sheetName);
+    // Lookup along a row: a multi-row return_array spills a column vector.
+    if (ry2 > ry1) {
+      const col: FormulaValue[] = [];
+      for (let y = ry1; y <= ry2; y += 1) col.push(resolve(rx1 + hit.index, y, returnArr.sheetName));
+      return matrix(col.length, 1, col);
+    }
+    return resolve(rx1 + hit.index, ry1, returnArr.sheetName);
   }
 
   if (ifNotFoundArg !== undefined) return scalar(evaluate(ifNotFoundArg, resolve, resolveName, ctx));
@@ -554,7 +565,8 @@ function subtotal(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolve
       }
     } else {
       const v = evaluate(arg, resolve, resolveName, ctx);
-      if (isFormulaList(v)) values.push(...v);
+      if (isMatrix(v)) values.push(...v.data);
+      else if (isFormulaList(v)) values.push(...v);
       else values.push(v);
     }
   }
@@ -609,7 +621,19 @@ function evaluateBinary(node: Extract<AstNode, { type: 'binary' }>, resolve: Cel
     }
     return out;
   }
-  return binaryScalar(node.op, left, right);
+  if (isMatrix(left) || isMatrix(right)) {
+    const lf = isMatrix(left) ? left.data : left;
+    const rf = isMatrix(right) ? right.data : right;
+    if (Array.isArray(lf) || Array.isArray(rf)) {
+      const la = Array.isArray(lf) ? lf : Array.from({ length: (Array.isArray(rf) ? rf.length : 1) }, () => lf as FormulaValue);
+      const ra = Array.isArray(rf) ? rf : Array.from({ length: la.length }, () => rf as FormulaValue);
+      const n = Math.min(la.length, ra.length);
+      const out: FormulaValue[] = new Array(n);
+      for (let i = 0; i < n; i += 1) out[i] = binaryScalar(node.op, la[i] ?? null, ra[i] ?? null);
+      return out;
+    }
+  }
+  return binaryScalar(node.op, left as FormulaValue, right as FormulaValue);
 }
 
 function binaryScalar(op: string, left: FormulaValue, right: FormulaValue): FormulaValue {
@@ -719,6 +743,7 @@ function evaluateName(node: Extract<AstNode, { type: 'name' }>, resolve: CellRes
 
 function scalar(value: FormulaArgument): FormulaValue {
   if (isFormulaList(value)) return value[0] ?? null;
+  if (isMatrix(value)) return value.data[0] ?? null;
   return value;
 }
 

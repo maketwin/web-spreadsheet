@@ -4,7 +4,7 @@ import { evaluate } from '../../src/formula/evaluator';
 import type { CellResolver, FormulaValue } from '../../src/formula/types';
 
 /** Evaluate a formula string against a small cell map keyed "x,y". */
-function run(formula: string, cells: Record<string, FormulaValue> = {}): FormulaValue | readonly FormulaValue[] {
+function run(formula: string, cells: Record<string, FormulaValue> = {}): FormulaValue | readonly FormulaValue[] | import('../../src/formula/types').MatrixValue {
   const ast = new FormulaParser().parse(formula);
   expect(ast).not.toBeNull();
   const resolver: CellResolver = (x, y) => cells[`${x},${y}`] ?? null;

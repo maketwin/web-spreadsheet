@@ -53,6 +53,12 @@ export interface Cell {
   richText?: RichTextRun[];
   /** Ephemeral HTML-paste cell style; converted to styleId on apply, not serialized. */
   pasteStyle?: Partial<Style>;
+  /**
+   * Dynamic-array spill shadow: set on cells written by an anchor formula's
+   * overflow (value = "sheetId:r,c" of the anchor). Serialized with the cell;
+   * cleared and rewritten wholesale on every anchor recalculation.
+   */
+  spillOf?: string;
   /** Optional hyperlink; absent means no link. */
   hyperlink?: CellHyperlink;
   /** Optional comment/note; drawn with a red-triangle indicator. */

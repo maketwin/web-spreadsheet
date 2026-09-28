@@ -1,4 +1,5 @@
 import type { FormulaArgument, FormulaValue } from './types';
+import { matrix } from './types';
 
 export interface FunctionSpec {
   minArgs: number;
@@ -161,13 +162,18 @@ function mod(a: FormulaValue | undefined, b: FormulaValue | undefined): FormulaA
 }
 
 function flatten(values: FormulaArgument[]): FormulaValue[] {
-  return values.flatMap((value) => (Array.isArray(value) ? value : [value]));
+  return values.flatMap((value) => {
+    if (Array.isArray(value)) return value;
+    if (typeof value === 'object' && value !== null && (value as { __matrix?: boolean }).__matrix === true) return [...(value as { data: readonly FormulaValue[] }).data];
+    return [value as FormulaValue];
+  });
 }
 
 function first(value: FormulaArgument | undefined): FormulaValue | undefined {
   if (value === undefined) return undefined;
   if (isFormulaList(value)) return value[0];
-  return value;
+  if (typeof value === 'object' && value !== null && (value as { __matrix?: boolean }).__matrix === true) return (value as { data: readonly FormulaValue[] }).data[0];
+  return value as FormulaValue;
 }
 
 /** Excel text coercion: empty cells are "" in text contexts, not "null". */
@@ -601,6 +607,7 @@ function maxMinIfs(args: FormulaArgument[], which: 'max' | 'min'): FormulaArgume
 function flat1(value: FormulaArgument | undefined): FormulaValue[] {
   if (value === undefined) return [];
   if (Array.isArray(value)) return [...value];
+  if (typeof value === 'object' && value !== null && (value as { __matrix?: boolean }).__matrix === true) return [...(value as { data: readonly FormulaValue[] }).data];
   return [value as FormulaValue];
 }
 
@@ -680,10 +687,10 @@ function sequenceOf(args: FormulaArgument[]): FormulaArgument {
       current += step;
     }
   }
-  return out;
+  return matrix(rows, cols, out);
 }
 
-registry.register('UNIQUE', { minArgs: 1, maxArgs: 1, evaluate: (args) => uniqueOf(flat1(args[0])) });
-registry.register('SORT', { minArgs: 1, maxArgs: 2, evaluate: (args) => sortOf(flat1(args[0]), args[1]) });
-registry.register('FILTER', { minArgs: 2, maxArgs: 3, evaluate: (args) => filterOf(args[0], args[1], args[2]) });
+registry.register('UNIQUE', { minArgs: 1, maxArgs: 1, evaluate: (args) => { const out = uniqueOf(flat1(args[0])); return matrix(out.length, 1, out); } });
+registry.register('SORT', { minArgs: 1, maxArgs: 2, evaluate: (args) => { const out = sortOf(flat1(args[0]), args[1]); if (!Array.isArray(out)) return out; return matrix(out.length, 1, out); } });
+registry.register('FILTER', { minArgs: 2, maxArgs: 3, evaluate: (args) => { const out = filterOf(args[0], args[1], args[2]); if (!Array.isArray(out)) return out; return matrix(out.length, 1, out); } });
 registry.register('SEQUENCE', { minArgs: 1, maxArgs: 4, evaluate: (args) => sequenceOf(args) });
