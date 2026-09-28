@@ -263,3 +263,28 @@ export function lastUsedCell(store: Store): { readonly r: number; readonly c: nu
   }
   return { r, c };
 }
+
+export function applyMoveOrCopySheet(
+  store: Store,
+  sheetId: string,
+  values: { readonly beforeSheetId: string | 'end'; readonly createCopy: boolean },
+): void {
+  const ids = store.getSheets().map((sh) => sh.id);
+  const beforeId = values.beforeSheetId === 'end' ? undefined : values.beforeSheetId;
+  if (values.createCopy) {
+    if (beforeId === undefined) store.copySheet(sheetId);
+    else store.copySheet(sheetId, { beforeSheetId: beforeId });
+    return;
+  }
+  let toIndex: number;
+  if (beforeId === undefined) {
+    toIndex = ids.length - 1;
+  } else {
+    const at = ids.indexOf(beforeId);
+    toIndex = at < 0 ? ids.length - 1 : at;
+    const from = ids.indexOf(sheetId);
+    if (from >= 0 && from < toIndex) toIndex -= 1;
+  }
+  store.moveSheet(sheetId, toIndex);
+  store.activateSheet(sheetId);
+}
