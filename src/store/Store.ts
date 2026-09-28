@@ -470,14 +470,21 @@ export class Store {
    */
   public replaceAll(data: SerializedStore): void {
     if (data.sheets.length === 0) throw new Error('replaceAll requires at least one sheet');
+    // Atomic swap: deserialize EVERY sheet before touching the live maps. A
+    // corrupt sheet (e.g. an autosave blob from a half-dead HMR page, missing
+    // `cells`) used to abort mid-way — after sheets.clear() but before the
+    // activeSheetId fixup — leaving the store permanently inconsistent
+    // ("Unknown sheet" on every subsequent read) with the error swallowed by
+    // the caller's catch.
+    const rebuilt = data.sheets.map((sheet) => ({ sheet, data: SheetData.deserialize(sheet.data) }));
     const next = data.sheets;
     this.batch(() => {
       const oldIds = [...this.sheets.keys()];
       this.sheets.clear();
       this.sheetNames.clear();
       this.sheetColors.clear();
-      for (const sheet of next) {
-        this.sheets.set(sheet.id, SheetData.deserialize(sheet.data));
+      for (const { sheet, data: deserialized } of rebuilt) {
+        this.sheets.set(sheet.id, deserialized);
         this.sheetNames.set(sheet.id, sheet.name);
         if (sheet.color !== undefined && sheet.color !== '') this.sheetColors.set(sheet.id, sheet.color);
       }
@@ -485,21 +492,21 @@ export class Store {
       this.activeSheetId = ids.has(data.activeSheetId) ? data.activeSheetId : (this.sheets.keys().next().value as string);
       this.nextSheetNumber = this.sheets.size + 1;
       oldIds.forEach((sheetId) => { if (!ids.has(sheetId)) this.notify({ type: 'sheet', action: 'delete', sheetId }); });
-      next.forEach((sheet) => this.notify({ type: 'sheet', action: 'add', sheetId: sheet.id, name: sheet.name }));
+      next.forEach((sheet) => { this.notify({ type: 'sheet', action: 'add', sheetId: sheet.id, name: sheet.name }); });
       this.notify({ type: 'sheet', action: 'activate', sheetId: this.activeSheetId });
       // Replay content events so subscribers (formula engine, renderer scroll
       // sizes) observe the swapped-in data — sheet events alone leave the
       // formula dependency graph empty and imported formulas never recalc.
-      for (const sheet of next) {
-        const d = sheet.data;
-        d.cells.forEach(([key, cell]) => {
+      for (const { sheet } of rebuilt) {
+        const source = sheet.data;
+        source.cells.forEach(([key, cell]) => {
           const [r, c] = key.split(',').map(Number);
           this.notify(eventWithSheet({ type: 'cell', r: r ?? 0, c: c ?? 0, cell }, sheet.id));
         });
-        d.rows.forEach(([r, meta]) => this.notify(eventWithSheet({ type: 'row', r, meta }, sheet.id)));
-        d.cols.forEach(([c, meta]) => this.notify(eventWithSheet({ type: 'col', c, meta }, sheet.id)));
-        d.styles.forEach(([id, style]) => this.notify(eventWithSheet({ type: 'style', id, style }, sheet.id)));
-        d.merges.forEach((range) => this.notify(eventWithSheet({ type: 'merge', range }, sheet.id)));
+        source.rows.forEach(([r, meta]) => this.notify(eventWithSheet({ type: 'row', r, meta }, sheet.id)));
+        source.cols.forEach(([c, meta]) => this.notify(eventWithSheet({ type: 'col', c, meta }, sheet.id)));
+        source.styles.forEach(([id, style]) => this.notify(eventWithSheet({ type: 'style', id, style }, sheet.id)));
+        source.merges.forEach((range) => this.notify(eventWithSheet({ type: 'merge', range }, sheet.id)));
       }
     });
   }

@@ -178,7 +178,8 @@ describe('Spreadsheet', () => {
     installCanvasContext();
     const store = new Store();
     render(<SpreadsheetComponent store={store} theme={false} />);
-    fireEvent.keyDown(document.querySelector('canvas') as HTMLCanvasElement, { key: 'F2' });
+    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+    fireEvent.keyDown(canvas, { key: 'F2' });
     const input = screen.getByLabelText('Cell editor');
 
     fireEvent.change(input, { target: { value: '99' } });
@@ -186,6 +187,8 @@ describe('Spreadsheet', () => {
 
     expect(store.getCell(0, 0)).toBeUndefined();
     expect(screen.queryByLabelText('Cell editor')).not.toBeInTheDocument();
+    // Excel: cancel refocuses the grid — arrows/F2 must work without a click.
+    expect(document.activeElement).toBe(canvas);
   });
 
   it('F2 upgrades enter mode to edit mode (arrows move caret)', () => {

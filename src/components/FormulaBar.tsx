@@ -115,6 +115,14 @@ export const FormulaBar: FC<FormulaBarProps> = ({
         title="名称框：输入 A1、B2:D5 或命名区域后回车跳转"
         value={editingName ? nameInput : label}
         onFocus={(event) => { setEditingName(true); setNameInput(label); requestAnimationFrame(() => event.target.select()); }}
+        onMouseDown={(event) => {
+          // Excel: the first click into an unfocused name box selects all; a
+          // second click (already focused) places the caret. Without this the
+          // already-focused click types at the caret mid-reference.
+          if (document.activeElement !== event.currentTarget) {
+            requestAnimationFrame(() => event.currentTarget.select());
+          }
+        }}
         onChange={(event) => setNameInput(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === 'Enter') { event.preventDefault(); event.currentTarget.blur(); onGoTo?.(nameInput); }

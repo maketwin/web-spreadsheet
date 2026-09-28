@@ -2,10 +2,9 @@ import { Button, ColorPicker, Divider, Dropdown, Form, Input, Modal, Select, Spa
 import { DownOutlined, AlignCenterOutlined, AlignLeftOutlined, AlignRightOutlined, BgColorsOutlined, BoldOutlined, BorderBottomOutlined, BorderInnerOutlined, BorderLeftOutlined, BorderOuterOutlined, BorderRightOutlined, BorderTopOutlined, ClearOutlined, ColumnHeightOutlined, FontColorsOutlined, FormatPainterOutlined, ItalicOutlined, LockOutlined, SelectOutlined, UnderlineOutlined, StrikethroughOutlined, ZoomInOutlined, ZoomOutOutlined, TableOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, MergeCellsOutlined } from '@ant-design/icons';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
-import { useCallback, useEffect, useRef, useState, type CSSProperties, type Dispatch, type FC, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type RefObject, type SetStateAction } from 'react';
+import { useCallback, useEffect, useRef, useState, type Dispatch, type FC, type KeyboardEvent as ReactKeyboardEvent, type RefObject, type SetStateAction } from 'react';
 import { applyMatrix, clearRange, clearRangeCmd, CompositeCommand } from '../util/rangeValues';
 import { fillSelectionPatches } from '../fill/fillSelection';
-import { caretOffsetFromLocalPoint } from '../util/caretHit';
 import { openHyperlink } from '../util/hyperlink';
 import { repeatOnRange } from '../commands/repeat';
 import { useMultiSelection } from './hooks/useMultiSelection';
@@ -26,8 +25,7 @@ import { sameRange, skipHiddenCells } from '../selection/visibleStep';
 import { KeyboardHandler, type MenuShortcutCommand } from '../keys/KeyboardHandler';
 import type { FindMatch } from '../find/FindReplaceService';
 import { PluginManager, type Plugin } from '../plugin/PluginManager';
-import { CanvasRenderer, COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS, type CellAddress, type FormulaRefHighlight } from '../renderer/CanvasRenderer';
-import { useFormulaAssist, parseFormulaRefs, REF_HIGHLIGHT_PALETTE } from './formulaAssist';
+import { CanvasRenderer, COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS, type CellAddress, type FormulaRefHighlight } from '../renderer/CanvasRenderer';
 import { FillRangeCommand } from '../commands/impl/FillRange';
 import { adjustDecimalPlaces } from '../format/decimalPlaces';
 import { CreateChartCommand } from '../commands/impl/CreateChart';
@@ -50,7 +48,7 @@ import { DataValidationService } from '../validation/DataValidationService';
 import { protectSheet, unprotectSheet, verifyPassword } from '../protection/SheetProtection';
 import { cellFromText, cellId, cellIdCoords, formulaDependencies, formulaText, normalizeCellInput, type CellInput as CellDataInput } from '../util/cell';
 import { num2alpha } from '../util/alphabet';
-import { cellSelection, columnSelection, extendSelection, rangeSelection, rowSelection, sheetSelection, type Selection } from '../selection/Selection';
+import { cellSelection, columnSelection, extendSelection, rangeSelection, rowSelection, sheetSelection, type Selection, type SelectionKind } from '../selection/Selection';
 import { CellContextMenu, HeaderContextMenu } from './ContextMenu';
 import { PasteSpecialDialog } from './PasteSpecialDialog';
 import { BottomBar } from './BottomBar';
@@ -71,13 +69,12 @@ import { FilterDropdown } from './FilterDropdown';
 import { startAutoSave } from '../db/autoSave';
 import { loadWorkbook, DEFAULT_ID, saveWorkbook as saveToDB } from '../db/WorkbookDB';
 import type { Cell, Style, RichTextRun } from '../types';
-import { WRAP_LINE_HEIGHT, wrappedContentHeight } from '../util/wrapText';
 import { autoFitRowHeight, autofitRowHeights } from '../util/rowAutofit';
-import { indentPixels, resolveCellAlign } from '../util/generalAlign';
 import { DEFAULT_FONT_SIZE } from '../util/defaults';
 import { fillShortcut } from '../fill/fillShortcut';
-import { cycleDollars, endsWithRef, isPointTrigger, refAtCaret, upsertRef } from '../formula/pointMode';
-import { RichEditor, normalizeEditorRuns, type RichEditorApi } from './RichEditor';
+import { endsWithRef, isPointTrigger, upsertRef } from '../formula/pointMode';
+import type { RichEditorApi } from './RichEditor';
+import { EditorOverlay, caretOffsetAtClick, clampVal, type EditingCell } from './EditorOverlay';
 import { applyRunStyle, applyTextChangeToRuns, charsAllHave, flattenRuns, isRich, normalizeRuns, runsFromText, type RunStylePatch } from '../util/richText';
 
 export { snapshotCells, buildSessionPasteValues, tilePlainCells, combineMultiRanges } from '../clipboard/session';
@@ -86,7 +83,6 @@ export type CellInput = CellDataInput;
 export interface SheetInput { readonly id?: string; readonly name: string; readonly data?: readonly (readonly CellInput[])[] }
 export interface SpreadsheetOptions { readonly data?: readonly (readonly CellInput[])[]; readonly sheets?: readonly SheetInput[]; readonly theme?: Theme | false }
 export interface SpreadsheetProps { readonly store: Store; readonly cmdManager?: CommandManager; readonly formulaEngine?: FormulaEngine; readonly theme?: Theme | false | undefined; readonly onClose?: () => void }
-interface EditingCell extends CellAddress { readonly value: string; /** Excel: F2/double-click = edit mode (arrows move the caret); typing = enter mode (arrows commit). */ readonly editMode?: boolean; /** Flat caret offset when opening the editor (double-click hit). */ readonly caret?: number; /** Excel point mode: the cell the formula's trailing reference currently points at. */ readonly point?: CellAddress; /** Mid-edit upgrade: run-level formatting was applied to a selection (forces the rich editor). */ readonly richDraft?: RichTextRun[]; /** Selection to restore in the rich editor after the upgrade. */ readonly richSel?: { readonly start: number; readonly end: number } }
 interface ViewState { readonly zoom: number; readonly showFormula: boolean; readonly showGrid: boolean; readonly frozenRows: number; readonly frozenCols: number }
 interface FilterPopupState { readonly r: number; readonly c: number; readonly x: number; readonly y: number }
 /** Module-level hook the active instance registers so applyShortcutStyle can offer run-level styling to the open cell editor. */
@@ -246,7 +242,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const execCmd = useCallback((cmd: Command) => {
     if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store);
   }, [cmdManager, store]);
-  const { canvasRef, rendererRef } = useCanvasRenderer(store, selected, onCellClick, selectSelection, view, setView, cmdManager, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick, followHyperlink, editingRef);
+  const { canvasRef, rendererRef } = useCanvasRenderer(store, selected, onCellClick, selectSelection, view, setView, cmdManager, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick, editingRef);
   const handleRefHighlights = useCallback((ranges: readonly FormulaRefHighlight[] | null) => { rendererRef.current?.setFormulaRefHighlights(ranges); }, []);
   // The renderer refuses to steal canvas focus (which would blur-commit the
   // cell editor) only while its editing flag is set — keep it in sync.
@@ -279,6 +275,11 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const endModeRef = useRef(false);
   const { clipboardSession, clearClipboardSession, runClipboard, runCtxClipboard, pasteSpecialOpen, setPasteSpecialOpen, applyPasteSpecial } = useClipboardSession(store, cmdManager, rendererRef, selectedRef, multiRef);
   const startEditing = (cell: CellAddress, value?: string, editMode = false, caret?: number): void => {
+    // Excel: a protected sheet rejects edit-mode entry outright — one warning
+    // per user attempt (F2 / double-click / typing), not per keystroke. The
+    // commit-path guard below stays as a backstop for protection enabled
+    // mid-edit.
+    if (store.isSheetProtected()) { message.warning('工作表已保护，无法编辑'); return; }
     // Excel: entering edit mode cancels the marching-ants clipboard session.
     if (clipboardSession.current !== null) clearClipboardSession();
     // Excel: editing a merged cell always targets the anchor (upper-left) cell.
@@ -305,12 +306,22 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       ...(rich !== undefined ? { richDraft: rich, ...(clamped !== undefined ? { richSel: { start: clamped, end: clamped } } : {}) } : {}),
     });
   };
+  // Excel: cancel (Esc) returns keyboard focus to the grid just like commit —
+  // the unmounting editor otherwise leaves focus on <body> and arrows/F2/undo
+  // stay dead until the next canvas click. The ref must clear BEFORE the
+  // refocus: focusing the canvas blurs the editor and the blur-commit guard
+  // (editingRef === null) is what keeps the cancelled draft from committing.
+  const cancelEditing = (): void => {
+    editingRef.current = null;
+    canvasRef.current?.focus();
+    setEditing(null);
+  };
   const commitEditing = (value: string, moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection = false, runs?: RichTextRun[]): void => {
     const ed = editingRef.current;
     // Guarded by the ref so a blur right after a click-commit never double-writes.
     editingRef.current = null;
     if (ed !== null) {
-      if (store.isSheetProtected()) { message.warning('工作表已保护，无法编辑'); setEditing(null); return; }
+      if (store.isSheetProtected()) { message.warning('工作表已保护，无法编辑'); cancelEditing(); return; }
       const rule = store.getValidationRule(ed.r, ed.c);
       if (rule !== undefined) {
         const svc = new DataValidationService();
@@ -475,10 +486,14 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   // Excel: opening the editor places the caret after the typed text (typing)
   // or at the end of the content (F2/double-click) — never at position 0.
   // The cell-key guard keeps mid-edit caret moves (same cell) untouched.
+  // When the editor closes the overlay unmounts, so el === null there — the
+  // key MUST reset on that path too, or re-opening the same cell (F2 after a
+  // committed edit) skips the caret placement and stays at the browser's
+  // default position 0.
   const lastEditKeyRef = useRef<string | null>(null);
   useEffect(() => {
     const el = inputRef.current;
-    if (el === null) return;
+    if (el === null) { lastEditKeyRef.current = null; return; }
     el.focus();
     if (editing === null) { lastEditKeyRef.current = null; return; }
     const key = `${editing.r}:${editing.c}`;
@@ -603,7 +618,8 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       }
       commitFormulaValue(selected, value, store, cmdManager, formulaRunsRef.current);
     }} onCancel={() => {
-      if (editingRef.current !== null) { setEditing(null); return; }
+      canvasRef.current?.focus();
+      if (editingRef.current !== null) { cancelEditing(); return; }
       const sel = selectedRef.current;
       if (sel === null) { setFormulaValue(''); formulaRunsRef.current = undefined; return; }
       const active = sel.active ?? { r: sel.range.r1, c: sel.range.c1 };
@@ -633,7 +649,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
         const caret = caretOffsetAtClick(rendererRef.current, store, cell, e.clientX, e.clientY, view.zoom);
         startEditing(cell, undefined, true, caret);
       }} />
-      {editing !== null && <EditorOverlay refEl={inputRef} editingRefSetter={(cell) => { editingRef.current = cell; setEditing(cell); }} editing={editing} setEditing={setEditing} commit={commitEditing} zoom={view.zoom} store={store} richApiRef={richApiRef} onCharStyleKey={applyCharStyleKey} onRefHighlights={handleRefHighlights} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}
+      {editing !== null && <EditorOverlay refEl={inputRef} editingRefSetter={(cell) => { editingRef.current = cell; setEditing(cell); }} editing={editing} setEditing={setEditing} cancel={cancelEditing} commit={commitEditing} zoom={view.zoom} store={store} richApiRef={richApiRef} onCharStyleKey={applyCharStyleKey} onRefHighlights={handleRefHighlights} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}
       <div className="ss-chart-layer">{store.getCharts().map((spec) => <FloatingChart key={spec.id} spec={spec} store={store} renderer={rendererRef.current} selected={selectedChartId === spec.id} onSelect={setSelectedChartId} onGeometry={(id, anchor) => execCmd(new SetChartAnchorCommand({ id, anchor }))} onRemove={(id) => { execCmd(new RemoveChartCommand({ id })); setSelectedChartId((current) => current === id ? null : current); canvasRef.current?.focus(); }} onUndo={() => cmdManager?.undo()} onRedo={() => cmdManager?.redo()} />)}
         {store.getImages().map((img) => <FloatingImage key={img.id} spec={img} renderer={rendererRef.current} selected={selectedImageId === img.id} onSelect={setSelectedImageId} onGeometry={(id, anchor) => execCmd(new SetImageAnchorCommand({ id, anchor }))} onRemove={(id) => { execCmd(new RemoveImageCommand({ id })); setSelectedImageId((current) => current === id ? null : current); canvasRef.current?.focus(); }} onUndo={() => cmdManager?.undo()} onRedo={() => cmdManager?.redo()} />)}
       </div></div>
@@ -715,176 +731,25 @@ export class Spreadsheet {
   }
 }
 
-interface EditorOverlayProps { readonly refEl: RefObject<HTMLTextAreaElement>; readonly editingRefSetter: (cell: EditingCell) => void; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly commit: (value: string, moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection?: boolean, runs?: RichTextRun[]) => void; readonly zoom: number; readonly store: Store; readonly cellRect?: { x: number; y: number; w: number; h: number }; readonly richApiRef: MutableRefObject<RichEditorApi | null>; readonly onCharStyleKey?: (key: 'bold' | 'italic' | 'underline') => void; readonly onRefHighlights?: (ranges: readonly FormulaRefHighlight[] | null) => void }
-const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editing, setEditing, commit, zoom, store, cellRect, richApiRef, onCharStyleKey, onRefHighlights }) => {
-  const composing = useRef(false);
-  const assist = useFormulaAssist();
-  const editingValue = editing.value;
-  // Excel formula editing: colored boxes over every range the formula references.
-  useEffect(() => {
-    if (onRefHighlights === undefined) return;
-    if (!editingValue.startsWith('=')) { onRefHighlights(null); return; }
-    const refs = parseFormulaRefs(editingValue);
-    const ranges = refs.map((r, i) => ({ ...r, color: REF_HIGHLIGHT_PALETTE[i % REF_HIGHLIGHT_PALETTE.length]! }));
-    onRefHighlights(ranges.length > 0 ? ranges : null);
-  }, [editingValue, onRefHighlights]);
-  useEffect(() => () => { onRefHighlights?.(null); }, [onRefHighlights]);
-  const cellStyle = store.getCell(editing.r, editing.c)?.styleId !== undefined
-    ? store.getStyle(store.getCell(editing.r, editing.c)!.styleId!)
-    : undefined;
-  const wrapping = cellStyle?.wrap === true || editing.value.includes('\n');
-  const cell = store.getCell(editing.r, editing.c);
-  const initialRuns = editing.richDraft ?? (isRich(cell?.richText) ? cell!.richText! : undefined);
-  if (initialRuns !== undefined) {
-    // Excel: rich cells edit in place with per-character styling. The DOM is
-    // authoritative while typing; runs for the commit come from the editor api.
-    const commitRich = (moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection?: boolean): void => {
-      const runs = richApiRef.current?.getRuns() ?? [...initialRuns];
-      const normalized = normalizeEditorRuns(runs);
-      commit(flattenRuns(runs), moveAfter, fillSelection, normalized ?? undefined);
-    };
-    return <RichEditor
-      initialRuns={initialRuns}
-      css={editorStyle(store, editing, zoom, cellRect, cellStyle, editing.value)}
-      cellStyle={cellStyle}
-      initialSelection={editing.richSel}
-      editMode={editing.editMode === true}
-      onUpgradeEditMode={() => setEditing({ ...editing, editMode: true })}
-      registerApi={(api) => { richApiRef.current = api; }}
-      commit={commitRich}
-      cancel={() => setEditing(null)}
-      onValueChange={(value) => editingRefSetter({ ...editing, value })}
-      onBlur={() => {
-        // Toolbar/menu interaction keeps the draft alive so formatting can land
-        // in the selection; any other blur (click-away) commits like the textarea.
-        const active = document.activeElement as HTMLElement | null;
-        if (active !== null && active.closest('.ss-interaction-toolbar, .ss-menu-bar, .ss-formula-bar, .ant-dropdown, .ant-popover') !== null) return;
-        commitRich();
-      }}
-    />;
-  }
-  const editorCss = editorStyle(store, editing, zoom, cellRect, cellStyle, editing.value);
-  const assistSetValue = (value: string, caret: number): void => {
-    setEditing({ ...editing, value });
-    requestAnimationFrame(() => { const t = refEl.current; if (t !== null) { t.selectionStart = caret; t.selectionEnd = caret; } });
-  };
-  const editorTop = typeof editorCss.top === 'number' ? editorCss.top : 0;
-  const editorLeft = typeof editorCss.left === 'number' ? editorCss.left : 0;
-  const editorHeight = typeof editorCss.height === 'number' ? editorCss.height : 24;
-  return <>
-    <textarea
-      ref={refEl}
-      className={`ss-editor-overlay${wrapping ? ' ss-editor-overlay--wrap' : ''}`}
-      style={editorCss}
-      value={editing.value}
-      rows={1}
-      spellCheck={false}
-      onChange={(e) => { const v = e.target.value; setEditing({ ...editing, value: v }); assist.afterChange(v, e.target.selectionStart ?? v.length); }}
-    onCompositionStart={() => { composing.current = true; }}
-    onCompositionEnd={() => { composing.current = false; }}
-    onBlur={() => {
-      // Same toolbar/menu guard as the rich editor: formatting from the
-      // toolbars must land in the draft, not commit it.
-      const active = document.activeElement as HTMLElement | null;
-      if (active !== null && active.closest('.ss-interaction-toolbar, .ss-menu-bar, .ss-formula-bar, .ant-dropdown, .ant-popover') !== null) return;
-      commit(refEl.current?.value ?? editing.value);
-    }}
-    onKeyDown={(e) => {
-      if (composing.current) return;
-      // Formula AutoComplete owns the arrow/Tab/Enter keys while its list is open.
-      if (assist.onKeyDown(e.key, refEl.current?.value ?? editing.value, refEl.current?.selectionStart ?? editing.value.length, assistSetValue)) {
-        e.preventDefault();
-        return;
-      }
-      // Excel: Ctrl/Cmd+B/I/U while editing formats the selected characters
-      // (upgrading the draft to rich runs) instead of doing nothing.
-      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
-        const key = e.key.toLowerCase();
-        if (key === 'b' || key === 'i' || key === 'u') {
-          e.preventDefault();
-          const attr = key === 'b' ? 'bold' : key === 'i' ? 'italic' : 'underline';
-          onCharStyleKey?.(attr);
-          return;
-        }
-      }
-      // Excel F4: cycle $ anchors on the reference at the caret (A1 → $A$1 → A$1 → $A1).
-      if (e.key === 'F4') {
-        const el = refEl.current;
-        if (el === null) return;
-        e.preventDefault();
-        const caret = el.selectionStart ?? el.value.length;
-        const span = refAtCaret(el.value, caret);
-        if (span === undefined) return;
-        const cycled = cycleDollars(span.text);
-        const next = el.value.slice(0, span.start) + cycled + el.value.slice(span.end);
-        setEditing({ ...editing, value: next });
-        requestAnimationFrame(() => { el.selectionStart = span.start + cycled.length; el.selectionEnd = span.start + cycled.length; });
-        return;
-      }
-      // Excel point mode: while TYPING a formula that awaits an operand, arrows
-      // move the inserted reference instead of committing. In edit mode (F2 /
-      // double-click) arrows always move the caret — never insert references.
-      const arrowDeltas: Record<string, { dr: number; dc: number }> = { ArrowUp: { dr: -1, dc: 0 }, ArrowDown: { dr: 1, dc: 0 }, ArrowLeft: { dr: 0, dc: -1 }, ArrowRight: { dr: 0, dc: 1 } };
-      const arrow = arrowDeltas[e.key];
-      if (arrow !== undefined && editing.editMode !== true && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
-        const el = refEl.current;
-        const value = el?.value ?? editing.value;
-        const caret = el?.selectionStart ?? value.length;
-        const head = value.slice(0, caret);
-        if (editing.point !== undefined || isPointTrigger(head)) {
-          e.preventDefault();
-          const base = editing.point ?? { r: editing.r, c: editing.c };
-          const target = { r: clampVal(base.r + arrow.dr, 0, TOTAL_ROWS - 1), c: clampVal(base.c + arrow.dc, 0, TOTAL_COLS - 1) };
-          const ref = `${num2alpha(target.c)}${target.r + 1}`;
-          const nextHead = upsertRef(head, ref, editing.point !== undefined && endsWithRef(head));
-          const nextValue = nextHead + value.slice(el?.selectionEnd ?? caret);
-          editingRefSetter({ ...editing, value: nextValue, point: target });
-          requestAnimationFrame(() => { const t = refEl.current; if (t !== null) { t.selectionStart = nextHead.length; t.selectionEnd = nextHead.length; } });
-          return;
-        }
-      }
-      handleEditorKey(e, refEl, (moveAfter, fillSelection) => commit(refEl.current?.value ?? editing.value, moveAfter, fillSelection), () => setEditing(null), (next) => setEditing({ ...editing, value: next }), editing.editMode === true, () => setEditing({ ...editing, value: refEl.current?.value ?? editing.value, editMode: true }));
-    }}
-    aria-label="Cell editor"
-    />
-    {assist.signature !== null && (
-      <div className="ss-formula-signature" style={{ position: 'absolute', left: editorLeft, top: Math.max(0, editorTop - 34), zIndex: 45 }}>
-        <span className="ss-sig-name">{assist.signature.name}</span>
-        <span className="ss-sig-text">{assist.signature.sig}</span>
-        <div className="ss-sig-desc">{assist.signature.desc} · 第 {assist.signature.argIndex + 1} 个参数</div>
-      </div>
-    )}
-    {assist.suggestions !== null && (
-      <ul className="ss-formula-assist" style={{ position: 'absolute', left: editorLeft, top: editorTop + editorHeight + 4, zIndex: 45 }}>
-        {assist.suggestions.items.map((name, i) => (
-          <li
-            key={name}
-            className={i === assist.suggestions?.active ? 'ss-active' : undefined}
-            onMouseDown={(ev) => {
-              ev.preventDefault();
-              assist.onKeyDown('Enter', refEl.current?.value ?? editing.value, refEl.current?.selectionStart ?? editing.value.length, assistSetValue);
-              refEl.current?.focus();
-            }}
-          >
-            <span className="ss-fn-name">{name}</span>
-          </li>
-        ))}
-      </ul>
-    )}
-  </>;
-};
-
-function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick: (cell: CellAddress, shift: boolean, ctrl: boolean) => void, onSelectionChange: (selection: Selection) => void, view: ViewState, setView: Dispatch<SetStateAction<ViewState>>, cmdManager: CommandManager | undefined, onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => void, onCellContextMenu: (cell: CellAddress, x: number, y: number) => void, onAutoFilterClick: (r: number, c: number, x: number, y: number) => void, onHyperlinkClick: (link: NonNullable<Cell['hyperlink']>) => void, editingLiveRef: RefObject<EditingCell | null>): { canvasRef: RefObject<HTMLCanvasElement>; rendererRef: RefObject<CanvasRenderer | null> } {
+function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick: (cell: CellAddress, shift: boolean, ctrl: boolean) => void, onSelectionChange: (selection: Selection) => void, view: ViewState, setView: Dispatch<SetStateAction<ViewState>>, cmdManager: CommandManager | undefined, onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => void, onCellContextMenu: (cell: CellAddress, x: number, y: number) => void, onAutoFilterClick: (r: number, c: number, x: number, y: number) => void, editingLiveRef: RefObject<EditingCell | null>): { canvasRef: RefObject<HTMLCanvasElement | null>; rendererRef: RefObject<CanvasRenderer | null> } {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<CanvasRenderer | null>(null);
-  const callbacks = useRef({ onCellClick, onSelectionChange, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick, onHyperlinkClick });
+  const callbacks = useRef({ onCellClick, onSelectionChange, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick });
   const selectedLiveRef = useRef(selected);
-  callbacks.current = { onCellClick, onSelectionChange, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick, onHyperlinkClick };
+  callbacks.current = { onCellClick, onSelectionChange, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick };
   selectedLiveRef.current = selected;
   useEffect(() => {
     if (canvasRef.current === null) return undefined;
     const currentSelection = selectedLiveRef.current;
-    const base = { canvas: canvasRef.current, store, zoom: view.zoom, showFormula: view.showFormula, showGrid: view.showGrid, frozenRows: view.frozenRows, frozenCols: view.frozenCols, onCellClick: (cell: CellAddress, shift?: boolean, ctrl?: boolean) => flushSync(() => callbacks.current.onCellClick(cell, shift === true, ctrl === true)), onHyperlinkClick: (cell: CellAddress) => { const link = store.getCell(cell.r, cell.c)?.hyperlink; if (link !== undefined) flushSync(() => callbacks.current.onHyperlinkClick(link)); }, onSelectionChange: (range: RangeAddress, active?: CellAddress, anchor?: CellAddress) => flushSync(() => callbacks.current.onSelectionChange(snapRangeSelection(store, rangeSelection(range, anchor ?? selectedLiveRef.current?.anchor, active ?? { r: range.r2, c: range.c2 })))), onColumnSelect: (c: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(columnSelection(c, TOTAL_ROWS, shift && current?.kind === 'column' ? current.anchor.c : c)); }), onRowSelect: (r: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(rowSelection(r, TOTAL_COLS, shift && current?.kind === 'row' ? current.anchor.r : r)); }), onSheetSelect: () => flushSync(() => callbacks.current.onSelectionChange(sheetSelection(allSheetRange()))), onRowResize: (r: number, height: number) => { const cmd = new SetRowHeight({ r, height }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColResize: (c: number, width: number) => { const cmd = new SetColWidth({ c, width }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onRowDblClick: (r: number) => { const fit = autoFitRowHeight(store, r); const cmd = new SetRowHeight({ r, height: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColDblClick: (c: number) => { const fit = autoFitColWidth(store, c); const cmd = new SetColWidth({ c, width: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onFill: (source: RangeAddress, target: RangeAddress, ctrlKey: boolean) => { const cmd = new FillRangeCommand({ ctrlKey, source, target }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onMoveRange: (source: RangeAddress, target: RangeAddress, copy?: boolean) => { const op = makeMoveRange({ source, target, copy }); if (cmdManager !== undefined) cmdManager.execute(op); else op.execute(store); }, onZoom: (delta: number) => setView((current) => ({ ...current, zoom: Math.min(200, Math.max(50, current.zoom + delta)) })), onZoomTo: (zoom: number) => setView((current) => ({ ...current, zoom: Math.min(200, Math.max(50, zoom)) })), onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => callbacks.current.onHeaderContextMenu(info, x, y), onCellContextMenu: (cell: CellAddress, x: number, y: number) => callbacks.current.onCellContextMenu(cell, x, y), onAutoFilterClick: (r: number, c: number, x: number, y: number) => callbacks.current.onAutoFilterClick(r, c, x, y) };
+    // Row/column header drags carry their kind so the Selection keeps it —
+    // rangeSelection would flatten it to a plain range. Cell drags keep the
+    // merge-aware snap path.
+    const handleSelectionChange = (range: RangeAddress, active?: CellAddress, anchor?: CellAddress, kind?: SelectionKind): void => flushSync(() => {
+      callbacks.current.onSelectionChange(kind === 'row' || kind === 'column'
+        ? { kind, range: Range.normalize(range), anchor: anchor ?? { r: range.r1, c: range.c1 }, active: active ?? { r: range.r2, c: range.c2 } }
+        : snapRangeSelection(store, rangeSelection(range, anchor ?? selectedLiveRef.current?.anchor, active ?? { r: range.r2, c: range.c2 })));
+    });
+    const base = { canvas: canvasRef.current, store, zoom: view.zoom, showFormula: view.showFormula, showGrid: view.showGrid, frozenRows: view.frozenRows, frozenCols: view.frozenCols, onCellClick: (cell: CellAddress, shift?: boolean, ctrl?: boolean) => flushSync(() => callbacks.current.onCellClick(cell, shift === true, ctrl === true)), onSelectionChange: handleSelectionChange, onColumnSelect: (c: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(columnSelection(c, TOTAL_ROWS, shift && current?.kind === 'column' ? current.anchor.c : c)); }), onRowSelect: (r: number, shift: boolean) => flushSync(() => { const current = selectedLiveRef.current; callbacks.current.onSelectionChange(rowSelection(r, TOTAL_COLS, shift && current?.kind === 'row' ? current.anchor.r : r)); }), onSheetSelect: () => flushSync(() => callbacks.current.onSelectionChange(sheetSelection(allSheetRange()))), onRowResize: (r: number, height: number) => { const cmd = new SetRowHeight({ r, height }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColResize: (c: number, width: number) => { const cmd = new SetColWidth({ c, width }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onRowDblClick: (r: number) => { const fit = autoFitRowHeight(store, r); const cmd = new SetRowHeight({ r, height: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onColDblClick: (c: number) => { const fit = autoFitColWidth(store, c); const cmd = new SetColWidth({ c, width: fit }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onFill: (source: RangeAddress, target: RangeAddress, ctrlKey: boolean) => { const cmd = new FillRangeCommand({ ctrlKey, source, target }); if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store); }, onMoveRange: (source: RangeAddress, target: RangeAddress, copy?: boolean) => { const op = makeMoveRange({ source, target, copy }); if (cmdManager !== undefined) cmdManager.execute(op); else op.execute(store); }, onZoom: (delta: number) => setView((current) => ({ ...current, zoom: Math.min(200, Math.max(50, current.zoom + delta)) })), onZoomTo: (zoom: number) => setView((current) => ({ ...current, zoom: Math.min(200, Math.max(50, zoom)) })), onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => callbacks.current.onHeaderContextMenu(info, x, y), onCellContextMenu: (cell: CellAddress, x: number, y: number) => callbacks.current.onCellContextMenu(cell, x, y), onAutoFilterClick: (r: number, c: number, x: number, y: number) => callbacks.current.onAutoFilterClick(r, c, x, y) };
     const renderer = new CanvasRenderer(currentSelection === null ? base : { ...base, selectedRange: currentSelection.range, selectionKind: currentSelection.kind, activeCell: currentSelection.active });
     rendererRef.current = renderer;
     renderer.setEditing(editingLiveRef.current !== null);
@@ -926,8 +791,6 @@ function autoFitColWidth(store: Store, c: number): number {
   if (!hasContent) return COL_WIDTH;
   return clampVal(maxLen * 8 + 20, 30, 500);
 }
-
-function clampVal(v: number, min: number, max: number): number { return Math.max(min, Math.min(max, v)); }
 
 function useTheme(theme: Theme | false | undefined): void { useEffect(() => { if (theme === false) return; if (theme === undefined) applyStoredTheme(); else setTheme(theme); dispatchThemeChanged(); }, [theme]); }
 function useStoreSheets(store: Store, setSheets: (s: readonly SheetInfo[]) => void, setActive: (id: string) => void): void { useEffect(() => store.subscribe((event) => { if (event.type !== 'sheet') return; setSheets(store.getSheets()); setActive(store.getActiveSheetId()); }), [store, setSheets, setActive]); }
@@ -1127,165 +990,6 @@ function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>, selec
   else if (action.type === 'copy' || action.type === 'cut' || action.type === 'paste') runClipboard(action.type, range);
 }
 
-function handleEditorKey(
-  event: ReactKeyboardEvent<HTMLTextAreaElement>,
-  refEl: RefObject<HTMLTextAreaElement>,
-  commit: (moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection?: boolean) => void,
-  cancel: () => void,
-  setValue: (value: string) => void,
-  editMode = false,
-  upgradeEditMode?: () => void,
-): void {
-  if (event.key === 'Escape') { cancel(); return; }
-  // Excel: F2 while typing upgrades enter mode → edit mode (arrows then move the caret).
-  if (event.key === 'F2') { event.preventDefault(); if (!editMode) upgradeEditMode?.(); return; }
-  // Excel "enter mode" (typing): arrows commit and move; F2 edit mode moves the caret.
-  // While the text is a formula, arrows stay in the editor (formula entry).
-  const arrowDeltas: Record<string, { dr: number; dc: number }> = { ArrowUp: { dr: -1, dc: 0 }, ArrowDown: { dr: 1, dc: 0 }, ArrowLeft: { dr: 0, dc: -1 }, ArrowRight: { dr: 0, dc: 1 } };
-  const arrow = arrowDeltas[event.key];
-  if (!editMode && arrow !== undefined && !event.shiftKey && !event.ctrlKey && !event.metaKey && refEl.current?.value.startsWith('=') !== true) {
-    event.preventDefault();
-    commit(arrow);
-    return;
-  }
-  // Excel: Tab commits and moves right (Shift+Tab left)
-  if (event.key === 'Tab') { event.preventDefault(); commit({ dr: 0, dc: event.shiftKey ? -1 : 1 }); return; }
-  // Excel: Ctrl+Enter commits the typed text into every cell of the selection.
-  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.altKey) { event.preventDefault(); commit(undefined, true); return; }
-  // Excel: Enter commits and moves down (Shift+Enter up); Alt+Enter inserts a line break
-  if (event.key === 'Enter' && !event.altKey) { event.preventDefault(); commit({ dr: event.shiftKey ? -1 : 1, dc: 0 }); return; }
-  if (event.key === 'Enter' && event.altKey) {
-    event.preventDefault();
-    const el = refEl.current;
-    if (el === null) return;
-    const start = el.selectionStart ?? el.value.length;
-    const end = el.selectionEnd ?? el.value.length;
-    const next = `${el.value.slice(0, start)}\n${el.value.slice(end)}`;
-    setValue(next);
-    requestAnimationFrame(() => {
-      const pos = start + 1;
-      el.selectionStart = pos;
-      el.selectionEnd = pos;
-    });
-  }
-}
-
-
-/** Approximate Excel double-click caret: hit-test along painted lines (incl. wrap / Alt+Enter). */
-function caretOffsetAtClick(
-  renderer: CanvasRenderer | null,
-  store: Store,
-  cell: CellAddress,
-  clientX: number,
-  clientY: number,
-  zoom: number,
-): number {
-  const data = store.getCell(cell.r, cell.c);
-  const text = data?.formula ?? data?.text ?? '';
-  if (text.length === 0 || renderer === null) return 0;
-  const rect = renderer.getCellViewportRect(cell.r, cell.c);
-  const canvasEl = document.querySelector('canvas.ss-canvas') as HTMLCanvasElement | null;
-  if (canvasEl === null) return text.length;
-  const bounds = canvasEl.getBoundingClientRect();
-  const style = data?.styleId !== undefined ? store.getStyle(data.styleId) : undefined;
-  return caretOffsetFromLocalPoint({
-    text,
-    localX: clientX - bounds.left - rect.x,
-    localY: clientY - bounds.top - rect.y,
-    cellW: rect.w,
-    cellH: rect.h,
-    style,
-    value: data?.value,
-    formula: data?.formula,
-    zoom,
-    runs: data?.richText,
-  });
-}
-
-function editorStyle(
-  store: Store,
-  cell: CellAddress,
-  zoom: number,
-  cellRect: { x: number; y: number; w: number; h: number } | undefined,
-  style: Style | undefined,
-  value: string,
-): CSSProperties {
-  // Borderless inset 2px so it sits inside the canvas accent strokeRect.
-  const inset = 2;
-  const scale = zoom / 100;
-  const fontSize = Math.max(8, Math.round((style?.fontSize ?? DEFAULT_FONT_SIZE) * scale));
-  const fontFamily = style?.fontFamily ?? 'Calibri, "Segoe UI", "Microsoft YaHei", sans-serif';
-  const wrapping = style?.wrap === true || value.includes('\n');
-  const valign = style?.valign ?? 'middle';
-  const editorLineHeight = Math.max(1, Math.round(fontSize * WRAP_LINE_HEIGHT));
-  let left: number;
-  let top: number;
-  let width: number;
-  let height: number;
-  if (cellRect !== undefined) {
-    left = cellRect.x + inset;
-    top = cellRect.y + inset;
-    width = Math.max(0, cellRect.w - inset * 2);
-    height = Math.max(0, cellRect.h - inset * 2);
-  } else {
-    let x = 0;
-    for (let c = 0; c < cell.c; c += 1) x += store.getCol(c)?.width ?? COL_WIDTH;
-    let y = 0;
-    for (let r = 0; r < cell.r; r += 1) y += store.getRow(r)?.height ?? ROW_HEIGHT;
-    const w = store.getCol(cell.c)?.width ?? COL_WIDTH;
-    const h = store.getRow(cell.r)?.height ?? ROW_HEIGHT;
-    left = ROW_HEADER_WIDTH + x * scale + inset;
-    top = COL_HEADER_HEIGHT + y * scale + inset;
-    width = Math.max(0, w * scale - inset * 2);
-    height = Math.max(0, h * scale - inset * 2);
-  }
-  const editorContentHeight = wrapping
-    ? Math.max(editorLineHeight, wrappedContentHeight(Math.max(1, value.split(/\r?\n/).length), fontSize))
-    : editorLineHeight;
-  if (wrapping) {
-    const lineCount = Math.max(1, value.split(/\r?\n/).length);
-    height = Math.max(height, wrappedContentHeight(lineCount, fontSize));
-  }
-  // Excel: the in-cell editor keeps the cell's indent (left padding for
-  // left-aligned text, right padding for right-aligned) instead of the text
-  // jumping to the cell edge while editing.
-  const editorAlign = resolveCellAlign(style?.align, (() => {
-    const live = store.getCell(cell.r, cell.c);
-    if (live !== undefined && typeof live.value === 'number') return live.value;
-    const n = Number(value);
-    return value.trim() !== '' && Number.isFinite(n) && !value.trim().startsWith('=') ? n : value;
-  })());
-  const indentPx = indentPixels(style, fontSize);
-  return {
-    left,
-    top,
-    width,
-    height,
-    fontSize,
-    fontFamily,
-    fontWeight: style?.bold === true ? 700 : 400,
-    fontStyle: style?.italic === true ? 'italic' : 'normal',
-    // Cell-level underline must stay visible inside the editor (spans without
-    // an explicit underline override inherit it from here).
-    textDecoration: [
-      style?.underline === true ? 'underline' : '',
-      style?.strike === true ? 'line-through' : '',
-    ].filter(Boolean).join(' ') || undefined,
-    color: style?.color ?? undefined,
-    textAlign: editorAlign,
-    lineHeight: `${WRAP_LINE_HEIGHT}`,
-    paddingLeft: editorAlign === 'left' ? 3 + indentPx : undefined,
-    paddingRight: editorAlign === 'right' ? 3 + indentPx : undefined,
-    paddingTop: valign === 'top'
-      ? 0
-      : valign === 'middle'
-        ? Math.max(0, (height - editorContentHeight) / 2)
-        : Math.max(0, height - editorContentHeight),
-    whiteSpace: wrapping ? 'pre-wrap' : 'nowrap',
-    overflow: wrapping ? 'auto' : 'hidden',
-    resize: 'none',
-  };
-}
 function setCellText(store: Store, cmdManager: CommandManager | undefined, cell: CellAddress, text: string, runs?: RichTextRun[]): void {
   if (cmdManager === undefined) {
     const next = cellFromText(store.getCell(cell.r, cell.c), text);
