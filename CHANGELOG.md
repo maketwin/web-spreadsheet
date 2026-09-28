@@ -5,11 +5,50 @@
 > 发布要点：动态数组溢出（SEQUENCE/FILTER/UNIQUE/SORT/XLOOKUP 向量）、
 > antd 6 + React 19 升级、打印与查找替换重建、Excel 对齐大批量特性
 > （富文本、超链接、条件格式、名称管理器、行组、工作表保护、分列/去重）、
-> Playwright e2e 基建。对应 post-A+ 计划 M1 里程碑
-> （docs/plan/2026-09-28-post-a-plus-roadmap.md）。
+> Playwright e2e 基建、整个工作簿打印。对应 post-A+ 计划 M1–M3 里程碑
+> （docs/plan/2026-09-28-post-a-plus-roadmap.md，已全部完成）。
+
+### Features
+
+- **Workbook-scope printing** — the print preview gains a
+  当前工作表 / 整个工作簿 scope switch: every sheet is paginated in tab
+  order with workbook-global `{page}`/`{pages}` numbering (fitWidth scaling
+  stays per-sheet), the print-area input applies to single-sheet scope only,
+  PDF export names the file 工作簿.pdf, and the summary line shows the
+  sheet count. `renderWorkbookPrintPages` composes per-sheet
+  `PrintPagesResult`s; `printPages`/`exportPagesToPdf` take a structural
+  `{ canvases }` so both scopes feed them unchanged.
+
+### Fixes
+
+- **Fill-drag selection lands on the fill result (Excel parity)** — after
+  dragging the fill handle (or double-click fill), the selection now covers
+  source ∪ target with the active cell still in the source and the
+  Shift+Arrow pivot on the far edge; previously the selection stayed on the
+  source range. `selectionAfterFill` is a pure function wired into the
+  renderer's `onFill` path and reported through `onSelectionChange` so the
+  name box / formula bar follow.
+- **Formula autocomplete signature mis-counted args after string literals** —
+  `stripLiterals` masked string content by stuffing quote characters, which
+  made the paren scanner swallow real commas between adjacent literals
+  (`=SUBSTITUTE("a,b",` reported arg 0 instead of 1). The mask now preserves
+  length and the outer quotes while replacing the content.
+- **demo: IndexedDB restore failure is now visible** — a fixed warning bar
+  (role=alert) explains the seed table is showing and offers 清除本地存档并刷新
+  (deleteWorkbook → reload, falling back to deleteDatabase when the store is
+  unreadable). Previously only a console error appeared.
 
 ### Testing
 
+- **Coverage close-out** — `formulaAssist` 64% → 98.3% (28 cases:
+  suggestion anchors/boundaries, innermost-signature comma depth, key
+  contract, `parseFormulaRefs`) and `useClipboardSession` 66% → 100%
+  statements (13 hook-level cases: session ants, cut=paste-once with
+  single-step undo, external-clipboard fallback, multi-area combine +
+  refusal, paste special matrix incl. cut-clears/formats-keeps). Fill
+  selection gained pure-function tests plus a renderer-level drag
+  simulation; workbook printing 4 pipeline tests. Suite now
+  **182 files / 1201 tests** green; tsc + eslint clean.
 - **Real-browser e2e (Playwright/Chromium)** — `pnpm e2e` runs 8 specs in
   ~8s covering the surfaces jsdom cannot reach: canvas/contextmenu via
   real right-click (cell menu 清除内容/插入-dialog insert, row/column
@@ -34,17 +73,15 @@
 
 ### Refactor
 
-- **Spreadsheet.tsx split phase 2 (1449 → 1160 lines)** — the canvas
-  keyboard dispatch (`handleCanvasKeyDown`/`handleEndMode`, dependency-
-  injected via `KeyboardContext`) and the ~20 pure spreadsheet actions
-  (AutoSum, menu shortcuts, chart/image/sparkline submits, name-box jump,
-  hide/unhide, last-used-cell, commitFormulaValue …) now live in
-  `components/keyboard.ts` and `components/spreadsheetActions.ts`, both
-  React-free and unit-testable. New `keyboard.test.ts` pins the key →
-  action routing (arrows/shift-extend/edge jumps, F2, printable seeding,
-  Delete, clipboard cut/paste, menu undo, Ctrl+;, Alt+=, Ctrl+D,
-  Ctrl/Shift+Space, End-mode arming/consumption) — 16 dispatch tests,
-  suite now 178 files / 1142 tests.
+- **Spreadsheet.tsx split phase 3 (1160 → 811 lines, ≤900 target met)** —
+  `InteractionToolbar` + `ProtectionModal` + font constants moved to
+  `components/InteractionToolbar.tsx`, the renderer lifecycle to
+  `components/hooks/useCanvasRenderer.ts`, the formula-engine sync to
+  `components/formulaSync.ts` (`createFormulaSync` re-exported for
+  compatibility), initial-data loading to `components/workbookInit.ts`, and
+  `applyMoveOrCopySheet` into `spreadsheetActions.ts`. Phase 2 (1449 → 1160)
+  had already extracted `keyboard.ts` + `spreadsheetActions.ts` (React-free,
+  unit-tested key → action routing, 16 dispatch tests).
 
 ### Features
 

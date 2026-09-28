@@ -3,18 +3,18 @@
 基线：176 文件 / 1117 测试全过；src 覆盖 92.3%；React 19.3 + antd 6.6.5；
 完成度评估 ≈90%。本计划按价值/依赖排序，每项含验收标准。
 
-## 进度（2026-09-28 收尾更新）
+## 进度（2026-09-28 收官：全部完成）
 
-当前基线：**179 文件 / 1149 测试全绿**。
+当前基线：**182 文件 / 1201 测试全绿**，Playwright e2e 8/8。
 
 | 项 | 状态 | 落点 |
 |---|---|---|
 | P0-1 spill | ✅ 完成 | 7b5e4ae — SEQUENCE/FILTER/UNIQUE/SORT/XLOOKUP 向量全链路 |
-| P1-2 拆分二期 | ◐ 部分完成 | d49dc96 — 1449 → 1160 行，keyboard.ts + spreadsheetActions.ts 已抽出并单测；wiring hooks 未做（≤900 留三期） |
+| P1-2 拆分二期+三期 | ✅ 完成 | d49dc96（二期 keyboard/actions）→ 9f489e7（三期 1160 → 811 行：InteractionToolbar / useCanvasRenderer / formulaSync / workbookInit / applyMoveOrCopySheet 迁出） |
 | P1-3 PrintPipeline 补测 | ✅ 完成 | b7baa38 — 19.5% → 97.7% |
 | P1-4 e2e | ✅ 完成 | e5c4b99 — playwright.config.ts + e2e/contextMenus.spec.ts 8 条剧本；`pnpm e2e` |
 | P2-5 文档补课 | ✅ 完成 | ROADMAP / PLAN / ARCHITECTURE / CHANGELOG（v2.1.0 候选段）/ README |
-| P2-6 小项 | ⬜ 未开始 | 见下 |
+| P2-6 小项 | ✅ 完成 | 955a125 多 sheet 打印（整个工作簿 + 跨表全局页码）；afe5e60 填充拖拽选区落点（selectionAfterFill）；4bbcd1c formulaAssist 98.3% / useClipboardSession 100%；9d233dc demo 恢复失败提示条 + 清库存档自救按钮 |
 
 ## P0-1 数组公式溢出（spill）— 唯一的硬功能缺口
 

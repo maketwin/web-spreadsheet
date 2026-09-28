@@ -67,8 +67,8 @@
 - [x] PrintPipeline coverage 19.5% → 97.7% (suite 179 files / 1149 tests)
 - [x] Playwright e2e scaffolding + 8 context-menu/dialog scripts (`pnpm e2e`)
 
-### v2.1 剩余项（见 docs/plan/2026-09-28-post-a-plus-roadmap.md）
-- [ ] Spreadsheet.tsx → ≤900 行（wiring hooks 三期）
-- [ ] `formulaAssist` / `useClipboardSession` 补测到 80%
-- [ ] 多 sheet 打印（整个工作簿）；填充拖拽选区落点观察项
-- [ ] demo IndexedDB 恢复失败可见提示
+### v2.1 收尾项（post-A+ 计划，2026-09-28 全部完成）
+- [x] Spreadsheet.tsx 三期拆分 → 811 行（InteractionToolbar / useCanvasRenderer / formulaSync / workbookInit / applyMoveOrCopySheet 各自成文件）
+- [x] `formulaAssist` 98.3% / `useClipboardSession` 100% 补测（含 stripLiterals 相邻字面量吞分隔符修复）
+- [x] 多 sheet 打印（打印对话框「整个工作簿」，跨表全局 {page}/{pages}）；填充拖拽选区落在填充结果区（Excel 对齐）
+- [x] demo IndexedDB 恢复失败可见提示条 + 一键清除本地存档
