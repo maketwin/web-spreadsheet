@@ -88,15 +88,19 @@ test('one-finger drag pans the sheet: the top-left cell is now a far row', async
   for (let i = 1; i <= 10; i += 1) steps.push({ type: 'pointermove', x: start.x, y: start.y - i * 30 });
   steps.push({ type: 'pointerup', x: start.x, y: start.y - 300 });
   await touchSequence(page, steps);
-  // 拖移 300px（≈15 行）后点左上角：名称框不再是 A1，公式栏是远端行文本。
-  // 布局在字体/antd 样式就绪前后可能微移——每轮重读画布原点再点，轮询到命中。
+  // 拖移 300px（行高 20 → 15 行）后点左上角：公式栏应是远端行文本。
+  // 每轮先 Escape 关掉可能被上一轮快速连点误开的双击编辑器（156d5f3 的
+  // 事故模式）；带行号区间的断言同时防过冲（>17）与欠冲（<13），不再
+  // 接受 0-59 行的任意命中。
   await expect(async () => {
+    await page.keyboard.press('Escape');
     const o = await canvasOrigin(page);
     await page.touchscreen.tap(o.x + 46 + 35, o.y + 30);
-    const name = await page.locator('.ss-formula-name').inputValue();
     const bar = await page.locator('.ss-formula-input').inputValue();
-    expect(name).not.toMatch(/A1$/i);
-    expect(bar).toMatch(/^r\d+$/);
+    const row = bar.match(/^r(\d+)$/)?.[1];
+    expect(row, `expected a far row, got "${bar}"`).toBeDefined();
+    expect(Number(row)).toBeGreaterThanOrEqual(13);
+    expect(Number(row)).toBeLessThanOrEqual(17);
   }).toPass({ timeout: 15_000 });
 });
 
