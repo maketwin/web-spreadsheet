@@ -312,7 +312,16 @@ function firstErrorIn(value: FormulaArgument): string | undefined {
     }
     return undefined;
   }
-  return errorValueOf(scalar(value));
+  if (isMatrix(value)) {
+    // Errors anywhere in a matrix propagate, not just at [0] — scalar() would
+    // mask an #N/A in the second row of a spilled vector.
+    for (const entry of value.data) {
+      const err = errorValueOf(entry);
+      if (err !== undefined) return err;
+    }
+    return undefined;
+  }
+  return errorValueOf(value);
 }
 
 /**
@@ -388,7 +397,7 @@ function hlookup(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver
 /**
  * Excel XLOOKUP(lookup, lookup_array, return_array, [if_not_found], [match_mode], [search_mode]).
  * This build: exact (0) + wildcard (2); search first-to-last (1) or last-to-first (-1).
- * Multi-cell return arrays yield the aligned single cell (no spill).
+ * Multi-cell return arrays spill the aligned vector (MatrixValue).
  */
 function xlookup(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver, resolveName?: NamedRangeResolver, ctx?: EvalContext): FormulaValue | MatrixValue {
   const [lookupArg, lookupArrArg, returnArrArg, ifNotFoundArg, matchModeArg, searchModeArg] = node.args;
@@ -600,16 +609,21 @@ function subtotal(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolve
 }
 
 function evaluateBinary(node: Extract<AstNode, { type: 'binary' }>, resolve: CellResolver, resolveName?: NamedRangeResolver, ctx?: EvalContext): FormulaArgument {
-  const left = evaluate(node.left, resolve, resolveName, ctx);
-  const right = evaluate(node.right, resolve, resolveName, ctx);
+  const rawLeft = evaluate(node.left, resolve, resolveName, ctx);
+  const rawRight = evaluate(node.right, resolve, resolveName, ctx);
+  // Matrix operands flatten to their row-major list first (the types.ts
+  // "inside expressions a matrix flattens" contract) — binaryScalar cannot
+  // consume a MatrixValue, and list×matrix math would come out #VALUE!.
+  const left: FormulaArgument = isMatrix(rawLeft) ? rawLeft.data : rawLeft;
+  const right: FormulaArgument = isMatrix(rawRight) ? rawRight.data : rawRight;
 
   // Excel array math: when either operand is a range/array, the operator maps
   // element-wise (SUMPRODUCT((B1:B3="a")*(A1:A3)) and friends). A scalar side
   // broadcasts to every element; two lists of different lengths run to the
   // longer one with blanks (null) filling the shorter side.
-  if (isFormulaList(left) || isFormulaList(right)) {
-    const l = isFormulaList(left);
-    const r = isFormulaList(right);
+  const l = isFormulaList(left);
+  const r = isFormulaList(right);
+  if (l || r) {
     const lList = l ? left : ([] as unknown as readonly FormulaValue[]);
     const rList = r ? right : ([] as unknown as readonly FormulaValue[]);
     const len = Math.max(l ? left.length : 1, r ? right.length : 1);
@@ -620,18 +634,6 @@ function evaluateBinary(node: Extract<AstNode, { type: 'binary' }>, resolve: Cel
       out[i] = binaryScalar(node.op, lv, rv);
     }
     return out;
-  }
-  if (isMatrix(left) || isMatrix(right)) {
-    const lf = isMatrix(left) ? left.data : left;
-    const rf = isMatrix(right) ? right.data : right;
-    if (Array.isArray(lf) || Array.isArray(rf)) {
-      const la = Array.isArray(lf) ? lf : Array.from({ length: (Array.isArray(rf) ? rf.length : 1) }, () => lf as FormulaValue);
-      const ra = Array.isArray(rf) ? rf : Array.from({ length: la.length }, () => rf as FormulaValue);
-      const n = Math.min(la.length, ra.length);
-      const out: FormulaValue[] = new Array(n);
-      for (let i = 0; i < n; i += 1) out[i] = binaryScalar(node.op, la[i] ?? null, ra[i] ?? null);
-      return out;
-    }
   }
   return binaryScalar(node.op, left as FormulaValue, right as FormulaValue);
 }
@@ -683,12 +685,13 @@ function compare(a: FormulaValue, b: FormulaValue): number {
   return textOf(a).toLowerCase().localeCompare(textOf(b).toLowerCase());
 }
 
-/** The seven Excel error literals; plain text like "#tag" must NOT be treated as an error. */
+/** Functions that inspect a value's error/blank/type status rather than compute with it. */
 const ERROR_INSPECTING: ReadonlySet<string> = new Set([
   'ISERROR', 'ISERR', 'ISNA', 'ISBLANK', 'ISNUMBER', 'ISTEXT', 'ISLOGICAL', 'ISNONTEXT',
 ]);
 
-export const EXCEL_ERRORS: ReadonlySet<string> = new Set(['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A']);
+/** Excel error literals; plain text like "#tag" must NOT be treated as an error. #SPILL!/#CALC! are the dynamic-array errors (Excel 365 set). */
+export const EXCEL_ERRORS: ReadonlySet<string> = new Set(['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A', '#SPILL!', '#CALC!']);
 
 /** A cell/formula value that is itself an Excel error literal ('#DIV/0!', '#N/A', …). */
 function errorValueOf(v: FormulaValue): string | undefined {
