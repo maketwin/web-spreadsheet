@@ -156,6 +156,96 @@ describe('touch gestures (pan / long-press / tap)', () => {
     expect(range.r2).toBe(3);
     renderer.destroy();
   });
+
+  it('pressing to pan does not select the cell under the finger', () => {
+    const store = seedStore();
+    const onCellClick = vi.fn();
+    const canvas = makeCanvas();
+    const renderer = new CanvasRenderer({ canvas, store, onCellClick, selectedRange: { r1: 0, c1: 0, r2: 4, c2: 1 } });
+    const p = cellPoint(20, 0);
+    // Press alone must not collapse the selection / fire a click — the cell
+    // selection is deferred to the lift, which a pan never reaches.
+    canvas.dispatchEvent(pointerEvent('pointerdown', p));
+    expect(onCellClick).not.toHaveBeenCalled();
+    window.dispatchEvent(pointerEvent('pointermove', { x: p.x, y: p.y - 60 }));
+    window.dispatchEvent(pointerEvent('pointerup', { x: p.x, y: p.y - 60 }));
+    expect(onCellClick).not.toHaveBeenCalled();
+    // A following clean tap still selects normally. The pan scrolled 60px
+    // (3 rows), so the same screen point now lands on row 5.
+    const q = cellPoint(2, 0);
+    canvas.dispatchEvent(pointerEvent('pointerdown', q));
+    window.dispatchEvent(pointerEvent('pointerup', q));
+    expect(onCellClick).toHaveBeenCalledTimes(1);
+    expect(onCellClick.mock.calls[0]?.[0]).toEqual({ r: 5, c: 0 });
+    renderer.destroy();
+  });
+
+  it('a second finger mid fill-drag cancels the drag instead of leaking it', () => {
+    const store = seedStore();
+    const onFill = vi.fn();
+    const onCellClick = vi.fn();
+    const canvas = makeCanvas();
+    const renderer = new CanvasRenderer({ canvas, store, onFill, onCellClick, selectedRange: { r1: 0, c1: 0, r2: 1, c2: 1 } });
+    // Press on the fill handle (bottom-right corner of the selection).
+    const handle = { x: ROW_HEADER_WIDTH + 2 * COL_WIDTH - 5, y: COL_HEADER_HEIGHT + 2 * ROW_HEIGHT - 5 };
+    canvas.dispatchEvent(pointerEvent('pointerdown', handle));
+    window.dispatchEvent(pointerEvent('pointermove', { x: handle.x, y: handle.y + 80 }));
+    // A palm/second finger lands: the drag must be CANCELLED, not abandoned —
+    // an abandoned drag would commit a phantom fill on the next tap's up.
+    canvas.dispatchEvent(pointerEvent('pointerdown', { x: 400, y: 100, id: 2 }));
+    window.dispatchEvent(pointerEvent('pointerup', { x: 400, y: 100, id: 2 }));
+    window.dispatchEvent(pointerEvent('pointerup', handle));
+    expect(onFill).not.toHaveBeenCalled();
+    // The next tap must not trigger the ghost commit either.
+    const q = cellPoint(8, 0);
+    canvas.dispatchEvent(pointerEvent('pointerdown', q));
+    window.dispatchEvent(pointerEvent('pointerup', q));
+    expect(onFill).not.toHaveBeenCalled();
+    expect(onCellClick).toHaveBeenCalledTimes(1);
+    renderer.destroy();
+  });
+
+  it('pointercancel aborts a fill drag without committing', () => {
+    const store = seedStore();
+    const onFill = vi.fn();
+    const canvas = makeCanvas();
+    const renderer = new CanvasRenderer({ canvas, store, onFill, selectedRange: { r1: 0, c1: 0, r2: 1, c2: 1 } });
+    const handle = { x: ROW_HEADER_WIDTH + 2 * COL_WIDTH - 5, y: COL_HEADER_HEIGHT + 2 * ROW_HEIGHT - 5 };
+    canvas.dispatchEvent(pointerEvent('pointerdown', handle));
+    window.dispatchEvent(pointerEvent('pointermove', { x: handle.x, y: handle.y + 80 }));
+    window.dispatchEvent(pointerEvent('pointercancel', handle));
+    const q = cellPoint(8, 0);
+    canvas.dispatchEvent(pointerEvent('pointerdown', q));
+    window.dispatchEvent(pointerEvent('pointerup', q));
+    expect(onFill).not.toHaveBeenCalled();
+    renderer.destroy();
+  });
+
+  it('lifting one finger of a pinch rebases the zoom on the survivors (no jump)', () => {
+    const store = seedStore();
+    const onZoomTo = vi.fn();
+    const canvas = makeCanvas();
+    const renderer = new CanvasRenderer({ canvas, store, onZoomTo });
+    const a = { x: 200, y: 300 };
+    const b = { x: 300, y: 300 };
+    canvas.dispatchEvent(pointerEvent('pointerdown', a));
+    canvas.dispatchEvent(pointerEvent('pointerdown', { ...b, id: 2 }));
+    onZoomTo.mockClear();
+    // A third finger joins, then one of the ORIGINAL pair lifts: the base must
+    // be recomputed on the remaining pair instead of jumping against the stale
+    // 100px distance.
+    canvas.dispatchEvent(pointerEvent('pointerdown', { x: 500, y: 300, id: 3 }));
+    window.dispatchEvent(pointerEvent('pointerup', { ...b, id: 2 }));
+    onZoomTo.mockClear();
+    // Survivors: a (200) and finger 3 (500) — base distance 300. Pinch in to
+    // 200 → 100 * (200/300) ≈ 66.7 (NOT the 200 clamp a stale base gives).
+    window.dispatchEvent(pointerEvent('pointermove', { x: 400, y: 300, id: 3 }));
+    expect(onZoomTo).toHaveBeenCalled();
+    const zoom = onZoomTo.mock.calls.at(-1)?.[0] as number;
+    expect(zoom).toBeGreaterThan(60);
+    expect(zoom).toBeLessThan(75);
+    renderer.destroy();
+  });
 });
 
 describe('scrollCellIntoView (soft keyboard case)', () => {

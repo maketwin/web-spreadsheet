@@ -61,12 +61,17 @@ export class FillHandle {
 
   public isDragging(): boolean { return this.dragging; }
 
+  /** Abort an in-flight drag WITHOUT committing (multi-touch or system
+   * interrupt): the finger is somewhere unrelated by then and onMouseUp would
+   * commit a phantom fill there. Repainting is the caller's call. */
+  public cancel(): void { this.dragging = false; this.fillTarget = undefined; }
+
   public getFillTarget(): RangeAddress | undefined { return this.fillTarget; }
 
   /** True when the point is over the handle square (renderer routes double-click fills). */
   public isHandleAt(clientX: number, clientY: number): boolean { return this.isOverHandle(clientX, clientY); }
 
-  public destroy(): void { this.dragging = false; this.fillTarget = undefined; }
+  public destroy(): void { this.cancel(); }
 
   private isOverHandle(clientX: number, clientY: number, tolerance = 0): boolean {
     const range = this.opts.selectedRange();

@@ -88,6 +88,10 @@ const FILTERED_ROW_NUMBER_COLOR = '#0057C2';
 /** Sparkline series colors, matching the React Sparkline component. */
 const SPARKLINE_COLOR = '#4A90D9';
 const SPARKLINE_LOSS_COLOR = '#D94A4A';
+/** Shared touch-gesture timing — BottomBar's sheet-tab long-press must match
+ * the canvas's, so the value lives here once instead of as two magic numbers. */
+export const LONG_PRESS_MS = 550;
+export const LONG_PRESS_SLOP = 12;
 
 /** Logical border edges for the current paint pass (deduped in edge-space). */
 
@@ -203,8 +207,11 @@ export class CanvasRenderer {
 
   public destroy(): void {
     if (this.rafId !== null) window.cancelAnimationFrame(this.rafId);
+    this.resetGesture(false);
+    this.lastTap = null;
+    this.touchPointerAt = 0;
     this.rafId = null; this.resizeHandler.destroy(); this.fillHandle.destroy(); this.unsubscribe(); this.unbindEvents();
-    this.clearLongPress(); this.pan = null; this.pointers.clear(); this.pinchBase = null;
+    this.pointers.clear(); this.pinchBase = null;
     this.overlayCanvas?.remove(); this.overlayCanvas = null; this.octx = null;
     if (this.antsTimer !== null) { window.clearInterval(this.antsTimer); this.antsTimer = null; }
   }
@@ -358,6 +365,14 @@ export class CanvasRenderer {
   private readonly pointers = new Map<number, { x: number; y: number }>();
   private pinchBase: { dist: number; zoom: number } | null = null;
   private lastTap: { x: number; y: number; time: number } | null = null;
+  /** Deferred touch tap: cell selection runs on LIFT, so pressing to pan or
+   * browse must not collapse an existing selection to the cell under the
+   * finger. Null while the classic (mouse) path or an object drag owns the
+   * press. */
+  private pendingTap: { x: number; y: number; shiftKey: boolean; ctrlKey: boolean } | null = null;
+  /** Set only around the pointer-down call into handleMouseDown: the cell
+   * selection block defers itself to pendingTap instead of selecting now. */
+  private deferCellSelection = false;
   /** Touch one-finger pan: the drag scrolls the sheet instead of pulling a
    * selection rectangle (every mobile spreadsheet works this way — without it
    * a 1000-row sheet is unreachable on a phone). Selection stays available
@@ -369,8 +384,6 @@ export class CanvasRenderer {
    * mouse events right after, which must not double-handle the gesture. */
   private touchPointerAt = 0;
   private static readonly TOUCH_SLOP = 6;
-  private static readonly LONG_PRESS_MS = 550;
-  private static readonly LONG_PRESS_SLOP = 12;
   /** Extra hit radius for handle/border hot zones under touch (fat fingers). */
   private static readonly TOUCH_HIT_TOLERANCE = 18;
   private mouseAfterTouch(): boolean {
@@ -380,6 +393,53 @@ export class CanvasRenderer {
   private clearLongPress(): void {
     if (this.longPress !== null) { window.clearTimeout(this.longPress.timer); this.longPress = null; }
   }
+
+  /** Reset every gesture field to idle, CANCELLING (never committing) any
+   * in-flight object drag. Every non-default exit — second finger, multi-finger
+   * lift, pointercancel, destroy — funnels through here so no exit combination
+   * can leak a live drag whose commit the next tap would trigger.
+   * `repaint: false` is for destroy(), where scheduling one more frame after
+   * teardown would fire into dead mocks. */
+  private resetGesture(repaint = true): void {
+    this.clearLongPress();
+    this.pan = null;
+    this.pendingTap = null;
+    this.dragAnchor = null;
+    this.moveDrag = null;
+    this.pinchBase = null;
+    this.fillHandle.cancel();
+    this.resizeHandler.cancel();
+    this.opts.canvas.style.cursor = '';
+    if (repaint) this.invalidateAll();
+  }
+
+  /** (Re)base pinch zoom on the current first two pointers. Called on every
+   * pointer-set change so a third finger joining or leaving never measures the
+   * next pinch against a stale distance (which jumps the zoom to the clamp). */
+  private armPinch(): void {
+    const pts = [...this.pointers.values()];
+    const a = pts[0];
+    const b = pts[1];
+    this.pinchBase = a !== undefined && b !== undefined
+      ? { dist: Math.hypot(a.x - b.x, a.y - b.y), zoom: this.opts.zoom ?? 100 }
+      : null;
+  }
+
+  /** Run the cell selection deferred from a touch press (see pendingTap).
+   * Mirrors the mouse down sequence — select, hyperlink suppress, onCellClick —
+   * so the following mouseup flip behaves exactly like a mouse tap. */
+  private runDeferredTapSelection(): void {
+    const tap = this.pendingTap;
+    this.pendingTap = null;
+    if (tap === null) return;
+    const cell = this.pointerCell(tap.x, tap.y);
+    if (cell === null) return;
+    this.dragAnchor = { type: 'cell', ...cell };
+    this.setSelectedCell(cell);
+    if (tap.ctrlKey && this.opts.store.getCell(cell.r, cell.c)?.hyperlink !== undefined) this.suppressMouseUpSelection = true;
+    if (tap.shiftKey) this.opts.onCellClick?.(cell, true); else this.opts.onCellClick?.(cell, false, tap.ctrlKey);
+  }
+
   private readonly fireLongPress = (): void => {
     const lp = this.longPress;
     this.longPress = null;
@@ -387,9 +447,11 @@ export class CanvasRenderer {
     if (lp === null) return;
     // In-flight object drags own the gesture — no menu mid-resize/move/fill.
     if (this.fillHandle.isDragging() || this.resizeHandler.isResizing() || this.moveDrag !== null) return;
+    // The menu acts on the pressed cell — run the deferred tap selection (a
+    // touch press does not select; the lift that usually does may never come).
+    this.runDeferredTapSelection();
     this.dragAnchor = null;
-    // The touch-down already selected the cell under the finger; the mouseup
-    // that eventually follows must not re-run the drag-origin selection flip.
+    // The mouseup that eventually follows must not re-run the selection flip.
     this.suppressMouseUpSelection = true;
     // Route through the ordinary contextmenu listener: header vs cell vs
     // filter-button routing stays in exactly one place.
@@ -402,27 +464,23 @@ export class CanvasRenderer {
     if (ev.pointerType === 'mouse') return;
     this.touchPointerAt = performance.now();
     this.pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
-    if (this.pointers.size === 2) {
-      // Second finger: switch to pinch zoom and abort the in-progress drag.
-      this.dragAnchor = null;
-      this.moveDrag = null;
-      this.pan = null;
-      this.clearLongPress();
-            const pts = [...this.pointers.values()];
-      const a = pts[0];
-      const b = pts[1];
-      if (a !== undefined && b !== undefined) {
-        // pinchBase.zoom is a PERCENT (onZoomTo's unit) — zoom() is a fraction.
-        this.pinchBase = { dist: Math.hypot(a.x - b.x, a.y - b.y), zoom: this.opts.zoom ?? 100 };
-      }
+    if (this.pointers.size >= 2) {
+      // Second+ finger: pinch takes over. Every in-flight drag is cancelled,
+      // never committed — the gesture finger is somewhere unrelated by now,
+      // and a leaked fill/resize drag would commit on the NEXT tap's up.
+      this.resetGesture();
+      this.armPinch();
       return;
     }
-    if (this.pointers.size > 2) return;
     this.pan = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, moved: false };
+    // Touch taps select on LIFT, not press (see pendingTap) so a pan press
+    // cannot collapse an existing selection to the cell under the finger.
+    this.deferCellSelection = true;
     this.handleMouseDown(ev, true);
+    this.deferCellSelection = false;
     // Arm after handleMouseDown: an in-flight fill/resize/move drag (started by
     // this same press on a handle/border) cancels the pending menu on fire.
-    if (this.pan !== null) this.longPress = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, timer: window.setTimeout(this.fireLongPress, CanvasRenderer.LONG_PRESS_MS) };
+    if (this.pan !== null) this.longPress = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, timer: window.setTimeout(this.fireLongPress, LONG_PRESS_MS) };
   };
 
   private readonly handlePointerMove = (ev: PointerEvent): void => {
@@ -439,7 +497,7 @@ export class CanvasRenderer {
       this.opts.onZoomTo?.(target);
       return;
     }
-    if (this.longPress !== null && Math.hypot(ev.clientX - this.longPress.x, ev.clientY - this.longPress.y) > CanvasRenderer.LONG_PRESS_SLOP) this.clearLongPress();
+    if (this.longPress !== null && Math.hypot(ev.clientX - this.longPress.x, ev.clientY - this.longPress.y) > LONG_PRESS_SLOP) this.clearLongPress();
     if (this.pan !== null && ev.pointerId === this.pan.id) {
       const dx = ev.clientX - this.pan.x;
       const dy = ev.clientY - this.pan.y;
@@ -448,7 +506,7 @@ export class CanvasRenderer {
         // Object drags (move-range / fill / resize) and header drags keep the
         // classic path; only plain cell gestures become pans.
         if (this.fillHandle.isDragging() || this.resizeHandler.isResizing() || this.moveDrag !== null || (this.dragAnchor !== null && this.dragAnchor.type !== 'cell')) { this.pan = null; }
-        else { this.pan = { ...this.pan, moved: true }; this.clearLongPress(); this.dragAnchor = null; }
+        else { this.pan = { ...this.pan, moved: true }; this.clearLongPress(); this.dragAnchor = null; this.pendingTap = null; }
       }
       if (this.pan !== null && this.pan.moved) {
         // scrollBy is INCREMENTAL: feed the delta from the LAST pointer
@@ -467,9 +525,10 @@ export class CanvasRenderer {
     const wasMulti = this.pointers.size >= 2;
     this.pointers.delete(ev.pointerId);
     if (wasMulti) {
-      if (this.pointers.size < 2) this.pinchBase = null;
-      this.clearLongPress();
-      this.pan = null;
+      // Fingers remain: rebase the pinch on the survivors so the zoom does not
+      // jump when the lifted finger was half of the original base pair.
+      this.resetGesture();
+      if (this.pointers.size >= 2) this.armPinch();
       return;
     }
     const finishedPan = this.pan !== null && ev.pointerId === this.pan.id;
@@ -481,6 +540,7 @@ export class CanvasRenderer {
         // A pan is not a selection gesture: null the drag anchor so the
         // mouseup selection flip never runs.
         this.dragAnchor = null;
+        this.pendingTap = null;
         this.handleMouseUp();
         return;
       }
@@ -494,6 +554,7 @@ export class CanvasRenderer {
     const now = performance.now();
     if (this.lastTap !== null && now - this.lastTap.time <= 300 && Math.hypot(ev.clientX - this.lastTap.x, ev.clientY - this.lastTap.y) <= 16) {
       this.lastTap = null;
+      this.runDeferredTapSelection();
       this.handleMouseUp();
       const target = ev.target instanceof Element ? ev.target : this.opts.canvas;
       target.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true, clientX: ev.clientX, clientY: ev.clientY, button: 0 }));
@@ -501,18 +562,19 @@ export class CanvasRenderer {
     }
     const moved = Math.hypot(ev.clientX - (this.lastTap?.x ?? -999), ev.clientY - (this.lastTap?.y ?? -999));
     this.lastTap = moved <= 16 ? { x: ev.clientX, y: ev.clientY, time: now } : null;
+    this.runDeferredTapSelection();
     this.handleMouseUp();
   };
 
   private readonly handlePointerCancel = (ev: PointerEvent): void => {
     if (ev.pointerType === 'mouse') return;
     this.pointers.delete(ev.pointerId);
-    if (this.pointers.size < 2) this.pinchBase = null;
-    this.dragAnchor = null;
-    this.moveDrag = null;
-    this.pan = null;
-    this.clearLongPress();
-      };
+    // System interrupt (scrolling takeover, palm rejection): cancel, never
+    // commit — the leaked-drag-commit path is exactly the bug class
+    // resetGesture exists for.
+    this.resetGesture();
+    if (this.pointers.size >= 2) this.armPinch();
+  };
 
   private readonly handleMouseDown = (ev: MouseEvent, fromPointer = false): void => {
     // Every new press starts a fresh gesture: a suppress flag left stale by a
@@ -554,6 +616,12 @@ export class CanvasRenderer {
         copy: ev.ctrlKey || ev.metaKey,
       };
       this.opts.canvas.style.cursor = this.moveDrag.copy ? 'copy' : 'move';
+      return;
+    }
+    if (this.deferCellSelection) {
+      // Touch press: the selection is deferred to the lift (pendingTap) — see
+      // runDeferredTapSelection. Object drags above still engage immediately.
+      this.pendingTap = { x: ev.clientX, y: ev.clientY, shiftKey: ev.shiftKey, ctrlKey: ev.ctrlKey || ev.metaKey };
       return;
     }
     this.dragAnchor = { type: 'cell', ...cell }; this.setSelectedCell(cell);

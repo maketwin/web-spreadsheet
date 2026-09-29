@@ -103,7 +103,12 @@ export class ResizeHandler {
 
   public isResizing(): boolean { return this.drag !== null; }
 
-  public destroy(): void { this.drag = null; }
+  /** Abort an in-flight resize WITHOUT committing (multi-touch or system
+   * interrupt) — onMouseUp would apply the size at wherever the finger ended.
+   * Repainting is the caller's call. */
+  public cancel(): void { this.drag = null; }
+
+  public destroy(): void { this.cancel(); }
 
   private updateDrag(event: MouseEvent): void {
     const d = this.drag;
