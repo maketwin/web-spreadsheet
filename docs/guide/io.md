@@ -20,7 +20,7 @@ import { exportXlsx, exportXlsxBuffer } from 'web-spreadsheet';
 | 公式 | ✅ 写入 `f` 字段（缓存值随行，Excel 打开后重算） |
 | 数字格式 | ✅ 写入 xlsx 单元格 `z` 字段；内置格式映射：`number→#,##0.00`、`currency→¥#,##0.00`、`percent→0.00%`、`date→yyyy-mm-dd`、`time→hh:mm:ss`、`scientific→0.00E+00` |
 | 合并单元格 | ✅ 写入 `!merges` |
-| 单元格样式 | ❌ 不导出（SheetJS 社区版限制） |
+| 单元格样式 | ✅ 自写 `styles.xml`（fonts / fills / numFmts / cellXfs）：粗/斜/下划线/删除线、字号与字体名、文字颜色、实底填充色、水平垂直对齐、自动换行、数字格式；**边框暂不导出** |
 
 产出标准 xlsx 二进制（MIME `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`），UI 下载为 `workbook.xlsx`。
 
@@ -44,17 +44,17 @@ cmdManager.clear();          // Excel 语义：打开文件不可撤销
 | 行高 / 列宽 | ✅ `!rows` / `!cols`（含隐藏标记） |
 
 - UI 的「导入 xlsx」用 `Store.replaceAll` 热替换整个工作簿并清空撤销历史（Excel 打开文件同样不可撤销）；解析失败弹错误提示。
-- 已知限制：图表、条件格式、数据验证、筛选状态、边框与主题色（theme/indexed 非实底填充）不导入。
+- 已知限制：条件格式、数据验证、迷你图、浮动图片、行分组、命名区域、边框与主题色（theme/indexed 非实底填充）不导入。图表、批注、超链接**已导入**（drawing/chart XML、comment XML 与 `hyperlink` 关系）。
 - 文件选择器接受 `.csv .tsv .xlsx .json`。
 
 ## CSV / TSV / JSON
 
 | 方向 | 格式 | 机制 |
 |------|------|------|
-| 导入 | CSV / TSV | 文本按行、按 Tab 切分写入（CSV 的逗号先统一替换为 Tab）；**不支持引号包裹字段** |
+| 导入 | CSV / TSV | 文本按行、按 Tab 切分写入（CSV 的逗号先统一替换为 Tab）；**不支持引号包裹字段**。编码自动探测：UTF-16LE BOM → UTF-8（BOM / 严格解码）→ GBK 回退（兼容中文 Excel 导出的 GBK 文件） |
 | 导入 | JSON | 以 `{` 开头按 JSON 解析，走 `Store.deserialize` 后拷入当前 store |
 | 导出 | JSON | `JSON.stringify(store.serialize(), null, 2)`，下载为 `workbook.json` |
-| 导出 | CSV / TSV | ❌ 暂无导出（复制到剪贴板时是 TSV 格式，可粘贴到文本编辑器） |
+| 导出 | CSV | ✅ `exportCsv` / `exportCsvBlob` / `csvQuote`（已从包根导出）：BOM'd UTF-8、写出显示值（数字格式已应用）、引号转义；下载为 `workbook.csv`。TSV 暂无文件导出（复制到剪贴板时是 TSV 格式） |
 
 ## 剪贴板（TSV + HTML 双格式）
 
@@ -92,6 +92,24 @@ ClipboardService.parseHtml(html);          // <table> → Cell[][]
 
 对 `Ctrl/Cmd` + 点击建立的**多选区域**执行复制/剪切时，遵循 Excel 规则：所有区域**行对齐**（按列拼接）或**列对齐**（按行拼接）才能合并为一个矩形块复制；否则提示「不能对多重选定区域使用此命令」。多选区上按 `Delete` 一次清空所有区域，合并为单个撤销步骤。
 
+## 打印与 PDF 导出
+
+打印管线位于 `src/print/`（`PrintPipeline` 分页 + `PrintPainter` 绘制，192-dpi 离屏 canvas 渲染每页），当前为内部实现（未从包根导出），UI 的 `Ctrl+P` 打印预览已自动接线。
+
+- **打印设置**：纸张（A4/Letter 等）、方向、页边距预设、缩放（适应页宽 / 自定义百分比 50–200）、是否打印网格线、打印区域（`A1:F20` 语法，仅当前工作表范围有效）。
+- **页眉页脚**：支持 `{page}`、`{pages}`、`{sheet}` 占位符。
+- **范围**：打印预览提供「当前工作表 / 整个工作簿」切换——整簿按标签顺序逐表分页，`{page}`/`{pages}` 用工作簿全局编号（适应页宽缩放仍按表独立计算）；PDF 导出整簿时文件名为 `工作簿.pdf`。
+- **分页语义**：合并单元格感知的分页（不把合并块切断），冻结窗格不影响分页。
+
+程序化接口（`src/print/PrintPipeline.ts` 与 `src/io/pdfExport.ts`，暂未从包根导出，调用形态供参考）：
+
+```ts
+// renderPrintPages(store, sheetId, settings)        → 单表分页 PrintPagesResult
+// renderWorkbookPrintPages(store, settings, scope)  → 整簿分页，scope: 'active' | 'workbook'
+// printPages(result, settings)                      → 唤起浏览器打印
+// exportPagesToPdf(result, settings)                → Promise<Blob>（PDF）
+```
+
 ## IndexedDB 自动保存与恢复
 
 基于 Dexie，数据库名 `web-spreadsheet`，对象仓库 `workbooks`（主键 `id`，索引 `updatedAt`）。
@@ -113,11 +131,11 @@ new Spreadsheet('app').mount();
 ### 直接操作数据库
 
 ```ts
-import { saveWorkbook, loadWorkbook, deleteWorkbook, DEFAULT_ID } from 'web-spreadsheet';
+import { loadWorkbook, deleteWorkbook, DEFAULT_ID } from 'web-spreadsheet';
 ```
 
 ::: warning
-`saveWorkbook` / `loadWorkbook` / `deleteWorkbook` / `DEFAULT_ID` 由 `src/db/` 提供，当前**未从包根导出**，以上 import 语句为规划用法；现阶段通过 `mount()` / `destroy()` 生命周期自动管理持久化即可。
+`loadWorkbook` / `deleteWorkbook` / `DEFAULT_ID` 已从包根导出；`saveWorkbook` 暂未导出（自动保存内部使用）。需要手动落盘时用上文的 `store.serialize()` 自行存储即可。
 :::
 
 ### 禁用 / 清除

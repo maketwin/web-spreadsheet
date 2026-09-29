@@ -1,6 +1,6 @@
 # 数据模型
 
-本章说明电子表格的数据结构：单元格、样式、行/列元数据、合并单元格以及序列化格式。所有类型均从包根导出。
+本章说明电子表格的数据结构：单元格、样式、行/列元数据、合并单元格以及序列化格式。`Cell`、`Cell` 相关基础类型（`CellValue` / `RowMeta` / `ColMeta` / `Style`）从包根导出；`RichTextRun`、`CellHyperlink`、`CellComment`、`ImageSpec`、`RowGroupDef` 等扩展类型目前需从仓库内部路径引用（或依赖类型推断），包根导出清单见 [API 文档](/api/spreadsheet)。
 
 ## CellInput（输入格式）
 
@@ -26,13 +26,19 @@ export type CellInput = string | Partial<Cell>;
 export type CellValue = string | number | boolean | Date | null;
 
 export interface Cell {
-  text: string;        // 必填，显示文本
-  value?: CellValue;   // 解析后的值（数字/日期/布尔等）
-  formula?: string;    // 公式（以 '=' 开头）
-  styleId?: string;    // 指向样式表 SheetData.styles 的键
+  text: string;         // 必填，显示文本
+  value?: CellValue;    // 解析后的值（数字/日期/布尔等）
+  formula?: string;     // 公式（以 '=' 开头）
+  styleId?: string;     // 指向样式表 SheetData.styles 的键
   type?: 'text' | 'number' | 'date' | 'boolean';
+  richText?: RichTextRun[];  // 富文本（文本常量格；text 恒等于各 run 串联）
+  spillOf?: string;     // 动态数组影子格：锚点公式的 "sheetId:r,c"（见公式引擎）
+  hyperlink?: CellHyperlink; // 超链接 { target, tooltip? }
+  comment?: CellComment;     // 批注 { text, author?, createdAt? }
 }
 ```
+
+`RichTextRun { text, style? }` 的 `style` 支持 bold/italic/underline/strike/字号/字体/颜色/上下标。`spillOf` 影子格随单元格序列化，锚点每次重算时整批重建。
 
 单元格按 `"r,c"`（行,列，从 0 开始）为键存在 `Map` 里，空单元格不占存储。
 
@@ -43,6 +49,7 @@ export interface Style {
   bold?: boolean;
   italic?: boolean;
   underline?: boolean;
+  strike?: boolean;     // 删除线
   color?: string;       // 字体颜色
   bgcolor?: string;     // 背景色
   align?: 'left' | 'center' | 'right';
@@ -51,6 +58,8 @@ export interface Style {
   fontFamily?: string;
   numberFormat?: string; // 内置名或 Excel 自定义格式串，见「格式化」
   wrap?: boolean;        // 自动换行
+  indent?: number;       // 缩进级别（0–15）
+  textRotation?: number; // 文字旋转（−90…90）
   border?: { top?: string; bottom?: string; left?: string; right?: string };
 }
 ```
@@ -58,7 +67,7 @@ export interface Style {
 样式去重存储：相同的样式共享一个 `styleId`，单元格只存引用。
 
 ::: warning 注意
-字段名是 `numberFormat`（不是 `format`）。样式已支持删除线（`strike`）、缩进（`indent`）、文字旋转（`textRotation`，−90…90）。
+字段名是 `numberFormat`（不是 `format`）。
 :::
 
 ## 行 / 列元数据
@@ -115,6 +124,8 @@ UI 层由 `mergeSelection`（`src/components/mergeActions.ts`）统一入口，�
 | `merges` | 合并区域集合 |
 | `conditionalRules` | 条件格式规则（见[格式化](/guide/formatting)） |
 | `charts` / `sparklines` | 图表 / 迷你图定义 |
+| `images` | 浮动图片对象（`ImageSpec`，data URL 持久化） |
+| `rowGroups` | 行分组区间（`RowGroupDef { start, end }`） |
 | `validationRules` | 数据验证规则 |
 | `namedRanges` | 命名区域 |
 | `protection` | 工作表保护状态 |
@@ -174,6 +185,10 @@ const off = store.subscribe((e) => { /* StoreEvent */ });
 - `target`：`http(s)://`、`mailto:`、`A1` 或 `Sheet1!A1`（及 `#Sheet1!A1`）
 - 插入：菜单 **插入 → 链接...**（`Ctrl+K` 若已绑定则同）
 - 打开：选中带链接的单元格后 **Ctrl+单击**（外链新标签；表内跳转）
-- **不做批注/备注**
-- xlsx：尽力通过 SheetJS 的 `l` 字段往返；JSON 工作簿完整保留
+- 粘贴 / 填充跟随链接语义（会话与系统剪贴板携带 `hyperlink`，覆盖写入清除旧链接）
+- xlsx：通过 SheetJS 的 `l` 字段与 hyperlink 关系双向往返；JSON 工作簿完整保留
+
+## 批注
+
+数据模型支持批注（`Cell.comment`，xlsx 经 comment XML 双向往返），并提供 `SetCellCommentCommand` 命令；**UI 入口（右键菜单/红三角指示）已按产品决策移除**，当前只有程序化写入路径。
 

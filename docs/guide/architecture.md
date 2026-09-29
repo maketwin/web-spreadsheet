@@ -7,7 +7,7 @@ web-spreadsheet 是一个分层清晰的 TypeScript SDK：上层业务只接触 
    ↓
 [Layer 4: API / Facade]      src/components/Spreadsheet.tsx + src/index.ts
    ↓
-[Layer 3: Commands]           src/commands/   (22 个命令 + undo/redo)
+[Layer 3: Commands]           src/commands/   (37 个命令 + undo/redo)
    ↓
 [Layer 2: Store + Formula]    src/store/  src/formula/
 [Layer 2b: Event Bus]         src/events/  ←  store.subscribe() 变更事件
@@ -40,10 +40,16 @@ web-spreadsheet 是一个分层清晰的 TypeScript SDK：上层业务只接触 
 | `src/protection/` | 工作表保护 |
 | `src/sparkline/` `src/charts/` | 迷你图（SVG）/ 图表（Chart.js） |
 | `src/clipboard/` | 复制/剪切/粘贴（TSV + HTML 双格式） |
-| `src/keys/` | 键盘事件解析 |
+| `src/data/` | 数据工具：分列、删除重复项 |
+| `src/outline/` | 行分组（组合/折叠/展开） |
+| `src/analysis/` | 数据透视表（按首列分组求和，写入新工作表） |
+| `src/print/` | 分页打印管线（单表/整簿、PDF 导出） |
+| `src/find/` | 查找替换服务 |
+| `src/selection/` `src/keys/` | 名称框解析与可见步进 / 键盘事件解析 |
 | `src/db/` | IndexedDB 自动保存（Dexie） |
-| `src/io/` | xlsx 导入导出（SheetJS） |
+| `src/io/` | xlsx 导入导出（SheetJS，含样式/图表/批注/超链接 XML）、CSV、PDF |
 | `src/plugin/` `src/plugins/` | 插件系统与内置插件 |
+| `src/util/` | 共享工具（网格常量 `gridSize`、富文本、合并、超链接等） |
 
 ## 渲染性能要点
 

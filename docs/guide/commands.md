@@ -1,6 +1,6 @@
 # 命令与撤销
 
-所有对电子表格的修改都通过**命令模式**完成：每个命令是一个携带参数的对象，`execute(store)` 执行修改，`getUndo()` 返回一个能恢复原状的逆命令。`CommandManager` 维护 undo / redo 两个栈，**全部 23 个命令都可撤销**，且每个命令的撤销路径都有测试覆盖。
+所有对电子表格的修改都通过**命令模式**完成：每个命令是一个携带参数的对象，`execute(store)` 执行修改，`getUndo()` 返回一个能恢复原状的逆命令。`CommandManager` 维护 undo / redo 两个栈，**全部 37 个命令都可撤销**，且每个命令的撤销路径都有测试覆盖。
 
 ## 基本用法
 
@@ -32,7 +32,7 @@ export interface RangeAddress {
 }
 ```
 
-## 命令清单（23 个）
+## 命令清单（37 个）
 
 ### 内容
 
@@ -42,6 +42,9 @@ export interface RangeAddress {
 | `SetRangeValues` | `{ r1, c1, r2, c2, values }` | 批量写入（粘贴、初始数据） |
 | `MoveRange` | `{ source, target }` | 拖拽移动区域 |
 | `FillRangeCommand` | `{ ctrlKey?, source, target }` | 填充柄智能填充 |
+| `SetHyperlinkCommand` | `{ r, c, hyperlink?, displayText? }` | 设置 / 清除超链接 |
+| `SetCellCommentCommand` | `{ r, c, comment? }` | 设置 / 清除批注（数据层与 xlsx 往返，暂无 UI 入口） |
+| `ImportCellsCommand` | `{ cells: [r, c, Cell][] }` | 整格导入（会话粘贴底层写入路径） |
 
 ### 样式与格式
 
@@ -51,6 +54,7 @@ export interface RangeAddress {
 | `SetRangeStyleCommand` | 范围 + `{ style }` | 区域样式 |
 | `SetRangeBorderCommand` | 范围 + `{ preset, line }` | 区域边框 |
 | `SetNumberFormatCommand` | 范围 + `{ numberFormat }` | 数字格式 |
+| `ApplyTableStyleCommand` | `{ r1, c1, r2, c2, preset }` | 套用表格样式预设 |
 
 `SetRangeBorderCommand` 的 preset 取值：`'all' | 'outer' | 'inner' | 'none' | 'top' | 'bottom' | 'left' | 'right'`；线型：`'solid' | 'dashed' | 'dotted' | 'thick' | 'none'`。辅助函数 `edgesForPreset(preset, range)` 计算预设覆盖的边。
 
@@ -66,6 +70,8 @@ export interface RangeAddress {
 | `SetColWidth` | `{ c, width }` | 列宽 |
 | `SetMerge` | `{ range, active }` | 合并 / 取消合并 |
 | `SetMergeAcross` | `{ range }` | 跨越合并（选区每行独立合并） |
+| `SetRowsHiddenCommand` | `{ r1, r2, hidden }` | 隐藏 / 取消隐藏行（含一键取消全部隐藏） |
+| `SetColsHiddenCommand` | `{ c1, c2, hidden }` | 隐藏 / 取消隐藏列 |
 
 插入/删除行（列）会整体快照受影响区域，公式引用的行号也会相应重映射，保证撤销恢复完整。
 
@@ -77,10 +83,22 @@ export interface RangeAddress {
 | `SetAutoFilterCommand` | 范围 + `{ enabled }` | 开关自动筛选 |
 | `SetAutoFilterCriteriaCommand` | `{ column, criteria?, mode: 'set'\|'clearColumn'\|'clearAll' }` | 筛选条件 |
 | `SetConditionalFormatCommand` | 范围 + `{ rules }` | 条件格式 |
+| `SetSheetConditionalRulesCommand` | `{ entries }` | 整表条件格式规则集（管理器批量增删） |
 | `SetValidationCommand` | 范围 + `{ rule }` | 数据验证 |
-| `CreateChartCommand` | 范围 + `{ type, title?, anchor? }` | 创建浮动图表对象（可撤销） |
-| `SetChartAnchorCommand` | `{ id, anchor }` | 移动/缩放浮动图表（可撤销） |
 | `SetSparklineCommand` | 范围 + `{ type, targetRow, targetCol }` | 迷你图 |
+| `TextToColumnsCommand` | `{ r1, c1, r2, options }` | 分列（分隔符模式） |
+| `RemoveDuplicatesCommand` | `{ r1, c1, r2, c2, columns }` | 按列删除重复项 |
+
+### 图表与浮动对象
+
+| 命令 | 参数 | 对应操作 |
+|------|------|----------|
+| `CreateChartCommand` | 范围 + `{ type, title?, anchor? }` | 创建浮动图表对象 |
+| `RemoveChartCommand` | `{ id }` | 删除浮动图表 |
+| `SetChartAnchorCommand` | `{ id, anchor }` | 移动 / 缩放浮动图表 |
+| `AddImageCommand` | `{ spec: ImageSpec }` | 插入浮动图片对象 |
+| `RemoveImageCommand` | `{ id }` | 删除浮动图片 |
+| `SetImageAnchorCommand` | `{ id, anchor }` | 移动 / 缩放浮动图片 |
 
 ## 撤销栈特性
 
@@ -107,11 +125,11 @@ ss.events.on('command:executed', ({ cmd }) => {
 ```
 
 ::: tip 从包根可用的命令
-23 个命令中，以下 11 个从包根导出，可直接 `import { ... } from 'web-spreadsheet'`：
+37 个命令中，以下 15 个从包根导出，可直接 `import { ... } from 'web-spreadsheet'`：
 
-`InsertRowCommand`、`InsertColCommand`、`DeleteRowCommand`、`DeleteColCommand`、`SetCellStyleCommand`、`SetRangeStyleCommand`、`SetRangeBorderCommand`（含 `edgesForPreset`）、`SetConditionalFormatCommand`、`SetValidationCommand`、`CreateChartCommand`、`SetSparklineCommand`。
+`InsertRowCommand`、`InsertColCommand`、`DeleteRowCommand`、`DeleteColCommand`、`SetCellStyleCommand`、`SetRangeStyleCommand`、`SetRangeBorderCommand`（含 `edgesForPreset`）、`SetConditionalFormatCommand`、`SetValidationCommand`、`CreateChartCommand`、`RemoveChartCommand`、`SetChartAnchorCommand`、`SetRowsHiddenCommand`、`SetColsHiddenCommand`、`SetSparklineCommand`。
 
-其余命令（`SetCellText`、`SetRangeValues`、`MoveRange`、`FillRangeCommand`、`SortRangeCommand` 等）目前仅在包内部使用，未导出。
+其余命令（`SetCellText`、`SetRangeValues`、`MoveRange`、`FillRangeCommand`、`SortRangeCommand`、超链接 / 图片 / 分列 / 去重等）目前仅在包内部使用，未导出——UI 通过菜单与手势派发它们；宿主如需程序化执行，可走 `Spreadsheet` 暴露的菜单回调或等待后续导出。
 :::
 
 ## 自定义命令

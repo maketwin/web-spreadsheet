@@ -28,15 +28,21 @@ const ss = new Spreadsheet('app', {
 | 一元负号 | 结果层支持取负 | |
 | 函数调用 | `SUM(A1:A5)` | 函数名大小写不敏感 |
 
-## 内置函数（82 个）
+## 内置函数（91 个）
+
+77 个经 `registry.register` 注册，另有 14 个（`VLOOKUP` / `HLOOKUP` / `XLOOKUP` / `SUBTOTAL` / `ROW` / `COLUMN` / `ROWS` / `COLUMNS` / `IFS` / `SWITCH` / `INDIRECT` / `OFFSET` / `IFERROR` / `IFNA`）因需要惰性求值或引用上下文在求值器里特殊分发。完整清单与自动补全签名见 `src/formula/functionCatalog.ts`。
 
 ### 数学
 
 | 函数 | 参数 | 说明 |
 |------|------|------|
 | `SUM` | 1–255 | 求和（区域展开） |
+| `SUMIF` | 2–3 | 按单个条件求和（`">1"` 等运算符条件） |
+| `SUMIFS` | 3+ | 多条件求和（求和区在前） |
 | `SUMPRODUCT` | 1–255 | 对应元素相乘再求和；文本/空按 0，比较结果 TRUE/FALSE 按 1/0 |
+| `PRODUCT` | 1–255 | 所有参数乘积；文本/空忽略，全空返回 0 |
 | `ROUND` | 1–2 | 四舍五入，可指定小数位 |
+| `ROUNDUP` / `ROUNDDOWN` | 1–2 | 远离 / 朝零舍入到指定小数位 |
 | `ABS` | 1 | 绝对值 |
 | `INT` | 1 | 向下取整 |
 | `MOD` | 2 | 取模 |
@@ -66,6 +72,8 @@ const ss = new Spreadsheet('app', {
 | 函数 | 参数 | 说明 |
 |------|------|------|
 | `IF` | 2–3 | 条件分支，第三参（假值）可省略 |
+| `IFS` | 2n | 多分支：成对的「条件, 值」，取第一个命中的；全不命中 `#N/A` |
+| `SWITCH` | 3+ | 与多值逐一比较，命中返回对应值；可带默认值 |
 | `AND` / `OR` | 1–255 | 逻辑与 / 或 |
 | `NOT` | 1 | 逻辑非 |
 | `IFERROR` / `IFNA` | 2 | 错误兜底（`#N/A` 专用见 `IFNA`） |
@@ -98,9 +106,24 @@ const ss = new Spreadsheet('app', {
 | `MATCH` | 2–3 | 查找位置 |
 | `VLOOKUP` | 3–4 | 首列查找并返回同行指定列；第 4 参为 `0`/`FALSE` 时精确匹配（文本不区分大小写），省略时为近似匹配（假设首列升序，取不大于查找值的最大键）；未命中返回 `#N/A` |
 | `HLOOKUP` | 3–4 | 首行查找（与 `VLOOKUP` 对称） |
-| `XLOOKUP` | 3–6 | 精确 + 通配匹配、`if_not_found`、首尾搜索方向 |
+| `XLOOKUP` | 3–6 | 精确 + 通配匹配、`if_not_found`、首尾搜索方向；查找/返回列为向量时结果溢出到相邻格 |
 | `ROW` / `COLUMN` | 0–1 | 无参返回公式所在行 / 列；带引用返回其行 / 列号 |
 | `ROWS` / `COLUMNS` | 1 | 区域行数 / 列数 |
+| `INDIRECT` | 1–2 | 文本转引用（`"Sheet2!A1"`、`"A1:B3"`），支持跨表 |
+| `OFFSET` | 3–5 | 从基准引用偏移取区域 |
+
+### 动态数组与溢出
+
+Excel 365 风格：结果为多值时**溢出**到右侧/下方相邻空格，锚点格保留公式，覆盖格称为影子格（见[数据模型](/guide/data-model)的 `spillOf`）。
+
+| 函数 | 参数 | 说明 |
+|------|------|------|
+| `SEQUENCE` | 1–4 | 生成行×列的等差序列矩阵 |
+| `FILTER` | 2–3 | 按条件筛选区域，结果纵向溢出 |
+| `UNIQUE` | 1 | 去重，结果纵向溢出 |
+| `SORT` | 1–2 | 升/降序排序，结果纵向溢出 |
+
+溢出被非空格阻挡时锚点显示 `#SPILL!`；清开阻挡后自动恢复。编辑锚点为标量、删除行等结构操作都会让旧影子格退役（见 [CHANGELOG v2.2.0](https://github.com/maketwin/web-spreadsheet/blob/master/CHANGELOG.md)）。
 
 ### 日期时间
 
@@ -152,11 +175,12 @@ const ss = new Spreadsheet('app', {
 - **比较运算符**支持 `>`、`<`、`>=`、`<=`、`=`、`<>`：两侧均为数值时按数值比较，否则按文本比较（不区分大小写）。
 - **字符串拼接**支持 `&` 运算符。
 - **`$A$1` 绝对引用**：解析器接受 `$` 锚定（求值与普通引用一致）；公式平移（填充/排序/会话粘贴）尊重 `$` 锚定。
-- **错误值**：`#DIV/0!`、`#VALUE!`、`#REF!`、`#NAME?`、`#NUM!`、`#N/A`、`#NULL!` 会在运算与多数函数间传播；未知函数 → `#NAME?`。
+- **错误值**：`#DIV/0!`、`#VALUE!`、`#REF!`、`#NAME?`、`#NUM!`、`#N/A`、`#NULL!`、`#SPILL!`、`#CALC!` 会在运算与多数函数间传播；未知函数 → `#NAME?`。`IFERROR` / `ISERROR` 能捕获 `#SPILL!` / `#CALC!`。
 - **循环引用**：迭代关闭时按 Excel 习惯对环上单元格显示 `0`（`DependencyGraph.wouldCreateCycle` / 求值栈检测）。
-- `XLOOKUP` / `HLOOKUP` / `AVERAGEIF(S)` / `SUBTOTAL` / `TEXTJOIN` 已实现（`XLOOKUP` 仅精确与通配，无 spill；`SUBTOTAL` 的 7/8/10/11 未做）。动态数组 / `LAMBDA` / `LET` / `FILTER` 等仍未实现。
+- `SUBTOTAL` 的 7/8/10/11 功能号未实现；`LAMBDA` / `LET` 未实现。
 - `SUBTOTAL`：隐藏行（含筛选与手动隐藏，共用 `RowMeta.hide`）一律跳过，不区分 Excel 的 1–11 vs 101–111 细别。
 - `INDIRECT` / `OFFSET` 已实现；依赖图只跟踪公式里的静态引用，**仅改动态目标单元格不一定触发重算**（与计划原「可选/延期」文档不同步处已按代码纠正）。
+- 矩阵与区域可参与标量运算：`=SUM(A1:A3*SEQUENCE(3))` 等元素级运算已支持（矩阵操作数自动展平）。
 - 字符串字面量的引号不会被特殊处理，含引号的参数会连同引号一起成为字符串。
 :::
 
@@ -168,7 +192,7 @@ const ss = new Spreadsheet('app', {
 import { FormulaParser, evaluate, registry, DependencyGraph } from 'web-spreadsheet';
 
 // 解析为 AST
-const ast = FormulaParser.parse('SUM(A1:A3)');
+const ast = new FormulaParser().parse('SUM(A1:A3)');
 
 // 注册自定义函数（也可在插件里通过 PluginAPI.registerFunction）
 registry.register('DOUBLE', {

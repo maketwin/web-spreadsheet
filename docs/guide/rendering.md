@@ -12,8 +12,12 @@ CanvasRenderer（Facade：事件、绘制调度、冻结、交互）
  │   └─ AxisIndex ×2       前缀和索引，O(log n) 坐标查询
  ├─ DirtyRegionTracker     脏矩形合并，按需重绘
  ├─ cache/TextMetricsCache measureText LRU 缓存（容量 5000）
- ├─ FreezeManager          冻结窗格状态
+ ├─ FreezeManager          冻结窗格状态（src/freeze/）
  ├─ BorderPainter          边框绘制
+ ├─ richTextLayout         富文本排版（网格与打印共用的行/段几何）
+ ├─ narrowOverflow         溢出判定（数字 ### 填充 / 文本溢入空格）
+ ├─ selectionFill          选区填充带（活动格/合并区挖孔）
+ ├─ coordinate             画布坐标换算 + 网格常量（转发 util/gridSize）
  ├─ ResizeHandler          行列拖拽调整（冻结感知）
  └─ FillHandle（src/fill/） 填充柄（冻结感知）
 ```
@@ -47,10 +51,17 @@ VirtualScroller 的全部坐标换算（`cellToPixel`、`rowAtPixel`、`colAtPix
   范围重合时替换选区实线边框）、查找高亮、resize 指示线。选区等高频交互只重画
   覆盖层，网格层最多重绘表头染色条带。
 
+溢出与富文本（v2.1.0）：数字/日期列宽不足时显示 `###` 填充（`narrowOverflow`），
+文本与公式结果溢入相邻空格；富文本格按 run 拆段绘制，行内几何由
+`richTextLayout` 计算，与打印绘制共用同一实现，保证所见即所印。
+
 ## 滚动：blit 快照 + 滚轮支持
 
 `scrollBy(dx, dy)` 是公共滚动 API（滚轮监听调用它；Shift+滚轮横向滚动，
-`deltaMode === 1` 的行单位按默认行高换算）。
+`deltaMode === 1` 的行单位按默认行高换算）。触摸手势复用同一管线：单指平移
+换算成滚动偏移，双指捏合经 `onZoomTo` 走与 `Ctrl`+滚轮相同的缩放路径（v2.2.0）。
+软键盘弹出时 `scrollCellIntoView(r, c, visibleHeight)` 以缩小的可视高度把编辑格
+滚入视口（`visualViewport` 驱动，桌面无该 API 时不生效）。
 
 - 每次完整重绘后，网格层被快照进离屏 `blitCanvas`；
 - 纯滚动时平移快照位图，只把**新暴露的条带**标脏重绘；

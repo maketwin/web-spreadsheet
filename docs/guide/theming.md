@@ -44,8 +44,12 @@ THEMES;                  // { light: 'light', dark: 'dark' }
 |------|-------|------|
 | `--ss-bg` | `#ffffff` | `#1e1e1e` |
 | `--ss-color` / `--ss-text` | `#000000` | `#f3f3f3` |
+| `--ss-text-light` | `#605e5c` | `#b3b3b3` |
+| `--ss-header-text` | `#444444` | （不覆盖，沿用亮色值） |
 | `--ss-border` | `#bdbdbd` | `#454545` |
+| `--ss-freeze-line` | `#6f6f6f` | `#a6a6a6` |
 | `--ss-grid` | `#e0e0e0` | `#2b2b2b` |
+| `--ss-outside` | `#f3f3f3` | `#252526` |
 | `--ss-selected` | `#e2efda` | `#1f3d2c` |
 | `--ss-header-bg` | `#ececec` | `#2d2d2d` |
 | `--ss-toolbar-bg` / `--ss-ribbon-bg` | `#f3f3f3` | `#2d2d2d` |
@@ -63,6 +67,7 @@ THEMES;                  // { light: 'light', dark: 'dark' }
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `--ss-font-family` | `Calibri, "Segoe UI", "Microsoft YaHei", sans-serif` | 全局字体（暗色不覆盖） |
+| `--ss-font-size` | `11px` | 全局字号 |
 | `--ss-row-height` | `20px` | 默认行高 |
 | `--ss-col-width` | `64px` | 默认列宽 |
 

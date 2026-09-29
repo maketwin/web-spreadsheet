@@ -63,10 +63,10 @@
 
 ## v2.1 — Parity Completion（2026-09-28，released）
 - [x] Rich text: in-cell runs, formula-bar edits, theme tints, Ctrl+Enter fill
-- [x] Hyperlinks: insert / Ctrl+click / paste / fill, SheetJS round-trip (comments removed by product decision)
+- [x] Hyperlinks: insert / Ctrl+click / paste / fill, SheetJS round-trip (comments: UI removed by product decision — data layer & xlsx round-trip retained)
 - [x] Conditional formatting: icon sets, highlight shortcuts, 管理规则 dialog (single-step undo)
 - [x] Name manager dialog (公式 → 名称管理器)
-- [x] Row groups: outline expand/collapse, intersect-aware
+- [x] Row groups: group/collapse/expand via 数据 menu, intersect-aware (no outline sidebar UI yet)
 - [x] Sheet protection (hashed password, edit-entry guard)
 - [x] Sheet Move or Copy dialog; tab drag reorder + tab color
 - [x] Data tools: 删除重复项 / 分列 (undoable commands)

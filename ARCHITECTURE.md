@@ -28,9 +28,12 @@ src/components/
 ├── keyboard.ts             Key → action dispatch table (pure function, injected via KeyboardContext)
 ├── spreadsheetActions.ts   Pure actions: AutoSum, menu shortcuts, chart/image/sparkline
 │                           submits, name-box jump, hide/unhide, commitFormulaValue …
+├── InteractionToolbar.tsx  Toolbar/format-painter interaction state machine
 ├── EditorOverlay.tsx       In-cell editor surface (plain / rich text / point mode)
+├── formulaSync.ts          Cell ⇄ FormulaEngine sync (pure, unit-tested)
+├── workbookInit.ts         Initial data / restore wiring (pure, unit-tested)
 ├── menu/                   MenuBar + dialog components
-├── hooks/                  useClipboardSession, useMultiSelection
+├── hooks/                  useClipboardSession, useMultiSelection, useCanvasRenderer
 └── Toolbar / FormulaBar / BottomBar / StatusBar / ContextMenu / PrintPreview / …
 ```
 
@@ -68,8 +71,8 @@ src/components/
 
 ## Testing
 
-- **Unit** — vitest + jsdom (`test/`): 179 files / 1149 tests; `pnpm coverage` reports ≈92% on `src/`. Canvas paths use a stubbed 2D context; IndexedDB uses `fake-indexeddb`.
-- **E2E** — Playwright chromium (`e2e/`, `pnpm e2e`) for the interaction surfaces jsdom cannot reach: right-click context menus, row/column-header menus, the sheet-tab menu, hover submenus and the dialogs behind them. The config reuses a dev server on `:5199` when one is running, otherwise boots one for the run.
+- **Unit** — vitest + jsdom (`test/`): 185 files / 1240 tests; `pnpm coverage` reports ≈92% on `src/`. Canvas paths use a stubbed 2D context; IndexedDB uses `fake-indexeddb`.
+- **E2E** — Playwright (`e2e/`, `pnpm e2e`) for the interaction surfaces jsdom cannot reach: right-click context menus, row/column-header menus, the sheet-tab menu, hover submenus and the dialogs behind them (chromium project), plus touch gestures on a 390×844 viewport (`chromium-touch` project: tap-select, long-press menus, one-finger pan, pinch zoom, sheet-tab long-press). The config reuses a dev server on `:5199` when one is running, otherwise boots one for the run.
 
 ## File map
 
@@ -81,6 +84,8 @@ src/components/
 | `src/renderer/` | Virtual scroller, dirty-region tracker, canvas renderer |
 | `src/components/` | React shell: Spreadsheet root, keyboard dispatch, pure actions, editor overlay, menu/dialogs, toolbar chrome |
 | `src/print/` | Print pipeline: used-range detection, page pagination, offscreen page painter, print DOM + `@page` injection |
+| `src/io/` | xlsx round-trip (SheetJS + style/chart/comment XML), CSV import/export, PDF export |
+| `src/outline/` `src/analysis/` `src/find/` | Row groups / pivot table / find & replace |
 | `src/plugin/` | PluginManager, PluginAPI, public plugin contract |
 | `src/events/` | EventBus with direct and wildcard subscriptions |
 | `src/theme/` | CSS variables, light/dark theme utilities |

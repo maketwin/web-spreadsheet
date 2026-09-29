@@ -40,6 +40,18 @@
   styleId/type, spilled Dates keep their type, sheet deletion clears the
   engine's bookkeeping, and `writeSpill`'s idempotence gate runs BEFORE any
   clearing so echo re-evaluations are side-effect-free.
+- **PRODUCT advertised but not callable** — the autocomplete catalog listed
+  PRODUCT, yet it was only ever implemented as SUBTOTAL's op 6, so a
+  standalone `=PRODUCT(2,3,4)` evaluated to `#NAME?`. Now registered in the
+  function registry with the same operand rules (text/blank ignored, all-empty
+  → 0).
+- **Row groups shift with row insert/delete** — group intervals were left
+  verbatim, so inserting above a group detached it from its rows and deleting
+  through one left a stale range. Pure shift helpers
+  (`src/outline/rowGroupShift.ts`, merge-shift semantics: top-edge insert
+  pushes the group down, interior insert grows it, fully covered groups are
+  dropped) run in both commands, and the sheet snapshot captures/restores the
+  groups so undo brings the pre-edit intervals back.
 - **Formula evaluator** — matrix operands flatten into the element-wise
   list math (`=SUM(A1:A3*SEQUENCE(3))` used to be `#VALUE!`); `#SPILL!`
   and `#CALC!` join `EXCEL_ERRORS` so `IFERROR`/`ISERROR` catch them;
@@ -84,7 +96,7 @@
   pinch rebase), adjacent/escaped-literal `argIndex` cases for
   `stripLiterals`. CI caches Playwright browsers keyed on the lockfile;
   the pan e2e asserts a 13–17 row landing band instead of any far row.
-  Suite 184 files / 1230 tests.
+  Suite 185 files / 1240 tests.
 
 ## v2.1.0 — 2026-09-28
 

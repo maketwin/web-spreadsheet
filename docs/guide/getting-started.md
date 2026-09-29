@@ -93,7 +93,7 @@ const ss = new Spreadsheet('app', { theme: false });
 import { Spreadsheet, CsvImportPlugin } from 'web-spreadsheet';
 
 const ss = new Spreadsheet('app');
-ss.use(new CsvImportPlugin());  // 返回 this，可链式调用
+ss.use(CsvImportPlugin);  // 插件是对象常量（Plugin），返回 this 可链式调用
 ss.mount();
 ```
 

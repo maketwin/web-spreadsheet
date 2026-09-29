@@ -85,7 +85,20 @@
 | 滚轮 / 触控板滚动 | 纵向滚动网格 |
 | `Shift` + 滚轮 | 横向滚动 |
 | 触控板捏合（`Ctrl` + 滚轮） | 缩放 50%–200%，步进 10% |
+| `Ctrl/Cmd` + 单击（超链接单元格） | 打开超链接（外链或表内引用）；插入用菜单「插入 → 链接…」 |
 | 右键单元格 / 行列头 | 上下文菜单 |
+
+## 触摸（v2.2.0）
+
+触摸设备的手势层完全独立于鼠标路径（`pointerType !== 'mouse'` 时生效），桌面行为不受影响：
+
+| 手势 | 行为 |
+|------|------|
+| 单指拖动 | 平移滚动网格（6px 位移判定后接管，不会误触发拖拽选区） |
+| 点按 | 选中单元格；拖动填充柄同样可用（带触摸容差） |
+| 双击 | 进入单元格编辑（弹软键盘，编辑格自动滚到键盘上方可视区） |
+| 长按 550ms | 上下文菜单（单元格 / 行头 / 列头 / Sheet 标签通用）；移动超过 12px、按下第二根手指或抬起即取消 |
+| 双指捏合 | 缩放（每次指针集合变化自动重定基准） |
 
 ## 程序化解析
 
@@ -99,5 +112,3 @@ const action = KeyboardHandler.next('z', range, false, true); // Cmd+Z
 ```
 
 签名：`next(key, range, shiftKey?, metaKey?, ctrlKey?): KeyboardAction | null`。`KeyboardAction` 的 `type` 取值：`move`、`moveEdge`、`jump`、`page`（翻屏，附带 `pageDir: -1 | 1`，由调用方按视口行数解析）、`edit`、`backspace`、`insertDate`、`fill`、`clear`、`cancel`、`copy`、`paste`、`cut`、`type`、`menu`、`selectColumn`、`selectRow`。
-
-| `Ctrl/Cmd` + 单击（超链接单元格） | 打开超链接（外链或表内引用）；插入用菜单「插入 → 链接…」 |

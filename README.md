@@ -3,7 +3,7 @@
 ![version](https://img.shields.io/badge/version-v2.1.0-brightgreen)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![typescript](https://img.shields.io/badge/TypeScript-strict%20%7C%20zero--any-3178c6)
-![tests](https://img.shields.io/badge/tests-1201%20passed-brightgreen)
+![tests](https://img.shields.io/badge/tests-1240%20passed-brightgreen)
 
 A modern, lightweight TypeScript spreadsheet SDK — a canvas-rendered,
 Excel-compatible grid with a formula engine, full undo/redo, and a plugin
@@ -29,10 +29,12 @@ ss.mount();
 - Canvas renderer with virtual scrolling (1000 × 26 default grid, O(log n) coordinate lookups; the scroller is benchmarked smooth at 10k+ rows) and dirty-region repainting
 - Excel-style chrome: menu bar, toolbar, formula bar, status bar, sheet tabs, context menu
 - Cell editing with IME (Chinese input) support, find & replace, freeze panes
+- Touch devices: one-finger pan, long-press context menus (cells / headers / sheet tabs), pinch zoom, and soft-keyboard-aware editing (desktop mouse behavior is untouched)
 - Find & replace: case/whole-cell/regex matching, sheet or workbook scope, find-all list with cross-sheet jumps, single-undo replace-all, yellow highlights with an orange current-match outline
 - Row/column drag-resize, double-click auto-fit, merged cells, borders
 - Hide/unhide rows and columns from the header context menus (one-step unhide-all)
-- Editable name box: jump to `A1`, ranges, `Sheet2!A1` or defined names
+- Rich text in cells (per-run fonts/colors), hyperlinks (插入 → 链接, Ctrl+click to open), cell strikethrough / indent / text rotation
+- Editable name box: jump to `A1`, ranges, `Sheet2!A1` or defined names; full name manager dialog
 - Accessibility: ARIA roles across the UI, keyboard navigation, `focus-visible` outlines, dark mode
 
 **Excel-parity fill handle**
@@ -42,19 +44,20 @@ ss.mount();
 - Formula references shift along the fill (`$A$1` / `$A1` / `A$1` absolute semantics respected); cell styles carry over
 
 **Formula engine**
-- 76 built-in functions (SUM, AVERAGE, IF, VLOOKUP, XLOOKUP, INDEX/MATCH, SUBTOTAL, date/time, text, …)
+- 91 built-in functions (SUM, AVERAGE, IF, VLOOKUP, XLOOKUP, INDEX/MATCH, SUBTOTAL, date/time, text, …)
 - Dynamic-array spill, Excel-365 style: `SEQUENCE` / `FILTER` / `UNIQUE` / `SORT` and multi-cell `XLOOKUP` results overflow into neighbouring cells (`#SPILL!` when blocked, auto-recovers)
 - Dependency graph with automatic recalculation
 - Cross-sheet references (`=Sheet2!A1`, `=SUM(Sheet2!A1:A5)`)
 
 **Commands & undo**
-- Command pattern for every mutation — **all 22 commands are undoable**, with test coverage for each
+- Command pattern for every mutation — **all 37 commands are undoable**, with test coverage for each
 - Undo restores formula results too (batched deferred recalc)
 
 **Data features**
 - AutoFilter with criteria dropdowns and range sorting (Ctrl+Shift+L toggles)
-- Data validation, conditional formatting (data bars, color scales, formula rules)
-- Named ranges, sheet protection (hashed password)
+- Data validation, conditional formatting (data bars, color scales, icon sets, cell-value & formula rules)
+- Named ranges with a name manager, sheet protection (hashed password), row grouping outline
+- Data tools: 删除重复项, 分列 (delimiter mode), sort by range
 - Charts (Chart.js, 插入 → 图表) and in-cell sparklines (line/bar/win-loss, 插入 → 迷你图)
 - Custom number format strings — Excel syntax: `#,##0.00`, `0.00E+00`, `yyyy-mm-dd`, `h:mm AM/PM`, `正;负;零;文本` sections, with xlsx round-trip
 
@@ -62,7 +65,7 @@ ss.mount();
 - Real xlsx import/export (SheetJS) including number formats
 - CSV/TSV and JSON import, CSV export (BOM'd UTF-8, displayed values), JSON/xlsx export
 - Auto-save to IndexedDB with startup restore
-- Paginated printing: print preview with paper/orientation/margins/scale settings, merged-cell-aware page breaks, 192-dpi offscreen page rendering (`Ctrl+P`)
+- Paginated printing: print preview with paper/orientation/margins/scale settings, merged-cell-aware page breaks, 192-dpi offscreen page rendering, 当前工作表 / 整个工作簿 scope (`Ctrl+P`), PDF export
 
 **Extensibility**
 - Plugin system with a typed `PluginAPI` (see `src/plugins/CsvImportPlugin.ts` for an example)
@@ -75,7 +78,7 @@ ss.mount();
    ↓
 [Layer 4: API / Facade]      src/index.ts
    ↓
-[Layer 3: Commands]           src/commands/   (22 commands + undo)
+[Layer 3: Commands]           src/commands/   (37 commands + undo)
    ↓
 [Layer 2: Store + Formula]    src/store/  src/formula/
 [Layer 2b: Event Bus]         src/events/
@@ -108,8 +111,8 @@ The `Spreadsheet` facade accepts an element (or selector) plus options
 
 ```bash
 pnpm dev            # dev server with HMR
-pnpm test           # vitest — 1149 tests, 179 files
-pnpm e2e            # Playwright (chromium) — context menus & dialogs in a real browser
+pnpm test           # vitest — 1240 tests, 185 files
+pnpm e2e            # Playwright (chromium desktop + chromium-touch 390×844) — context menus, dialogs & touch gestures in a real browser
 pnpm typecheck      # tsc --noEmit (strict, noUncheckedIndexedAccess)
 pnpm lint           # eslint
 pnpm build          # typecheck + library build (ESM/UMD + d.ts)

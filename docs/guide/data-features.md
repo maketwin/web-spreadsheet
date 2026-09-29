@@ -1,6 +1,6 @@
 # 数据功能
 
-本章汇总日常表格操作类功能：筛选与排序、命名区域、工作表保护、冻结窗格、查找替换、图表与迷你图。
+本章汇总日常表格操作类功能：筛选与排序、命名区域、工作表保护、行分组、冻结窗格、查找替换、图表/迷你图/图片、数据工具（删除重复项、分列）。
 
 ## 自动筛选与排序
 
@@ -99,6 +99,16 @@ store.setProtection(unprotectSheet());       // 解除保护
 - 保护状态下**禁止编辑**单元格（开始编辑时拦截并提示「工作表已保护，无法编辑」）。
 - 密码以 Base64 编码存入 `passwordHash`——这是 MVP 级别的简单实现，**不是安全的哈希**，请不要用敏感密码。
 
+## 行分组
+
+菜单 **数据 → 组合行 / 取消组合行 / 折叠选区组 / 展开选区组**（`src/outline/rowGroups.ts`）：
+
+- **组合**：对选区行建组；相邻或相交的组自动合并为一个区间（`RowGroupDef { start, end }`，存于工作簿序列化，见[数据模型](/guide/data-model)）。
+- **折叠**：把组内各行标记 `RowMeta.hide`（与筛选隐藏共用同一机制），一次 `store.batch` 完成；**展开**恢复显示。
+- 折叠/展开按**选区与组的相交**判定，无需精确选中整组。
+- 与 Excel 大纲侧栏的「1/2/… 分级按钮 + +/-」不同，当前实现没有侧栏 UI，折叠后即普通隐藏行。
+- 插入/删除行时组区间随行号平移（组顶边插入整体下移、组内插入扩张、被删除整组移除），撤销经快照一并还原（`src/outline/rowGroupShift.ts`）。
+
 ## 冻结窗格
 
 冻结是纯视图状态（`FreezeManager`），由工具栏/视图菜单驱动，不影响数据与序列化：
@@ -109,8 +119,8 @@ store.setProtection(unprotectSheet());       // 解除保护
 ## 查找替换
 
 ```ts
-import { FindReplaceService } from 'web-spreadsheet';
-
+// FindReplaceService 位于 src/find/FindReplaceService.ts，暂未从包根导出——
+// 内置 UI（Ctrl/Cmd+F / Ctrl/Cmd+H）已自动接线；调用形态供参考：
 const find = new FindReplaceService();
 
 find.find(store, { findText: '产品', caseSensitive: false });
@@ -162,6 +172,10 @@ ss.cmdManager.execute(new CreateChartCommand({
 
 > 注：1.x 的 `ChartPanel` 面板组件（右上角面板形态）在 2.0 中由 `FloatingChart` 浮动对象取代。
 
+## 图片对象
+
+**插入 → 图片…** 选择本地文件后以浮动图片对象插入（`AddImageCommand`，可撤销）：图片以 data URL 形式随工作簿持久化（自动保存/序列化均携带），锚点模型与图表相同（`ImageSpec { id, name, src, anchor }`，`anchor` 为两格 `from/to` + 像素偏移）。行为与浮动图表一致：点选、拖拽移动、8 向手柄缩放、`Delete` 删除、撤销重做；SDK 侧对应 `RemoveImageCommand` / `SetImageAnchorCommand`。xlsx 往返对图片暂不支持。
+
 ## 迷你图
 
 内联 SVG 渲染，三种类型：`'line' | 'bar' | 'winloss'`。
@@ -198,4 +212,12 @@ winloss 类型正值为蓝色柱、负值为红色柱，带中轴线；默认尺
 - 支持 Tab / 分号 / 逗号 / 空格 / 自定义分隔符；可选「连续分隔符视为单个」。
 - 固定宽度与逐列类型识别本轮不做。
 - 可撤销。
+
+## 数据透视表（基础版）
+
+菜单 **数据 → 数据透视表（按首列求和）**（`src/analysis/pivot.ts`）：
+
+- 对当前选区按**第一列分组**，其余数值列求和，结果写入新的「透视表」工作表；
+- 基础版语义：不做多级分组、筛选或值聚合方式切换；
+- 建表与写入**不进撤销历史**（与导入文件同级操作）。
 

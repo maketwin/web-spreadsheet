@@ -114,8 +114,10 @@ const store = ss.store;
 | `get/set/removeConditionalRule(...)` | 条件格式规则 |
 | `getValidationRule(r, c) / getValidationRules()` | 数据验证 |
 | `addChart(spec) / removeChart(id) / getCharts()` | 图表定义 |
+| `addImage(spec) / removeImage(id) / getImages()` | 浮动图片对象 |
 | `addSparkline / removeSparkline / getSparklineAt` | 迷你图 |
 | `get/set/removeNamedRange(...)` | 命名区域 |
+| `getRowGroups() / setRowGroups(groups)` | 行分组区间 |
 | `getProtection / setProtection / isSheetProtected` | 工作表保护 |
 | `getAutoFilter / setAutoFilter` | 自动筛选状态 |
 
@@ -156,7 +158,7 @@ constructor(store: Store)
 
 | 导出 | 说明 |
 |------|------|
-| `FormulaParser` | 公式 → AST 解析器（`FormulaParser.parse(formula)`） |
+| `FormulaParser` | 公式 → AST 解析器（`new FormulaParser().parse(formula)`，实例方法） |
 | `evaluate` | AST 求值器 |
 | `DependencyGraph` | 依赖图（`setDependencies` / `clearDependencies` / `getAffected`） |
 | `registry` | 函数注册表（`register` / `get` / `has` / `list`），`FunctionSpec = { minArgs, maxArgs, evaluate }` |
@@ -233,7 +235,8 @@ new VirtualScroller(opts: VirtualScrollerOptions)
 | `DataValidationService` | 数据验证（`validate(value, rule)`） | [格式化](/guide/formatting) |
 | `ConditionalService` | 条件格式覆盖层（`computeOverlay(store, r, c)`） | [格式化](/guide/formatting) |
 | `NamedRangeService` | 命名区域增删查与公式解析 | [数据功能](/guide/data-features) |
-| `FindReplaceService` | 查找替换 | [数据功能](/guide/data-features) |
+
+`FindReplaceService`（查找替换）暂未从包根导出，由内置 UI（`Ctrl/Cmd+F` / `Ctrl/Cmd+H`）自动接线，见[数据功能](/guide/data-features)。
 
 工作表保护是四个纯函数：
 
@@ -260,6 +263,8 @@ import { setTheme, getTheme, applyStoredTheme, THEMES } from 'web-spreadsheet';
 ## 其余导出
 
 - **UI 组件**：`Toolbar`、`BottomBar`、`Editor`、`Menu`、`MenuBar`、`SpreadsheetComponent`、`ErrorBoundary`、`FloatingChart`、`Sparkline`（均附 `*Props` 类型）。
-- **命令类**：`InsertRowCommand`、`InsertColCommand`、`DeleteRowCommand`、`DeleteColCommand`、`SetCellStyleCommand`、`SetRangeStyleCommand`、`SetRangeBorderCommand` + `edgesForPreset`、`SetConditionalFormatCommand`、`SetValidationCommand`、`CreateChartCommand`、`SetChartAnchorCommand`、`RemoveChartCommand`、`SetSparklineCommand`。
+- **命令类（15 个）**：`InsertRowCommand`、`InsertColCommand`、`DeleteRowCommand`、`DeleteColCommand`、`SetCellStyleCommand`、`SetRangeStyleCommand`、`SetRangeBorderCommand` + `edgesForPreset`、`SetConditionalFormatCommand`、`SetValidationCommand`、`CreateChartCommand`、`SetChartAnchorCommand`、`RemoveChartCommand`、`SetRowsHiddenCommand`、`SetColsHiddenCommand`、`SetSparklineCommand`（其余 22 个命令为内部命令，见[命令与撤销](/guide/commands)）。
 - **插件**：`PluginManager`、`PluginAPI`、`CsvImportPlugin`、`Plugin` 类型。
-- **类型**：`Cell`、`CellValue`、`Style`、`RowMeta`、`ColMeta`、`StoreEvent`、`Unsubscribe`、`SerializedStore`、`Theme`、`CellAddress`、`RangeAddress`、`AstNode`、`FormulaValue`、`FunctionSpec`、`ConditionalRule`、`ConditionalOverlay`、`ValidationRule`、`ValidationType`、`ChartSpec`、`ChartType`、`ChartAnchor`、`ChartAnchorEdge`、`SparklineSpec`、`SparklineType`、`NamedRangeDef`、`SheetProtectionState`、`BorderPreset`、`BorderLine` 等。
+- **I/O 与持久化**：`exportCsv` / `exportCsvBlob` / `csvQuote`（CSV 导出，BOM'd UTF-8 显示值）、`loadWorkbook` / `deleteWorkbook` / `DEFAULT_ID`（IndexedDB 手动读取，见[I/O](/guide/io)）。
+- **工具函数**：`parseNameBoxInput`（名称框输入解析）、`skipHiddenCells`（跳过隐藏行的选区步进）、`toggleAutoFilterCommand`、`sparklineValues` / `parseInternalRangeKey`。
+- **类型**：`Cell`、`CellValue`、`Style`、`RowMeta`、`ColMeta`、`StoreEvent`、`Unsubscribe`、`SerializedStore`、`Theme`、`CellInput`、`SpreadsheetOptions`、`SpreadsheetProps`、`CellAddress`、`RangeAddress`、`AstNode`、`CellResolver`、`FormulaValue`、`FunctionSpec`、`ConditionalRule`、`ConditionalOverlay`、`ValidationRule`、`ValidationType`、`ChartSpec`、`ChartType`、`ChartAnchor`、`ChartAnchorEdge`、`SparklineSpec`、`SparklineType`、`NamedRangeDef`、`SheetProtectionState`、`BorderPreset`、`BorderLine` 等（`RichTextRun`、`CellHyperlink`、`CellComment`、`ImageSpec`、`RowGroupDef` 暂未从包根导出）。
