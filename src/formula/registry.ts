@@ -39,6 +39,12 @@ registry.register('ROUND', { minArgs: 1, maxArgs: 2, evaluate: ([n, d]) => round
 registry.register('ABS', { minArgs: 1, maxArgs: 1, evaluate: ([n]) => Math.abs(Number(first(n))) });
 registry.register('INT', { minArgs: 1, maxArgs: 1, evaluate: ([n]) => Math.floor(Number(first(n))) });
 registry.register('MOD', { minArgs: 2, maxArgs: 2, evaluate: ([a, b]) => mod(first(a), first(b)) });
+// Same operand rules as SUBTOTAL op 6 (the only PRODUCT impl before standalone
+// registration): non-numeric operands are ignored, an all-empty input yields 0.
+registry.register('PRODUCT', {
+  minArgs: 1, maxArgs: 255,
+  evaluate: (args) => { const n = numbers(args); return n.length === 0 ? 0 : n.reduce((a, b) => a * b, 1); },
+});
 
 // The evaluator intercepts IF for lazy branch evaluation; this body is only
 // reached by direct registry callers and mirrors ifLazy's falsy list.

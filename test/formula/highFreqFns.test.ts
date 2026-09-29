@@ -37,6 +37,13 @@ describe('high-frequency Excel functions', () => {
     expect(calc('=IFNA(1/0,9)')).toBe('#DIV/0!'); // only traps #N/A
   });
 
+  it('PRODUCT multiplies numbers, ignores text/blank, empty → 0', () => {
+    expect(calc('=PRODUCT(2,3,4)')).toBe(24);
+    expect(calc('=PRODUCT(A1:A3)', { A1: 2, A2: 5, A3: 1 })).toBe(10);
+    expect(calc('=PRODUCT(A1:A3)', { A1: 2, A2: 'x', A3: 4 })).toBe(8);
+    expect(calc('=PRODUCT(A1:A2)', {})).toBe(0);
+  });
+
   it('VALUE / ROUNDUP / POWER / SQRT / PI', () => {
     expect(calc('=VALUE("12")')).toBe(12);
     expect(calc('=ROUNDUP(1.21,1)')).toBe(1.3);
