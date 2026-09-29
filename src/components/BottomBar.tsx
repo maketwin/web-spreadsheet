@@ -1,6 +1,7 @@
 import type { CSSProperties, FC, DragEvent } from 'react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { SheetInfo } from '../store/Store';
+import { LONG_PRESS_MS, LONG_PRESS_SLOP } from '../renderer/CanvasRenderer';
 
 export interface BottomBarProps {
   readonly sheets?: readonly (SheetInfo | string)[];
@@ -119,6 +120,10 @@ export const BottomBar: FC<BottomBarProps> = ({
             onDoubleClick={() => onRenameSheet?.(info.id)}
             onPointerDown={(event) => {
               if (event.pointerType === 'mouse') return;
+              // A long-press whose trailing synthetic click never arrives
+              // (pointercancel, iOS callout, finger slid off) must not leave
+              // the suppress flag armed to eat the NEXT real click.
+              suppressTabClick.current = false;
               const el = event.currentTarget;
               const x = event.clientX;
               const y = event.clientY;
@@ -129,12 +134,12 @@ export const BottomBar: FC<BottomBarProps> = ({
                   tabLongPress.current = null;
                   suppressTabClick.current = true;
                   el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 2 }));
-                }, 550),
+                }, LONG_PRESS_MS),
               };
             }}
             onPointerMove={(event) => {
               const lp = tabLongPress.current;
-              if (lp !== null && Math.hypot(event.clientX - lp.x, event.clientY - lp.y) > 12) clearTabLongPress();
+              if (lp !== null && Math.hypot(event.clientX - lp.x, event.clientY - lp.y) > LONG_PRESS_SLOP) clearTabLongPress();
             }}
             onPointerUp={clearTabLongPress}
             onPointerCancel={clearTabLongPress}

@@ -258,7 +258,10 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   // 移动端软键盘：visualViewport 收缩/平移时把编辑中的单元格滚到键盘上方的
   // 可视区，并 bump 一次布局让编辑浮层按新的 cellRect 重定位。桌面（无
   // visualViewport 或键盘不改变布局）不受影响。
-  const [editorLayoutTick, setEditorLayoutTick] = useState(0);
+  // Only the setter is used: bumping the state re-renders this component,
+  // which recomputes the FRESH cellRect passed to EditorOverlay (its
+  // positioning is fully derived from that prop).
+  const [, setEditorLayoutTick] = useState(0);
   useEffect(() => {
     if (editing === null) return;
     const vv = window.visualViewport;
@@ -268,7 +271,10 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       const renderer = rendererRef.current;
       if (canvas === null || renderer === null) return;
       const vvBottom = vv.height + vv.offsetTop;
-      const canvasTop = canvas.getBoundingClientRect().top + window.scrollY;
+      // Both sides stay in viewport coordinates: rect.top already tracks page
+      // scroll, so adding window.scrollY here would double-count it and
+      // over-scroll the cell when the keyboard reflow scrolls the page.
+      const canvasTop = canvas.getBoundingClientRect().top;
       const available = Math.max(120, vvBottom - canvasTop - COL_HEADER_HEIGHT);
       renderer.scrollCellIntoView(editing.r, editing.c, available);
       setEditorLayoutTick((n) => n + 1);
@@ -657,7 +663,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
         const caret = caretOffsetAtClick(rendererRef.current, store, cell, e.clientX, e.clientY, view.zoom);
         startEditing(cell, undefined, true, caret);
       }} />
-      {editing !== null && <EditorOverlay layoutTick={editorLayoutTick} refEl={inputRef} editingRefSetter={(cell) => { editingRef.current = cell; setEditing(cell); }} editing={editing} setEditing={setEditing} cancel={cancelEditing} commit={commitEditing} zoom={view.zoom} store={store} richApiRef={richApiRef} onCharStyleKey={applyCharStyleKey} onRefHighlights={handleRefHighlights} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}
+      {editing !== null && <EditorOverlay refEl={inputRef} editingRefSetter={(cell) => { editingRef.current = cell; setEditing(cell); }} editing={editing} setEditing={setEditing} cancel={cancelEditing} commit={commitEditing} zoom={view.zoom} store={store} richApiRef={richApiRef} onCharStyleKey={applyCharStyleKey} onRefHighlights={handleRefHighlights} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}
       <div className="ss-chart-layer">{store.getCharts().map((spec) => <FloatingChart key={spec.id} spec={spec} store={store} renderer={rendererRef.current} selected={selectedChartId === spec.id} onSelect={setSelectedChartId} onGeometry={(id, anchor) => execCmd(new SetChartAnchorCommand({ id, anchor }))} onRemove={(id) => { execCmd(new RemoveChartCommand({ id })); setSelectedChartId((current) => current === id ? null : current); canvasRef.current?.focus(); }} onUndo={() => cmdManager?.undo()} onRedo={() => cmdManager?.redo()} />)}
         {store.getImages().map((img) => <FloatingImage key={img.id} spec={img} renderer={rendererRef.current} selected={selectedImageId === img.id} onSelect={setSelectedImageId} onGeometry={(id, anchor) => execCmd(new SetImageAnchorCommand({ id, anchor }))} onRemove={(id) => { execCmd(new RemoveImageCommand({ id })); setSelectedImageId((current) => current === id ? null : current); canvasRef.current?.focus(); }} onUndo={() => cmdManager?.undo()} onRedo={() => cmdManager?.redo()} />)}
       </div></div>
