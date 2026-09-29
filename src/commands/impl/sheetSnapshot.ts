@@ -1,4 +1,4 @@
-import { TOTAL_COLS, TOTAL_ROWS } from '../../renderer/CanvasRenderer';
+import { TOTAL_COLS, TOTAL_ROWS } from '../../util/gridSize';
 
 import type { Store } from '../../store/Store';
 import type { AutoFilterState, Cell, ColMeta, RowMeta } from '../../types';

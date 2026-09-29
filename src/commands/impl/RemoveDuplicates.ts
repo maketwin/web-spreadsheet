@@ -1,5 +1,5 @@
 import { Command } from '../Command';
-import { TOTAL_ROWS } from '../../renderer/CanvasRenderer';
+import { TOTAL_ROWS } from '../../util/gridSize';
 import { captureSheet, parseKey, restoreSheet, type SheetSnapshot } from './sheetSnapshot';
 import { replaceMerges, shiftMergesForDelete } from '../../util/merge';
 import { shiftSheetFormulas } from './shiftFormulas';

@@ -2,7 +2,7 @@ import { Command } from '../Command';
 import type { Store } from '../../store/Store';
 import type { ChartSpec, ChartType, ChartAnchor } from '../../charts/types';
 import type { RangeAddress } from '../../selection/Range';
-import { TOTAL_COLS, TOTAL_ROWS } from '../../renderer/coordinate';
+import { TOTAL_COLS, TOTAL_ROWS } from '../../util/gridSize';
 
 export interface CreateChartArgs extends RangeAddress {
   readonly type: ChartType;

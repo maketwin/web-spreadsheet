@@ -1,5 +1,5 @@
 import { formulaText, shiftAxis, shiftFormulaCols, shiftFormulaRows, shiftInternalRange } from '../../util/cell';
-import { TOTAL_COLS } from '../../renderer/coordinate';
+import { TOTAL_COLS } from '../../util/gridSize';
 
 import type { Store } from '../../store/Store';
 import type { AutoFilterCriteria } from '../../types';

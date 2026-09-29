@@ -1,9 +1,8 @@
-export const TOTAL_ROWS = 1_000;
-export const TOTAL_COLS = 26;
-export const ROW_HEIGHT = 20;
-export const COL_WIDTH = 64;
-export const ROW_HEADER_WIDTH = 46;
-export const COL_HEADER_HEIGHT = 20;
+import { COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS } from '../util/gridSize';
+
+// Re-exported so existing renderer-oriented importers keep working; the
+// definitions live in util/gridSize (shared by non-renderer layers).
+export { TOTAL_ROWS, TOTAL_COLS, ROW_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, COL_HEADER_HEIGHT } from '../util/gridSize';
 
 export interface CellAddress { readonly r: number; readonly c: number }
 
