@@ -28,6 +28,44 @@
 - **Pinch zoom clamped to the floor** — `pinchBase.zoom` was captured from
   `zoom()` (a fraction) but `onZoomTo` expects a percent, so every pinch
   collapsed the zoom to the 50% minimum. Caught by the new mobile e2e.
+- **Spill × structural operations (debt clearance)** — three data-level
+  defects from the 09-28 review: editing an anchor formula to a scalar left
+  orphan shadows (stale values persisted and blocked future spills);
+  inserting/deleting rows or columns transported shadow cells verbatim so
+  the shifted anchor hit `#SPILL!` forever; filling/copying a spilled block
+  pasted shadow texts as real values that blocked the new anchor. All
+  move/copy paths now DROP derived shadow cells (`util/spillShadow`) — the
+  anchor formula re-spills fresh — and `recalculate` retires a spill before
+  writing a scalar result. Shadows also preserve the target cell's
+  styleId/type, spilled Dates keep their type, sheet deletion clears the
+  engine's bookkeeping, and `writeSpill`'s idempotence gate runs BEFORE any
+  clearing so echo re-evaluations are side-effect-free.
+- **Formula evaluator** — matrix operands flatten into the element-wise
+  list math (`=SUM(A1:A3*SEQUENCE(3))` used to be `#VALUE!`); `#SPILL!`
+  and `#CALC!` join `EXCEL_ERRORS` so `IFERROR`/`ISERROR` catch them;
+  `firstErrorIn` scans the whole matrix instead of element 0.
+- **Touch gesture exits** — every non-default exit (second finger,
+  multi-finger lift, pointercancel, destroy) funnels through
+  `resetGesture()`, which CANCELS in-flight fill/resize drags instead of
+  abandoning them (an abandoned drag committed a phantom fill on the next
+  tap). Touch selection is deferred to the lift (`pendingTap`), so
+  pressing to pan no longer collapses a multi-cell selection, and the
+  long-press menu runs the deferred selection first. Pinch rebases on
+  every pointer-set change (no more zoom jumps from a stale base).
+- **Sheet-tab suppress flag / keyboard-avoidance coords** —
+  `suppressTabClick` resets on pointerdown (a long-press whose synthetic
+  click never arrived used to swallow the NEXT real tab click), and the
+  `visualViewport` sync no longer mixes document and layout-viewport
+  coordinates (keyboard reflow + page scroll used to over-scroll the
+  editing cell).
+
+### Refactoring
+
+- **Grid constants to `util/gridSize`** — `TOTAL_ROWS/COLS` & co. lived in
+  the renderer, forcing formula/command layers to import upward for
+  numbers; `renderer/coordinate` re-exports for compat. The dead
+  `layoutTick` prop on EditorOverlay is gone (positioning is fully derived
+  from the fresh `cellRect` the host recomputes).
 
 ### Testing
 
@@ -39,6 +77,14 @@
   height and frozen panes), BottomBar long-press suite, FillHandle touch
   tolerance. Suite 183 files / 1213 tests; desktop e2e unchanged (8/8).
   Real-device QA checklist: docs/plan/2026-09-28-mobile-adaptation.md.
+- **Debt-clearance regression suites** — `spillStructural.test.ts` (11
+  cases: scalar-ize, delete/insert row, fill, paste, Ctrl-drag copy,
+  style/Date preservation, `IFERROR` over `#SPILL!`, sheet deletion), 5
+  new gesture tests (pan-press keeps the selection, mid-drag cancel ×2,
+  pinch rebase), adjacent/escaped-literal `argIndex` cases for
+  `stripLiterals`. CI caches Playwright browsers keyed on the lockfile;
+  the pan e2e asserts a 13–17 row landing band instead of any far row.
+  Suite 184 files / 1230 tests.
 
 ## v2.1.0 — 2026-09-28
 
