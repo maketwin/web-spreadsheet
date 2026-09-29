@@ -97,6 +97,22 @@ describe('useFormulaAssist — signature tooltip', () => {
     expect(hook.result.current.signature!.argIndex).toBe(1);
   });
 
+  it('adjacent literals keep their separating commas (the real stripLiterals regression)', () => {
+    // The old quote-stuffing mask made the paren scanner swallow the comma
+    // BETWEEN two literals — argIndex came out one too low.
+    const hook = setup();
+    change(hook, '=SUBSTITUTE("a","b",');
+    expect(hook.result.current.signature!.name).toBe('SUBSTITUTE');
+    expect(hook.result.current.signature!.argIndex).toBe(2);
+  });
+
+  it('escaped quotes inside literals still mask cleanly', () => {
+    const hook = setup();
+    change(hook, '=SUBSTITUTE("a""b",1,');
+    expect(hook.result.current.signature!.name).toBe('SUBSTITUTE');
+    expect(hook.result.current.signature!.argIndex).toBe(2);
+  });
+
   it('an unclosed non-catalog call shows no signature', () => {
     const hook = setup();
     change(hook, '=NOSUCHFN(');

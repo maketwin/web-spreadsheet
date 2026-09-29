@@ -1,7 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SpreadsheetComponent } from '../../src/components/Spreadsheet';
-import { CanvasRenderer } from '../../src/renderer/CanvasRenderer';
 import { Store } from '../../src/store/Store';
 
 /**
