@@ -3,6 +3,7 @@ import { TOTAL_ROWS } from '../../util/gridSize';
 import { isSpillShadow } from '../../util/spillShadow';
 import { captureSheet, parseKey, restoreSheet, type SheetSnapshot } from './sheetSnapshot';
 import { replaceMerges, shiftMergesForDelete } from '../../util/merge';
+import { shiftRowGroupsForDelete } from '../../outline/rowGroupShift';
 import { shiftSheetFormulas } from './shiftFormulas';
 import { shiftSheetChartAnchors } from '../../charts/anchorShift';
 
@@ -32,6 +33,7 @@ export class DeleteRowCommand extends Command<DeleteRowArgs> {
     shiftCellsUp(store, start, count, target);
     for (let r = start; r < TOTAL_ROWS; r += 1) store.setRow(r, store.getRow(r + count, target), target);
     replaceMerges(store, shiftMergesForDelete(store.getMerges(target), start, start + count - 1, 'row'), target);
+    store.setRowGroups(shiftRowGroupsForDelete(store.getRowGroups(target), start, start + count - 1), target);
     shiftSheetFormulas(store, 'row', start, -count, target);
     shiftSheetChartAnchors(store, 'delete', 'row', start, count, target);
   }

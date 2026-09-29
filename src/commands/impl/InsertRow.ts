@@ -3,6 +3,7 @@ import { TOTAL_ROWS } from '../../util/gridSize';
 import { isSpillShadow } from '../../util/spillShadow';
 import { captureSheet, parseKey, restoreSheet, type SheetSnapshot } from './sheetSnapshot';
 import { replaceMerges, shiftMergesForInsert } from '../../util/merge';
+import { shiftRowGroupsForInsert } from '../../outline/rowGroupShift';
 import { shiftSheetFormulas } from './shiftFormulas';
 import { shiftSheetChartAnchors } from '../../charts/anchorShift';
 
@@ -38,6 +39,7 @@ export class InsertRowCommand extends Command<InsertRowArgs> {
       store.setRow(r, undefined, target);
     }
     replaceMerges(store, shiftMergesForInsert(store.getMerges(target), start, count, 'row'), target);
+    store.setRowGroups(shiftRowGroupsForInsert(store.getRowGroups(target), start, count), target);
     shiftSheetFormulas(store, 'row', start, count, target);
     shiftSheetChartAnchors(store, 'insert', 'row', start, count, target);
   }

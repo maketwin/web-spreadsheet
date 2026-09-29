@@ -6,12 +6,15 @@ import type { ConditionalRule } from '../../conditional/ConditionalRule';
 import type { ChartSpec } from '../../charts/types';
 import type { ValidationRule } from '../../validation/types';
 import type { NamedRangeDef } from '../../namedrange/types';
+import type { RowGroupDef } from '../../store/SheetData';
 
 export interface SheetSnapshot {
   readonly cells: ReadonlyArray<readonly [number, number, Cell]>;
   readonly rows: ReadonlyArray<readonly [number, RowMeta]>;
   readonly cols: ReadonlyArray<readonly [number, ColMeta]>;
   readonly merges: readonly string[];
+  /** Active sheet's row-group intervals — insert/delete row shift them, undo restores them. */
+  readonly rowGroups?: ReadonlyArray<RowGroupDef>;
   /** Active sheet's floating chart objects — structural edits shift their anchors, undo restores them. */
   readonly charts?: ReadonlyArray<ChartSpec>;
   /** Other sheets' cells (sheetId, r, c) — cross-sheet formula rewrites undo here. */
@@ -52,6 +55,7 @@ export function captureSheet(store: Store, sheetId?: string): SheetSnapshot {
     rows: collectRows(store, activeId),
     cols: collectCols(store, activeId),
     merges: store.getMerges(activeId),
+    rowGroups: store.getRowGroups(activeId),
     charts: store.getCharts(activeId).map((chart) => chart.anchor === undefined
       ? { ...chart }
       : { ...chart, anchor: { from: { ...chart.anchor.from }, to: { ...chart.anchor.to } } }),
@@ -76,6 +80,7 @@ export function restoreSheet(store: Store, snapshot: SheetSnapshot, sheetId?: st
   snapshot.rows.forEach(([r, meta]) => store.setRow(r, meta, sid));
   snapshot.cols.forEach(([c, meta]) => store.setCol(c, meta, sid));
   snapshot.merges.forEach((range) => store.addMerge(range, sid));
+  if (snapshot.rowGroups !== undefined) store.setRowGroups(snapshot.rowGroups, sid);
   restoreCharts(store, snapshot.charts ?? [], sid);
   restoreOtherCells(store, snapshot.otherCells ?? [], sid);
   restoreStructures(store, snapshot);
