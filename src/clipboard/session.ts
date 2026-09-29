@@ -6,6 +6,7 @@ import type { CellPatch } from '../commands/impl/SetRangeValues';
 import { ClipboardService } from './ClipboardService';
 import { mergeToString, parseMerge, rangesIntersect, sameRange } from '../util/merge';
 import { applyMatrix } from '../util/rangeValues';
+import { isSpillShadow } from '../util/spillShadow';
 import type { CommandManager } from '../commands/CommandManager';
 
 export interface ClipboardSessionState { readonly type: 'cut' | 'copy'; readonly range: RangeAddress; readonly text: string; readonly cells: ReadonlyArray<ReadonlyArray<Cell | undefined>>; readonly merges?: readonly RangeAddress[] }
@@ -74,14 +75,14 @@ export function planMergePaste(store: Store, sourceMerges: readonly RangeAddress
   return { ok: true, rect, add };
 }
 
-/** Deep-enough snapshot of the source block so the paste is value/style/formula-faithful. */
+/** Deep-enough snapshot of the source block so the paste is value/style/formula-faithful. Spill shadows are skipped: the pasted anchor formula re-spills, and pasting shadow values would block it. */
 export function snapshotCells(store: Store, range: RangeAddress): ReadonlyArray<ReadonlyArray<Cell | undefined>> {
   const rows: Array<ReadonlyArray<Cell | undefined>> = [];
   for (let r = range.r1; r <= range.r2; r += 1) {
     const row: Array<Cell | undefined> = [];
     for (let c = range.c1; c <= range.c2; c += 1) {
       const cell = store.getCell(r, c);
-      row.push(cell === undefined ? undefined : { ...cell });
+      row.push(cell === undefined || isSpillShadow(cell) ? undefined : { ...cell });
     }
     rows.push(row);
   }
@@ -160,7 +161,7 @@ export function combineMultiRanges(store: Store, ranges: readonly RangeAddress[]
     const byCols = [...sorted].sort((a, b) => a.c1 - b.c1);
     for (let r = sorted[0]!.r1; r <= sorted[0]!.r2; r += 1) {
       const line: Array<Cell | undefined> = [];
-      for (const rg of byCols) for (let c = rg.c1; c <= rg.c2; c += 1) { const cell = store.getCell(r, c); line.push(cell === undefined ? undefined : { ...cell }); }
+      for (const rg of byCols) for (let c = rg.c1; c <= rg.c2; c += 1) { const cell = store.getCell(r, c); line.push(cell === undefined || isSpillShadow(cell) ? undefined : { ...cell }); }
       cellRows.push(line);
     }
   } else {
@@ -168,7 +169,7 @@ export function combineMultiRanges(store: Store, ranges: readonly RangeAddress[]
     for (const rg of byRows) {
       for (let r = rg.r1; r <= rg.r2; r += 1) {
         const line: Array<Cell | undefined> = [];
-        for (let c = sorted[0]!.c1; c <= sorted[0]!.c2; c += 1) { const cell = store.getCell(r, c); line.push(cell === undefined ? undefined : { ...cell }); }
+        for (let c = sorted[0]!.c1; c <= sorted[0]!.c2; c += 1) { const cell = store.getCell(r, c); line.push(cell === undefined || isSpillShadow(cell) ? undefined : { ...cell }); }
         cellRows.push(line);
       }
     }

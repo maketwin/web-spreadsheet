@@ -1,10 +1,11 @@
 import type { Store } from '../store/Store';
 import { formulaDependencies, type NamedDepArea } from '../util/cell';
+import type { Cell } from '../types';
 import { DependencyGraph } from './dependency';
 import { evaluate } from './evaluator';
 import { FormulaParser } from './parser';
 import { isMatrix, type AstNode, type FormulaArgument, type FormulaValue, type MatrixValue } from './types';
-import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
+import { TOTAL_COLS, TOTAL_ROWS } from '../util/gridSize';
 import type { NamedRangeDef } from '../namedrange/types';
 
 export class FormulaEngine {
@@ -55,10 +56,19 @@ export class FormulaEngine {
     this.graph.clearDependencies(scopedId);
     this.formulas.delete(scopedId);
     // A deleted/moved anchor takes its spill shadows with it.
-    const extent = this.spills.get(scopedId);
-    if (extent !== undefined) {
-      this.spills.delete(scopedId);
-      this.clearSpillShadows(scopedId, extent);
+    this.retireSpill(scopedId);
+  }
+
+  /** Sheet removed: its formulas, dependency edges and spill bookkeeping go too. */
+  onSheetDeleted(sheetId: string): void {
+    const prefix = `${sheetId}:`;
+    for (const key of [...this.formulas.keys()]) {
+      if (!key.startsWith(prefix)) continue;
+      this.graph.clearDependencies(key);
+      this.formulas.delete(key);
+    }
+    for (const key of [...this.spills.keys()]) {
+      if (key.startsWith(prefix)) this.spills.delete(key);
     }
   }
 
@@ -100,6 +110,10 @@ export class FormulaEngine {
         },
       );
       if (isMatrix(raw)) { this.writeSpill(scopedId, sheetId, r, c, raw); return; }
+      // Scalar result: an anchor that used to spill no longer does — retire
+      // its shadows BEFORE writing the value (orphan shadows would persist as
+      // real-looking data and block future spills).
+      this.retireSpill(scopedId);
       const value = scalar(raw);
       const existing = this.store.getCell(r, c, sheetId);
       this.store.setCell(r, c, { ...existing, text: String(value ?? ''), value }, sheetId);
@@ -245,8 +259,20 @@ export class FormulaEngine {
     const overflow = r2 >= TOTAL_ROWS || c2 >= TOTAL_COLS;
     const extent = { r2: Math.min(r2, TOTAL_ROWS - 1), c2: Math.min(c2, TOTAL_COLS - 1) };
 
-    // Retire the previous shadows first (values may shift anywhere in the box).
+    // Idempotence gate FIRST, before any clearing: an echo re-evaluation
+    // (store event → formula sync → setFormula → recalculate) must find the
+    // spill already correct and leave without writing — clearing our own
+    // shadows here would make the write below mandatory forever, re-emitting
+    // events in an endless clear/write ping-pong. Only a same-extent,
+    // fully-matching spill may take the no-op exit (a shrunken or moved one
+    // still needs its retract pass below).
     const prev = this.spills.get(scopedId);
+    if (prev !== undefined && prev.r2 === extent.r2 && prev.c2 === extent.c2 && this.spillMatches(sheetId, r, c, extent, scopedId, m)) return;
+
+    // Retire the previous shadows first (values may shift anywhere in the
+    // box). NOTE: the map entry STAYS until the set below — while the clear
+    // batch flushes, onCellChanged must still find the anchor so a nested
+    // echo recalculation hits the evalStack guard instead of spiralling.
     if (prev !== undefined) this.clearSpillShadows(scopedId, prev);
     this.spills.set(scopedId, extent);
 
@@ -258,23 +284,7 @@ export class FormulaEngine {
       return;
     }
 
-    // Idempotence probe: identical text/value/spillOf everywhere → skip writes.
-    let identical = true;
-    for (let y = r; y <= extent.r2 && identical; y += 1) {
-      for (let x = c; x <= extent.c2; x += 1) {
-        const idx = (y - r) * m.cols + (x - c);
-        const v = m.data[idx] ?? null;
-        const text = String(v ?? '');
-        const value = typeof v === 'object' ? text : v;
-        const cell = this.store.getCell(y, x, sheetId);
-        const isAnchor = y === r && x === c;
-        if (cell === undefined || cell.text !== text || cell.value !== value || cell.spillOf !== (isAnchor ? undefined : scopedId) || cell.formula !== (isAnchor ? this.formulas.get(scopedId) : undefined)) {
-          identical = false;
-          break;
-        }
-      }
-    }
-    if (identical) return;
+    if (this.spillMatches(sheetId, r, c, extent, scopedId, m)) return;
 
     this.store.batch(() => {
       for (let y = r; y <= extent.r2; y += 1) {
@@ -282,14 +292,52 @@ export class FormulaEngine {
           const idx = (y - r) * m.cols + (x - c);
           const v = m.data[idx] ?? null;
           const text = String(v ?? '');
-          const value = typeof v === 'object' ? text : v;
+          const value = spillValue(v, text);
           const isAnchor = y === r && x === c;
           const existing = this.store.getCell(y, x, sheetId);
           if (isAnchor) this.store.setCell(y, x, { ...existing, text, value }, sheetId);
-          else this.store.setCell(y, x, { text, value, spillOf: scopedId }, sheetId);
+          else {
+            // Preserve the target's own formatting (Excel keeps styles under a
+            // spill), but never its content-bound fields — those belong to the
+            // previous occupant, and a stale richText/hyperlink would misrender.
+            const shadow: Cell = { text, value, spillOf: scopedId };
+            if (existing?.styleId !== undefined) shadow.styleId = existing.styleId;
+            if (existing?.type !== undefined) shadow.type = existing.type;
+            this.store.setCell(y, x, shadow, sheetId);
+          }
         }
       }
     });
+  }
+
+  /** True when every cell of the extent already holds this exact spill
+   * (text/value/spillOf/anchor formula). Dates compare by time — fresh
+   * evaluations construct equal-but-distinct Date objects, and a
+   * reference-only compare would rewrite (and echo) forever. */
+  private spillMatches(sheetId: string, r: number, c: number, extent: { readonly r2: number; readonly c2: number }, scopedId: string, m: MatrixValue): boolean {
+    const sameValue = (a: unknown, b: unknown): boolean => a === b || (a instanceof Date && b instanceof Date && a.getTime() === b.getTime());
+    for (let y = r; y <= extent.r2; y += 1) {
+      for (let x = c; x <= extent.c2; x += 1) {
+        const idx = (y - r) * m.cols + (x - c);
+        const v = m.data[idx] ?? null;
+        const text = String(v ?? '');
+        const value = spillValue(v, text);
+        const cell = this.store.getCell(y, x, sheetId);
+        const isAnchor = y === r && x === c;
+        if (cell === undefined || cell.text !== text || !sameValue(cell.value, value) || cell.spillOf !== (isAnchor ? undefined : scopedId) || cell.formula !== (isAnchor ? this.formulas.get(scopedId) : undefined)) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  /** Retire a spill this anchor no longer has (removed, moved or turned scalar). */
+  private retireSpill(scopedId: string): void {
+    const prev = this.spills.get(scopedId);
+    if (prev === undefined) return;
+    this.spills.delete(scopedId);
+    this.clearSpillShadows(scopedId, prev);
   }
 
   /** Any non-empty cell in the extent that is not this anchor's own shadow. */
@@ -366,6 +414,13 @@ function scalar(value: FormulaArgument): FormulaValue {
   if (isFormulaList(value)) return value[0] ?? null;
   if (isMatrix(value)) return value.data[0] ?? null;
   return value;
+}
+
+/** Spill cell value: Dates keep their type (formatting depends on it); any other object degrades to its text. */
+function spillValue(v: FormulaValue | null, text: string): FormulaValue {
+  if (v instanceof Date) return v;
+  if (typeof v === 'object' && v !== null) return text;
+  return v ?? null;
 }
 
 function isFormulaList(value: FormulaArgument): value is readonly FormulaValue[] {

@@ -1,5 +1,6 @@
 import { Command } from '../Command';
-import { TOTAL_COLS } from '../../renderer/CanvasRenderer';
+import { TOTAL_COLS } from '../../util/gridSize';
+import { isSpillShadow } from '../../util/spillShadow';
 import { captureSheet, parseKey, restoreSheet, type SheetSnapshot } from './sheetSnapshot';
 import { replaceMerges, shiftMergesForDelete } from '../../util/merge';
 import { shiftSheetFormulas } from './shiftFormulas';
@@ -63,6 +64,8 @@ function shiftCellsLeft(store: Store, start: number, count: number, target: stri
   const cells = store.getCells(target).map(([key, cell]) => [...parseKey(key), cell] as const);
   cells.filter(([, c]) => c >= start + count).sort((a, b) => a[1] - b[1]).forEach(([r, c, cell]) => {
     store.setCell(r, c, undefined, target);
+    // Spill shadows never travel — the shifted anchor re-spills fresh here.
+    if (isSpillShadow(cell)) return;
     store.setCell(r, c - count, cell, target);
   });
 }

@@ -1,5 +1,6 @@
 import { Command } from '../Command';
 import { mergeToString, parseMerge, rangeContains, rangesIntersect } from '../../util/merge';
+import { isSpillShadow } from '../../util/spillShadow';
 import type { Store } from '../../store/Store';
 import type { Cell } from '../../types';
 import type { RangeAddress } from '../../selection/Range';
@@ -48,10 +49,12 @@ export class MoveRange extends Command<MoveRangeArgs> {
     };
     this.targetSnapshot = snapshotRange(store, targetEnd, sid);
 
-    // Write source cells to target location
+    // Write source cells to target location. Spill shadows are derived — the
+    // moved anchor formula re-spills over the cleared target positions.
     for (let r = 0; r < srcRows; r += 1) {
       for (let c = 0; c < srcCols; c += 1) {
-        const cell = cloneCell(this.sourceSnapshot[r]?.[c]);
+        const src = this.sourceSnapshot[r]?.[c];
+        const cell = isSpillShadow(src) ? undefined : cloneCell(src);
         store.setCell(target.r1 + r, target.c1 + c, cell, sid);
       }
     }

@@ -1,5 +1,6 @@
 import { Command } from '../Command';
-import { TOTAL_COLS } from '../../renderer/CanvasRenderer';
+import { TOTAL_COLS } from '../../util/gridSize';
+import { isSpillShadow } from '../../util/spillShadow';
 import { captureSheet, parseKey, restoreSheet, type SheetSnapshot } from './sheetSnapshot';
 import { replaceMerges, shiftMergesForInsert } from '../../util/merge';
 import { shiftSheetFormulas } from './shiftFormulas';
@@ -29,7 +30,8 @@ export class InsertColCommand extends Command<InsertColArgs> {
     cells.filter(([, c]) => c >= start).sort((a, b) => b[1] - a[1]).forEach(([r, c, cell]) => {
       store.setCell(r, c, undefined, target);
       // Cells pushed past the grid edge are dropped (the grid is fixed-size).
-      if (c + count < TOTAL_COLS) store.setCell(r, c + count, cell, target);
+      // Spill shadows never travel — the shifted anchor re-spills fresh here.
+      if (c + count < TOTAL_COLS && !isSpillShadow(cell)) store.setCell(r, c + count, cell, target);
     });
     for (let c = TOTAL_COLS - 1; c >= start; c -= 1) {
       if (c + count < TOTAL_COLS) store.setCol(c + count, store.getCol(c, target), target);

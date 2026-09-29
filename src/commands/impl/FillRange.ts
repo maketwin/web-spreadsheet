@@ -1,6 +1,7 @@
 import { Command } from '../Command';
 import { nextSeriesValues } from '../../fill/series';
 import { mergeToString, parseMerge, rangeContains, rangesIntersect } from '../../util/merge';
+import { isSpillShadow } from '../../util/spillShadow';
 import type { Store } from '../../store/Store';
 import type { RangeAddress } from '../../selection/Range';
 import type { Cell } from '../../types';
@@ -114,6 +115,9 @@ export class FillRangeCommand extends Command<FillRangeArgs> {
         const srcIdx = ((targetIdx % srcLen) + srcLen) % srcLen;
         const srcCell = cellAt(srcIdx);
         if (srcCell === undefined) continue;
+        // Filling from a spilled block carries only the anchor formula (Excel
+        // array fill); shadow positions clear so the new anchor can re-spill.
+        if (isSpillShadow(srcCell)) { setAt(targetIdx, undefined); continue; }
         if (srcCell.formula !== undefined) {
           const offset = targetIdx - srcIdx;
           setAt(targetIdx, {

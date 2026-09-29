@@ -17,6 +17,12 @@ export function createFormulaSync(store: Store, engine: FormulaEngine): { readon
   interface DeferredCell { readonly r: number; readonly c: number; readonly sheetId: string | undefined }
   const deferred = new Map<string, DeferredCell>();
   const unsubscribe = store.subscribe((event) => {
+    // Deleted sheets take their formulas/dependency edges/spill bookkeeping with
+    // them — nothing else tells the engine, and stale entries leak the maps.
+    if (event.type === 'sheet' && event.action === 'delete') {
+      engine.onSheetDeleted(event.sheetId);
+      return;
+    }
     if (event.type !== 'cell' || syncing) return;
     syncing = true;
     const sheetId = event.sheetId;
