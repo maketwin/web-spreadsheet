@@ -5,6 +5,7 @@ import { captureSheet, parseKey, restoreSheet, type SheetSnapshot } from './shee
 import { replaceMerges, shiftMergesForInsert } from '../../util/merge';
 import { shiftSheetFormulas } from './shiftFormulas';
 import { shiftSheetChartAnchors } from '../../charts/anchorShift';
+import { shiftSheetSparklines } from '../../sparkline/shift';
 
 import type { Store } from '../../store/Store';
 
@@ -25,9 +26,10 @@ export class InsertColCommand extends Command<InsertColArgs> {
   public execute(store: Store): void {
     const target = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = target;
-    this.oldSheet = captureSheet(store, target);
     const count = normalizeCount(this.args.count);
     const start = this.args.position === 'right' ? this.args.c + 1 : this.args.c;
+    // Only columns at/after `start` move, so the undo snapshot covers just that band.
+    this.oldSheet = captureSheet(store, target, { axis: 'col', from: start });
     const cells = store.getCells(target).map(([key, cell]) => [...parseKey(key), cell] as const);
     cells.filter(([, c]) => c >= start).sort((a, b) => b[1] - a[1]).forEach(([r, c, cell]) => {
       store.setCell(r, c, undefined, target);
@@ -42,6 +44,7 @@ export class InsertColCommand extends Command<InsertColArgs> {
     replaceMerges(store, shiftMergesForInsert(store.getMerges(target), start, count, 'col'), target);
     shiftSheetFormulas(store, 'col', start, count, target);
     shiftSheetChartAnchors(store, 'insert', 'col', start, count, target);
+    shiftSheetSparklines(store, 'insert', 'col', start, count, target);
   }
 
   public getUndo(): Command {

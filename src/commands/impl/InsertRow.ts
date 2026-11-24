@@ -6,6 +6,7 @@ import { replaceMerges, shiftMergesForInsert } from '../../util/merge';
 import { shiftRowGroupsForInsert } from '../../outline/rowGroupShift';
 import { shiftSheetFormulas } from './shiftFormulas';
 import { shiftSheetChartAnchors } from '../../charts/anchorShift';
+import { shiftSheetSparklines } from '../../sparkline/shift';
 
 import type { Store } from '../../store/Store';
 
@@ -26,9 +27,10 @@ export class InsertRowCommand extends Command<InsertRowArgs> {
   public execute(store: Store): void {
     const target = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = target;
-    this.oldSheet = captureSheet(store, target);
     const count = normalizeCount(this.args.count);
     const start = this.args.position === 'below' ? this.args.r + 1 : this.args.r;
+    // Only rows at/after `start` move, so the undo snapshot covers just that band.
+    this.oldSheet = captureSheet(store, target, { axis: 'row', from: start });
     const cells = store.getCells(target).map(([key, cell]) => [...parseKey(key), cell] as const);
     cells.filter(([r]) => r >= start).sort((a, b) => b[0] - a[0]).forEach(([r, c, cell]) => {
       store.setCell(r, c, undefined, target);
@@ -44,6 +46,7 @@ export class InsertRowCommand extends Command<InsertRowArgs> {
     store.setRowGroups(shiftRowGroupsForInsert(store.getRowGroups(target), start, count), target);
     shiftSheetFormulas(store, 'row', start, count, target);
     shiftSheetChartAnchors(store, 'insert', 'row', start, count, target);
+    shiftSheetSparklines(store, 'insert', 'row', start, count, target);
   }
 
   public getUndo(): Command {

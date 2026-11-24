@@ -6,6 +6,7 @@ import { replaceMerges, shiftMergesForDelete } from '../../util/merge';
 import { shiftRowGroupsForDelete } from '../../outline/rowGroupShift';
 import { shiftSheetFormulas } from './shiftFormulas';
 import { shiftSheetChartAnchors } from '../../charts/anchorShift';
+import { shiftSheetSparklines } from '../../sparkline/shift';
 
 import type { Store } from '../../store/Store';
 
@@ -25,9 +26,10 @@ export class DeleteRowCommand extends Command<DeleteRowArgs> {
   public execute(store: Store): void {
     const target = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = target;
-    this.oldSheet = captureSheet(store, target);
     const count = normalizeCount(this.args.count);
     const start = this.args.r;
+    // Only rows at/after `start` move, so the undo snapshot covers just that band.
+    this.oldSheet = captureSheet(store, target, { axis: 'row', from: start });
     store.getCells(target).forEach(([key]) => {
       const [r, c] = parseKey(key);
       if (r >= start && r < start + count) store.setCell(r, c, undefined, target);
@@ -38,6 +40,7 @@ export class DeleteRowCommand extends Command<DeleteRowArgs> {
     store.setRowGroups(shiftRowGroupsForDelete(store.getRowGroups(target), start, start + count - 1), target);
     shiftSheetFormulas(store, 'row', start, -count, target);
     shiftSheetChartAnchors(store, 'delete', 'row', start, count, target);
+    shiftSheetSparklines(store, 'delete', 'row', start, count, target);
   }
 
   public getUndo(): Command {

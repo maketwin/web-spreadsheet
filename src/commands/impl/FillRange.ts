@@ -6,9 +6,7 @@ import type { Store } from '../../store/Store';
 import type { RangeAddress } from '../../selection/Range';
 import type { Cell } from '../../types';
 import { isRich } from '../../util/richText';
-import { alpha2num, num2alpha } from '../../util/alphabet';
-import { replaceRefTokens } from '../../util/cell';
-import { TOTAL_COLS, TOTAL_ROWS } from '../../util/gridSize';
+import { shiftFormula } from '../../util/formulaRefs';
 
 export interface FillRangeArgs {
   /**
@@ -48,7 +46,7 @@ export class FillRangeCommand extends Command<FillRangeArgs> {
   }
 
   public getUndo(): Command {
-    return new RestoreFillRange({ cells: this.oldCells, merges: this.oldMerges, target: this.args.target, ...(this.execSheetId !== undefined ? { sheetId: this.execSheetId } : {}) });
+    return new RestoreFillRange({ cells: this.oldCells, merges: this.oldMerges, target: this.args.target, fill: this.args, ...(this.execSheetId !== undefined ? { sheetId: this.execSheetId } : {}) });
   }
 
   /**
@@ -169,6 +167,8 @@ interface RestoreFillRangeArgs {
   readonly cells: ReadonlyArray<{ r: number; c: number; cell: ReturnType<Store['getCell']> }>;
   readonly merges: readonly string[];
   readonly target: RangeAddress;
+  /** The fill's own arguments: undoing the undo re-runs the fill (redo works). */
+  readonly fill: FillRangeArgs;
   readonly sheetId?: string;
 }
 
@@ -186,34 +186,8 @@ class RestoreFillRange extends Command<RestoreFillRangeArgs> {
   }
 
   public getUndo(): Command {
-    throw new Error('RestoreFillRange undo not supported');
+    return new FillRangeCommand({ ...this.args.fill, ...(this.args.sheetId !== undefined ? { sheetId: this.args.sheetId } : {}) });
   }
 }
 
-// Reference tokens are found with the shared scanner (string literals and
-// sheet names are skipped); `$` anchors are preserved.
-/**
- * Move a formula's relative references by (dr, dc) — fill, copy and paste.
- * A relative reference pushed off the grid is dead and becomes `#REF!`
- * (Excel semantics), instead of silently pointing where it used to.
- */
-export function shiftFormula(formula: string, dr: number, dc: number): string {
-  return replaceRefTokens(formula, (token) => {
-    const parts = token.split(':').map((part) => moveRef(part, dr, dc));
-    return parts.includes('#REF!') ? '#REF!' : parts.join(':');
-  });
-}
-
-function moveRef(ref: string, dr: number, dc: number): string {
-  const match = ref.match(/^(\$?)([A-Za-z]{1,3})(\$?)([1-9]\d*)$/);
-  const colAbs = match?.[1];
-  const col = match?.[2];
-  const rowAbs = match?.[3];
-  const row = match?.[4];
-  if (colAbs === undefined || col === undefined || rowAbs === undefined || row === undefined) return ref;
-  const newCol = alpha2num(col.toUpperCase()) + (colAbs === '$' ? 0 : dc);
-  const newRow = Number(row) - 1 + (rowAbs === '$' ? 0 : dr);
-  if (newCol < 0 || newCol >= TOTAL_COLS || newRow < 0 || newRow >= TOTAL_ROWS) return '#REF!';
-  const moved = colAbs === '$' ? col : num2alpha(newCol);
-  return `${colAbs}${col === col.toLowerCase() ? moved.toLowerCase() : moved}${rowAbs}${newRow + 1}`;
-}
+export { shiftFormula } from '../../util/formulaRefs';

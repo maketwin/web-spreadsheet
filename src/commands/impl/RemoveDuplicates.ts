@@ -4,6 +4,7 @@ import { captureSheet, parseKey, restoreSheet, type SheetSnapshot } from './shee
 import { replaceMerges, shiftMergesForDelete } from '../../util/merge';
 import { shiftSheetFormulas } from './shiftFormulas';
 import { shiftSheetChartAnchors } from '../../charts/anchorShift';
+import { shiftSheetSparklines } from '../../sparkline/shift';
 import { buildRowKeys, findDuplicateRows } from '../../data/removeDuplicates';
 import type { Store } from '../../store/Store';
 
@@ -90,6 +91,7 @@ function deleteOneRow(store: Store, start: number, sid: string): void {
   replaceMerges(store, shiftMergesForDelete(store.getMerges(sid), start, start + count - 1, 'row'), sid);
   shiftSheetFormulas(store, 'row', start, -count, sid);
   shiftSheetChartAnchors(store, 'delete', 'row', start, count, sid);
+  shiftSheetSparklines(store, 'delete', 'row', start, count, sid);
 }
 
 function shiftCellsUp(store: Store, start: number, count: number, sid: string): void {
