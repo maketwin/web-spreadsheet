@@ -5,7 +5,7 @@ import { mapSheetRefs } from '../util/sheetRef';
 import type { Cell, ColMeta, RowMeta, StoreEvent, Style, Unsubscribe } from '../types';
 import type { ConditionalRule } from '../conditional/ConditionalRule';
 import type { ChartSpec, ImageSpec } from '../charts/types';
-import type { RowGroupDef } from './SheetData';
+import type { RowGroupDef, SheetFreeze } from './SheetData';
 import type { ValidationRule } from '../validation/types';
 import type { SparklineSpec } from '../sparkline/types';
 import type { NamedRangeDef } from '../namedrange/types';
@@ -31,11 +31,21 @@ export class Store {
   private batchedEvents = new Map<string, StoreEvent>();
   private batchSeq = 0;
   private flushing = false;
+  private revisionCount = 0;
   private readonly batchEndListeners = new Set<() => void>();
 
   public constructor() {
     this.sheets.set(this.activeSheetId, new SheetData());
     this.sheetNames.set(this.activeSheetId, 'Sheet1');
+  }
+
+  /**
+   * Changes each time an event is delivered. A cache keyed on it goes stale
+   * with the store without having to subscribe (and without a subscription
+   * to remember to drop).
+   */
+  public get revision(): number {
+    return this.revisionCount;
   }
 
   public getActiveSheetId(): string {
@@ -319,6 +329,15 @@ export class Store {
     this.notify(eventWithSheet({ type: 'style' as const, id: `image:${id}`, style: undefined }, sheetId));
   }
 
+  public getFreeze(sheetId = this.activeSheetId): SheetFreeze | undefined {
+    return this.requireSheet(sheetId).getFreeze();
+  }
+
+  public setFreeze(freeze: SheetFreeze | undefined, sheetId = this.activeSheetId): void {
+    this.requireSheet(sheetId).setFreeze(freeze);
+    this.notify(eventWithSheet({ type: 'style' as const, id: 'freeze', style: undefined }, sheetId));
+  }
+
   public getRowGroups(sheetId = this.activeSheetId): readonly RowGroupDef[] {
     return this.requireSheet(sheetId).getRowGroups();
   }
@@ -549,6 +568,8 @@ export class Store {
   }
 
   private notifyNow(e: StoreEvent): void {
+    // Before delivery: a reader that saw the new number has seen this event.
+    this.revisionCount += 1;
     this.subscribers.forEach((fn) => fn(e));
   }
 

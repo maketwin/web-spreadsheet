@@ -1,5 +1,5 @@
 import type { CellPatch } from '../commands/impl/SetRangeValues';
-import { shiftFormula } from '../commands/impl/FillRange';
+import { shiftFormula } from '../util/formulaRefs';
 import type { RangeAddress } from '../selection/Range';
 import type { RichTextRun } from '../types';
 import { valueFromText } from '../util/cell';

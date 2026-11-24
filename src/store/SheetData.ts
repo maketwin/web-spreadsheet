@@ -12,6 +12,12 @@ export interface RowGroupDef {
   readonly end: number;
 }
 
+/** 冻结窗格：左上角保持可见的行数、列数。 */
+export interface SheetFreeze {
+  readonly rows: number;
+  readonly cols: number;
+}
+
 export interface SerializedSheetData {
   readonly cells: Array<[string, Cell]>;
   readonly rows: Array<[number, RowMeta]>;
@@ -27,6 +33,7 @@ export interface SerializedSheetData {
   readonly rowGroups: RowGroupDef[];
   readonly protection?: SheetProtectionState | undefined;
   readonly autoFilter?: AutoFilterState | undefined;
+  readonly freeze?: SheetFreeze | undefined;
 }
 
 export class SheetData {
@@ -44,6 +51,7 @@ export class SheetData {
   private rowGroups: RowGroupDef[] = [];
   private protection: SheetProtectionState | undefined;
   private autoFilter: AutoFilterState | undefined;
+  private freeze: SheetFreeze | undefined;
 
   public getCell(r: number, c: number): Cell | undefined {
     return this.cells.get(keyOf(r, c));
@@ -212,6 +220,14 @@ export class SheetData {
     this.autoFilter = state;
   }
 
+  public getFreeze(): SheetFreeze | undefined {
+    return this.freeze;
+  }
+
+  public setFreeze(freeze: SheetFreeze | undefined): void {
+    this.freeze = freeze;
+  }
+
   public serialize(): SerializedSheetData {
     return {
       cells: [...this.cells.entries()].map(([key, value]) => {
@@ -232,6 +248,7 @@ export class SheetData {
       namedRanges: [...this.namedRanges.entries()],
       protection: this.protection,
       autoFilter: this.autoFilter,
+      freeze: this.freeze,
     };
   }
 
@@ -251,6 +268,8 @@ export class SheetData {
     data.namedRanges.forEach(([key, value]) => sheet.namedRanges.set(key, value));
     if (data.protection !== undefined) sheet.protection = data.protection;
     sheet.autoFilter = data.autoFilter;
+    // Optional since it was added late: older saved sheets carry none.
+    sheet.freeze = data.freeze;
     return sheet;
   }
 }
