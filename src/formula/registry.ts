@@ -19,6 +19,11 @@ class FunctionRegistry {
     return this.funcs.get(name.toUpperCase());
   }
 
+  /** Forgets a registration — what a plugin's undo does to a function it created. */
+  remove(name: string): void {
+    this.funcs.delete(name.toUpperCase());
+  }
+
   has(name: string): boolean {
     return this.funcs.has(name.toUpperCase());
   }

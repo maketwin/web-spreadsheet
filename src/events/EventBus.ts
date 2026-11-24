@@ -24,23 +24,47 @@ export class EventBus {
     };
 
     records.add(record);
-    return () => this.off(event, fn);
+    // Retires exactly THIS subscription: subscribing the same function twice
+    // yields two independent unsubs, each removing only its own record.
+    return () => { records.delete(record); };
   }
 
+  /**
+   * Removes the EARLIEST surviving subscription matching `(event, fn)` —
+   * calling `off` once after two `on`s leaves the second subscription live.
+   * To retire a precise subscription, use the `Unsubscribe` returned by `on`.
+   */
   public off<T = unknown>(event: string, fn: EventHandler<T>): void {
     const records = this.listeners.get(event);
     if (records === undefined) return;
 
-    records.forEach((record) => {
+    for (const record of records) {
       if (record.original === fn) {
         records.delete(record);
+        return;
       }
-    });
+    }
   }
 
   public emit<T = unknown>(event: string, payload?: T): void {
-    this.listeners.get(event)?.forEach((record) => record.wrapped(payload));
-    this.listeners.get('*')?.forEach((record) => record.wrapped({ event, payload }));
+    this.emitTo(this.listeners.get(event), payload);
+    this.emitTo(this.listeners.get('*'), { event, payload });
+  }
+
+  /**
+   * One failing listener must not break the publisher or the other listeners:
+   * each handler runs isolated, errors are logged and dispatch continues
+   * (including the `*` listeners, which run in their own pass).
+   */
+  private emitTo(records: Set<ListenerRecord> | undefined, payload: unknown): void {
+    if (records === undefined) return;
+    for (const record of [...records]) {
+      try {
+        record.wrapped(payload);
+      } catch (err) {
+        console.error('EventBus listener threw:', err);
+      }
+    }
   }
 
   private getOrCreateListeners(event: string): Set<ListenerRecord> {
