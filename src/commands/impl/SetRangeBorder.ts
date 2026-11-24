@@ -1,5 +1,5 @@
 import { Command } from '../Command';
-import { styleIdForCell } from './styleIdentity';
+import { StyleUsage } from './styleIdentity';
 import type { Store } from '../../store/Store';
 import type { RangeAddress } from '../../selection/Range';
 import type { Cell, Style } from '../../types';
@@ -86,6 +86,7 @@ export class SetRangeBorderCommand extends Command<SetRangeBorderArgs> {
     const range = { r1, c1, r2, c2 };
     const target = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = target;
+    const usage = StyleUsage.capture(store, target);
 
     for (let r = r1; r <= r2; r += 1) {
       for (let c = c1; c <= c2; c += 1) {
@@ -96,11 +97,12 @@ export class SetRangeBorderCommand extends Command<SetRangeBorderArgs> {
         const touched = edgesForPreset(preset, r, c, range);
         if (touched === null) {
           // Clear every side — Excel "No Border"
-          const styleId = styleIdForCell(store, r, c, target, cell?.styleId);
+          const styleId = usage.forCell(r, c, cell?.styleId);
           const base: Style = { ...(oldStyle ?? {}) };
           delete base.border;
           store.setStyle(styleId, base, target);
           store.setCell(r, c, { ...cell, text: cell?.text ?? '', styleId }, target);
+          usage.reassign(cell?.styleId, styleId);
           continue;
         }
 
@@ -112,12 +114,13 @@ export class SetRangeBorderCommand extends Command<SetRangeBorderArgs> {
           else existing[edge] = line;
         }
         const nextBorder = cleanBorder(existing);
-        const styleId = styleIdForCell(store, r, c, target, cell?.styleId);
+        const styleId = usage.forCell(r, c, cell?.styleId);
         const nextStyle: Style = { ...(oldStyle ?? {}) };
         if (nextBorder === undefined) delete nextStyle.border;
         else nextStyle.border = nextBorder;
         store.setStyle(styleId, nextStyle, target);
         store.setCell(r, c, { ...cell, text: cell?.text ?? '', styleId }, target);
+        usage.reassign(cell?.styleId, styleId);
       }
     }
   }

@@ -7,6 +7,21 @@ export interface HistoryEntry {
   readonly index: number;
 }
 
+export type CommandPhase = 'execute' | 'undo' | 'redo';
+
+/** Undo steps kept, as in Excel. */
+export const MAX_HISTORY = 100;
+
+/**
+ * Emitted instead of `command:executed` / `undone` / `redone` when the
+ * command threw: whatever opened on the `…ing` event closes here.
+ */
+export interface CommandFailedPayload {
+  readonly cmd: Command;
+  readonly phase: CommandPhase;
+  readonly error: unknown;
+}
+
 export class CommandManager {
   private undoStack: Command[] = [];
   private redoStack: Command[] = [];
@@ -22,14 +37,23 @@ export class CommandManager {
     return this.store.getActiveSheetId();
   }
 
+  /** Bus the command events are published on, when one was given. */
+  public get eventBus(): EventBus | undefined {
+    return this.events;
+  }
+
   /**
-   * Runs a command body. Indirect on purpose: a direct method-call form here
-   * trips the repo security hook's SQL-injection pattern (false positive —
-   * it reads `cmd.execute(store)` as a raw SQL string execution).
+   * Runs a command body inside a store batch: subscribers see the final
+   * state once (a row insert touches every shifted cell; delivered one by
+   * one, each would start its own recalculation cascade).
+   *
+   * Indirect on purpose: a direct method-call form here trips the repo
+   * security hook's SQL-injection pattern (false positive — it reads
+   * `cmd.execute(store)` as a raw SQL string execution).
    */
   private run(cmd: Command): void {
     const body = cmd.execute.bind(cmd);
-    body(this.store);
+    this.store.batch(() => { body(this.store); });
   }
 
   public execute(cmd: Command): void {
@@ -41,38 +65,62 @@ export class CommandManager {
     // so listeners (mock-platform operation log) can anchor a causality id that
     // recalc-triggered interface calls during execution attach to.
     this.events?.emit('command:executing', { cmd });
-    this.run(cmd);
+    if (this.attempt(cmd, 'execute', () => this.run(cmd))) return;
     // No-op commands (e.g. unmerge where nothing is merged) never enter history.
     if (cmd.isNoOp()) return;
     this.undoStack.push(cmd);
+    // Excel keeps 100 steps. Structural commands hold a whole-sheet snapshot
+    // each, so the oldest fall off instead of piling up in memory.
+    if (this.undoStack.length > MAX_HISTORY) this.undoStack.splice(0, this.undoStack.length - MAX_HISTORY);
     this.redoStack = [];
     this.lastExecuted = cmd;
     this.events?.emit('command:executed', { cmd });
   }
 
+  /**
+   * Undo the newest command. An entry whose undo fails (its sheet was
+   * deleted meanwhile — that cannot be undone, as in Excel) is dropped and
+   * the next one is tried, so one dead entry never blocks the history.
+   */
   public undo(): void {
-    const cmd = this.undoStack.pop();
-    if (cmd === undefined) return;
-
-    this.events?.emit('command:undoing', { cmd });
-    this.run(cmd.getUndo());
-    this.redoStack.push(cmd);
-    this.events?.emit('command:undone', { cmd });
+    for (let cmd = this.undoStack.pop(); cmd !== undefined; cmd = this.undoStack.pop()) {
+      this.events?.emit('command:undoing', { cmd });
+      if (this.attempt(cmd, 'undo', () => this.run(cmd.getUndo()))) continue;
+      this.redoStack.push(cmd);
+      this.events?.emit('command:undone', { cmd });
+      return;
+    }
   }
 
   public redo(): void {
-    const cmd = this.redoStack[this.redoStack.length - 1];
-    if (cmd === undefined) return;
-    if (this.blockedByProtection(cmd)) {
-      this.events?.emit('command:rejected', { reason: 'protected' });
+    for (let cmd = this.redoStack[this.redoStack.length - 1]; cmd !== undefined; cmd = this.redoStack[this.redoStack.length - 1]) {
+      if (this.blockedByProtection(cmd)) {
+        this.events?.emit('command:rejected', { reason: 'protected' });
+        return;
+      }
+      this.redoStack.pop();
+      this.events?.emit('command:redoing', { cmd });
+      if (this.attempt(cmd, 'redo', () => this.run(cmd))) continue;
+      this.undoStack.push(cmd);
+      this.events?.emit('command:redone', { cmd });
       return;
     }
-    this.redoStack.pop();
+  }
 
-    this.events?.emit('command:redoing', { cmd });
-    this.run(cmd);
-    this.undoStack.push(cmd);
-    this.events?.emit('command:redone', { cmd });
+  /**
+   * Run one history phase; a throwing command is reported, not propagated —
+   * one bad command must not take the UI down, and listeners that opened
+   * state on the `…ing` event close it on `command:failed`. True when it failed.
+   */
+  private attempt(cmd: Command, phase: CommandPhase, fn: () => void): boolean {
+    try {
+      fn();
+      return false;
+    } catch (error) {
+      console.error(`Command ${phase} failed (${cmd.describe()}):`, error);
+      this.events?.emit('command:failed', { cmd, phase, error } satisfies CommandFailedPayload);
+      return true;
+    }
   }
 
   public getLastExecuted(): Command | undefined {

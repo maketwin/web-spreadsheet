@@ -1,5 +1,5 @@
 import { Command } from '../Command';
-import { styleIdForCell } from './styleIdentity';
+import { StyleUsage } from './styleIdentity';
 import type { Store } from '../../store/Store';
 import type { Cell, Style } from '../../types';
 
@@ -43,6 +43,7 @@ export class ApplyTableStyleCommand extends Command<ApplyTableStyleArgs> {
     this.execSheetId = sid;
     const preset = TABLE_PRESETS[this.args.preset];
     if (preset === undefined) return;
+    const usage = StyleUsage.capture(store, sid);
     for (let r = this.args.r1; r <= this.args.r2; r += 1) {
       for (let c = this.args.c1; c <= this.args.c2; c += 1) {
         this.snapshots.push(this.capture(store, r, c, sid));
@@ -52,9 +53,10 @@ export class ApplyTableStyleCommand extends Command<ApplyTableStyleArgs> {
         const oldCell = store.getCell(r, c, sid);
         const oldStyle = oldCell?.styleId === undefined ? undefined : store.getStyle(oldCell.styleId, sid);
         const nextStyle = { ...oldStyle, ...style };
-        const styleId = styleIdForCell(store, r, c, sid, oldCell?.styleId);
+        const styleId = usage.forCell(r, c, oldCell?.styleId);
         store.setStyle(styleId, nextStyle, sid);
         store.setCell(r, c, { ...oldCell, text: oldCell?.text ?? '', styleId }, sid);
+        usage.reassign(oldCell?.styleId, styleId);
       }
     }
   }

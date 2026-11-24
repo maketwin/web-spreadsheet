@@ -1,5 +1,5 @@
 import { Command } from '../Command';
-import { styleIdForCell } from './styleIdentity';
+import { StyleUsage } from './styleIdentity';
 
 import type { Store } from '../../store/Store';
 import type { Cell, Style } from '../../types';
@@ -16,6 +16,13 @@ export class SetCellStyleCommand extends Command<SetCellStyleArgs> {
   private oldCell: Cell | undefined;
   private oldStyle: Style | undefined;
   private execSheetId: string | undefined;
+  /** Shared by the commands that restyle a range, so the sheet is swept once for all of them. */
+  private readonly usage: StyleUsage | undefined;
+
+  public constructor(args: SetCellStyleArgs, usage?: StyleUsage) {
+    super(args);
+    this.usage = usage;
+  }
 
   public execute(store: Store): void {
     const target = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
@@ -23,11 +30,13 @@ export class SetCellStyleCommand extends Command<SetCellStyleArgs> {
     const oldCell = store.getCell(this.args.r, this.args.c, target);
     const oldStyle = oldCell?.styleId === undefined ? undefined : store.getStyle(oldCell.styleId, target);
     const nextStyle = { ...oldStyle, ...this.args.style };
-    const styleId = styleIdForCell(store, this.args.r, this.args.c, target, oldCell?.styleId);
+    const usage = this.usage ?? StyleUsage.capture(store, target);
+    const styleId = usage.forCell(this.args.r, this.args.c, oldCell?.styleId);
     this.oldCell = oldCell;
     this.oldStyle = oldStyle;
     store.setStyle(styleId, nextStyle, target);
     store.setCell(this.args.r, this.args.c, { ...oldCell, text: oldCell?.text ?? '', styleId }, target);
+    usage.reassign(oldCell?.styleId, styleId);
   }
 
   public getUndo(): Command {

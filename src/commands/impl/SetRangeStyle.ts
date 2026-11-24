@@ -1,5 +1,6 @@
 import { Command } from '../Command';
 import { SetCellStyleCommand } from './SetCellStyle';
+import { StyleUsage } from './styleIdentity';
 
 import type { Store } from '../../store/Store';
 import type { RangeAddress } from '../../selection/Range';
@@ -27,10 +28,12 @@ export class SetRangeStyleCommand extends Command<SetRangeStyleArgs> {
     this.oldCells = [];
     const target = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = target;
+    const usage = StyleUsage.capture(store, target);
     for (let r = this.args.r1; r <= this.args.r2; r += 1) {
       for (let c = this.args.c1; c <= this.args.c2; c += 1) {
         this.capture(store, r, c, target);
-        new SetCellStyleCommand({ r, c, style: this.args.style, sheetId: target }).execute(store);
+        const apply = new SetCellStyleCommand({ r, c, style: this.args.style, sheetId: target }, usage);
+        apply.execute.bind(apply)(store);
       }
     }
   }

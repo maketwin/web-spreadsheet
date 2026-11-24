@@ -21,6 +21,8 @@ export class InsertRowCommand extends Command<InsertRowArgs> {
   private oldSheet: SheetSnapshot | undefined;
   private execSheetId: string | undefined;
 
+  public override structuralKind(): 'insertRow' { return 'insertRow'; }
+
   public execute(store: Store): void {
     const target = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = target;

@@ -1,5 +1,5 @@
 import { Command } from '../Command';
-import { styleIdForCell } from './styleIdentity';
+import { StyleUsage } from './styleIdentity';
 import type { Store } from '../../store/Store';
 import type { RangeAddress } from '../../selection/Range';
 import type { Cell, Style } from '../../types';
@@ -26,10 +26,11 @@ export class SetNumberFormatCommand extends Command<SetNumberFormatArgs> {
     const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = sid;
     const snaps: CellSnapshot[] = [];
+    const usage = StyleUsage.capture(store, sid);
     for (let r = this.args.r1; r <= this.args.r2; r += 1) {
       for (let c = this.args.c1; c <= this.args.c2; c += 1) {
         snaps.push(snapshot(store, r, c, sid));
-        applyFormat(store, r, c, this.args.numberFormat, sid);
+        applyFormat(store, r, c, this.args.numberFormat, sid, usage);
       }
     }
     this.oldSnapshots = snaps;
@@ -67,11 +68,12 @@ function snapshot(store: Store, r: number, c: number, sheetId: string): CellSnap
   return { r, c, cell, style, styleId };
 }
 
-function applyFormat(store: Store, r: number, c: number, numberFormat: NonNullable<Style['numberFormat']>, sheetId: string): void {
+function applyFormat(store: Store, r: number, c: number, numberFormat: NonNullable<Style['numberFormat']>, sheetId: string, usage: StyleUsage): void {
   let cell = store.getCell(r, c, sheetId);
   if (cell === undefined) cell = { text: '' };
-  const styleId = styleIdForCell(store, r, c, sheetId, cell.styleId);
+  const styleId = usage.forCell(r, c, cell.styleId);
   const existing = store.getStyle(styleId, sheetId);
   store.setStyle(styleId, { ...existing, numberFormat }, sheetId);
   store.setCell(r, c, { ...cell, styleId }, sheetId);
+  usage.reassign(cell.styleId, styleId);
 }

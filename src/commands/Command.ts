@@ -1,10 +1,22 @@
 import type { Store } from '../store/Store';
 
+/** Row / column insertion or deletion a command performs. */
+export type StructuralKind = 'insertRow' | 'deleteRow' | 'insertCol' | 'deleteCol';
+
 export abstract class Command<TArgs = unknown> {
   protected readonly args: TArgs;
 
   public constructor(args: TArgs) {
     this.args = args;
+  }
+
+  /**
+   * The structural change this command makes, if any. Declared by the command
+   * itself, so tools can classify commands without importing their classes —
+   * a class name is not an identity, and does not survive minification.
+   */
+  public structuralKind(): StructuralKind | null {
+    return null;
   }
 
   public abstract execute(store: Store): void;
