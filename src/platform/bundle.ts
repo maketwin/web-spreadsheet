@@ -88,11 +88,28 @@ export async function importBundleFile(file: File): Promise<ReproBundle> {
  * 应用复现包：换工作簿 + 换项目 + 装载捕获与事件流（时间线被替换为包内
  * 事件，等用户点"回放"重演）。undo 栈随之清空——旧工作簿的命令不能落进
  * 新文档。
+ *
+ * 原子性：先校验项目（不合法在动任何状态前就失败），再快照现状；中途任何
+ * 一步抛异常都整体回滚到应用前，不留"工作簿换了一半、项目没换"的半应用态。
  */
 export function applyBundle(hub: MockHub, store: Store, bundle: ReproBundle, clearUndo?: () => void): void {
+  const project = validateProject(bundle.project);
+  const workbookBefore = store.serialize();
+  const projectBefore = hub.project;
+  const activeBefore = hub.activeScenarioId;
+  const capturesBefore = hub.exportCaptures();
+  const eventsBefore = [...hub.timeline];
   store.replaceAll(bundle.workbook);
-  hub.replaceProject(bundle.project, bundle.activeScenarioId ?? undefined);
-  if (bundle.captures !== undefined) hub.importCaptures(bundle.captures);
-  hub.restoreEvents(bundle.events);
+  try {
+    hub.replaceProject(project, bundle.activeScenarioId ?? undefined);
+    if (bundle.captures !== undefined) hub.importCaptures(bundle.captures);
+    hub.restoreEvents(bundle.events);
+  } catch (err) {
+    store.replaceAll(workbookBefore);
+    hub.replaceProject(projectBefore, activeBefore ?? undefined);
+    hub.replaceCaptures(capturesBefore);
+    hub.restoreEvents(eventsBefore);
+    throw err;
+  }
   clearUndo?.();
 }

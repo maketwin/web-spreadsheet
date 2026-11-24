@@ -1,6 +1,6 @@
-import { Tooltip } from 'antd';
-import { useEffect, useRef, useState, type FC, type ReactNode } from 'react';
-import type { ApiInterface, ApiRule, Scenario, TimelineEvent } from './types';
+import { Modal, Result, Tooltip, Button } from 'antd';
+import { Component, useEffect, useRef, useState, type ErrorInfo, type FC, type ReactNode } from 'react';
+import type { ApiInterface, ApiRule, MockProject, Scenario, TimelineEvent } from './types';
 import type { MockHub } from './MockHub';
 import type { CommandManager } from '../commands/CommandManager';
 import type { Store } from '../store/Store';
@@ -21,7 +21,7 @@ import {
   type ScenarioDraft,
 } from './editors';
 import { importOpenApiFile } from './openapi';
-import { clearPersistedProject, exportProjectFile, importProjectFile } from './persistence';
+import { clearPersistedProject, countScriptRules, exportProjectFile, importProjectFile } from './persistence';
 import { replayTimeline, type ReplayReport } from './replay';
 import './panel.css';
 
@@ -219,6 +219,79 @@ function showImportError(err: unknown): void {
   setTimeout(() => bar.remove(), 4000);
 }
 
+/**
+ * 导入确认：外部项目/复现包里的脚本出参规则会在应用后随公式求值执行（规则
+ * 引擎在主线程跑 new Function）——别人的文件可能带恶意脚本，须先经用户信任
+ * 确认；不含脚本时保持原行为直接应用。
+ */
+function confirmScriptRules(project: MockProject, apply: () => void): void {
+  const scripts = countScriptRules(project);
+  if (scripts === 0) {
+    apply();
+    return;
+  }
+  Modal.confirm({
+    title: '该文件包含脚本出参',
+    content: `将执行 ${scripts} 段来自该文件的脚本，仅在信任来源时继续。`,
+    okText: '信任并导入',
+    cancelText: '取消',
+    // Modal.confirm 默认聚焦 OK：直接回车就会执行不可信文件里的脚本。
+    // 焦点给"取消"，OK 仍可用 Tab/点击到达。
+    autoFocusButton: 'cancel',
+    onOk: apply,
+  });
+}
+
+interface BoundaryState {
+  readonly error: Error | null;
+}
+
+/**
+ * 面板专属兜底：坏数据（导入未校验完全的项目/复现包）让渲染崩溃时给出可读
+ * 提示而不是白屏。"重置并重新加载"清掉持久化项目再刷新——只刷新不重置会
+ * 从存档恢复同样的坏数据，陷入崩溃循环。
+ */
+export class PanelErrorBoundary extends Component<{ readonly children: ReactNode }, BoundaryState> {
+  public constructor(props: { readonly children: ReactNode }) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  public static getDerivedStateFromError(error: Error): BoundaryState {
+    return { error };
+  }
+
+  public override componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error('[PanelErrorBoundary] 面板渲染崩溃:', error, info.componentStack);
+  }
+
+  private readonly handleReload = (): void => {
+    window.location.reload();
+  };
+
+  private readonly handleReset = (): void => {
+    clearPersistedProject();
+    window.location.reload();
+  };
+
+  public override render(): ReactNode {
+    if (this.state.error === null) return this.props.children;
+    return (
+      <Result
+        status="error"
+        title="面板渲染出错"
+        subTitle={`当前数据让控制台崩溃：${this.state.error.message}。可重新加载；若反复出现，请重置已保存的项目。`}
+        extra={(
+          <>
+            <Button onClick={this.handleReload}>重新加载</Button>
+            <Button type="primary" danger onClick={this.handleReset}>重置并重新加载</Button>
+          </>
+        )}
+      />
+    );
+  }
+}
+
 /** 操作值显示：空单元格显示 ∅，长值（公式）截断，悬浮看全量。 */
 function opValue(value: string | null): ReactNode {
   if (value === null) return null;
@@ -406,7 +479,9 @@ export const PlatformPanel: FC<{
               e.target.value = '';
               if (file === undefined) return;
               void importProjectFile(file)
-                .then(({ project: imported, activeScenarioId }) => hub.replaceProject(imported, activeScenarioId ?? undefined))
+                .then(({ project: imported, activeScenarioId }) => {
+                  confirmScriptRules(imported, () => hub.replaceProject(imported, activeScenarioId ?? undefined));
+                })
                 .catch((err: unknown) => showImportError(err));
             }}
           />
@@ -534,8 +609,10 @@ export const PlatformPanel: FC<{
                   if (file === undefined) return;
                   void importBundleFile(file)
                     .then((b) => {
-                      applyBundle(hub, store, b, cmdManager === undefined ? undefined : () => cmdManager.clear());
-                      setReport(null);
+                      confirmScriptRules(b.project, () => {
+                        applyBundle(hub, store, b, cmdManager === undefined ? undefined : () => cmdManager.clear());
+                        setReport(null);
+                      });
                     })
                     .catch((err: unknown) => showImportError(err));
                 }}

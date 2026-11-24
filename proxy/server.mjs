@@ -60,6 +60,8 @@ export function isLocalHostHeader(host, port) {
 
 const calls = [];
 let nextSeq = 1;
+// 每次启动都不同：重启后序号从 1 重新开始，面板据此丢掉它记住的旧序号。
+const bootId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 const XHR_HINTS = /\/(api|oa|service|servlet|ajax|rest|gateway)\b|\.json|\/(get|save|query|list|export|import)/i;
 const looksLikeXhr = (path, accept, contentType) =>
@@ -225,7 +227,7 @@ const server = createServer((req, res) => {
   if (path.startsWith('/__spy/api/calls')) {
     const since = Number(new URL(path, LOCAL_ORIGIN).searchParams.get('since') ?? 0);
     res.setHeader('content-type', 'application/json; charset=utf-8');
-    res.end(JSON.stringify({ calls: calls.filter((c) => c.seq > since) }));
+    res.end(JSON.stringify({ bootId, calls: calls.filter((c) => c.seq > since) }));
     return;
   }
   if (path === '/__spy/api/clear') {

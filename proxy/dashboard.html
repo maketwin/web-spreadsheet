@@ -53,6 +53,7 @@
   let xhrOnly = true;
   let auto = false;
   let lastSeq = 0;
+  let bootId;
   const rowsEl = document.getElementById('rows');
   const countEl = document.getElementById('count');
 
@@ -85,14 +86,37 @@
       rowsEl.innerHTML = '<div class="empty">暂无记录 —— 在 OA 页面里操作，这里会实时出现它调用的接口</div>';
       return;
     }
+    // 整表重建会把新行顶在最上面，把正看到的内容往下推——先记住视口顶上的
+    // 行，重建后把它滚回原位（停在顶部时例外：让新行直接可见）。
+    const anchor = auto || window.scrollY <= 0 ? null : anchorSeq();
     rowsEl.innerHTML = shown.map((c) => `<div class="row${openSet.has(c.seq) ? ' open' : ''}" data-seq="${c.seq}">${rowHtml(c)}</div>`).join('');
     if (auto) window.scrollTo(0, 0);
+    else if (anchor !== null) restoreAnchor(anchor);
+  }
+
+  function anchorSeq() {
+    for (const el of rowsEl.querySelectorAll('.row')) {
+      if (el.offsetTop >= window.scrollY) return Number(el.dataset.seq);
+    }
+    return null;
+  }
+
+  function restoreAnchor(seq) {
+    const el = rowsEl.querySelector(`.row[data-seq="${seq}"]`);
+    if (el !== null) window.scrollTo(0, el.offsetTop);
   }
 
   async function poll() {
     try {
       const res = await fetch(`/__spy/api/calls?since=${lastSeq}`);
       const data = await res.json();
+      // The sequence restarts at 1 when the proxy does; drop what was asked of
+      // the previous process and fetch its calls again from the beginning.
+      if (data.bootId !== undefined && data.bootId !== bootId) {
+        bootId = data.bootId; bySeq.clear(); openSet.clear(); lastSeq = 0;
+        render();
+        await poll(); return;
+      }
       for (const c of data.calls) { bySeq.set(c.seq, c); lastSeq = Math.max(lastSeq, c.seq); }
       if (data.calls.length > 0) render();
     } catch { /* 代理重启时静默重试 */ }

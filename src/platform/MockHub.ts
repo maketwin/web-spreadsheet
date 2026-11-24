@@ -108,6 +108,12 @@ export class MockHub {
     this.changed();
   }
 
+  /** 捕获快照整体替换（复现包应用失败时的回滚入口）：不在快照里的接口一并清除。 */
+  public replaceCaptures(entries: Readonly<Record<string, Capture>>): void {
+    this.captures.clear();
+    for (const [id, cap] of Object.entries(entries)) this.captures.set(id, cap);
+  }
+
   // ---- 可变模型：接口 / 规则 / 场景 ----
 
   /** 新增或按 id 替换接口。 */

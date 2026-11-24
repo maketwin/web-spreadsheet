@@ -1,6 +1,8 @@
 import { createRoot } from 'react-dom/client';
 import { Spreadsheet } from '../src/components/Spreadsheet';
 import { MockHub, PlatformPanel, installApiFunctions, installOperationRecorder, persistProject, restoreProject } from '../src/platform';
+import { PanelErrorBoundary } from '../src/platform/PlatformPanel';
+import { warnOncePersistFailed } from '../src/platform/persistence';
 import { demoProject, demoStyles, demoWorkbook } from './platformDemo';
 
 /**
@@ -51,14 +53,22 @@ for (const [r, c, style] of demoStyles) {
 
 installOperationRecorder(hub, ss.events, ss.store);
 
-// 项目自动持久化（防抖 600ms）：接口/规则/场景/场景切换都在刷新后保留
+// 项目自动持久化（防抖 600ms）：接口/规则/场景/场景切换都在刷新后保留；
+// 隐私模式/超配额保存失败时给一次可见提示（数据当前可用，刷新即丢）
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 hub.onChange(() => {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => persistProject(hub), 600);
+  saveTimer = setTimeout(() => {
+    if (!persistProject(hub)) warnOncePersistFailed();
+  }, 600);
 });
 
-createRoot(panelHost).render(<PlatformPanel hub={hub} store={ss.store} cmdManager={ss.cmdManager} />);
+// 面板外层兜底：坏数据渲染崩溃时显示"重置并重新加载"而不是白屏
+createRoot(panelHost).render(
+  <PanelErrorBoundary>
+    <PlatformPanel hub={hub} store={ss.store} cmdManager={ss.cmdManager} />
+  </PanelErrorBoundary>,
+);
 
 const w = window as unknown as { __ss: Spreadsheet; __hub: MockHub };
 w.__ss = ss; // debug/test handle
