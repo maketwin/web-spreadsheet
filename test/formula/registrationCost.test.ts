@@ -109,6 +109,11 @@ describe('recalculation cost', () => {
     return { store, engine, put, value: (r, c) => store.getCell(r, c)?.value };
   }
 
+  // Measured: about 130 ms on a development machine, 200 ms under coverage
+  // instrumentation there, and 1.4 s on a CI runner that runs the whole suite
+  // under coverage in parallel. The quadratic walk this guards against took
+  // about two seconds on the development machine, i.e. more than ten times
+  // the linear time, so it lands far above this limit in every environment.
   it('enters long chains in time linear in their length', () => {
     const { put, value } = setup();
     const started = performance.now();
@@ -117,9 +122,9 @@ describe('recalculation cost', () => {
     const elapsed = performance.now() - started;
     // The first row is empty, so the chain counts from 0.
     expect(value(1000, 25)).toBe(1000);
-    // Generous for CI; it took about two seconds before.
-    expect(elapsed).toBeLessThan(1200);
-  });
+    expect(elapsed).toBeLessThan(6000);
+    // The timeout leaves room for a regression to report its measured time.
+  }, 30_000);
 
   it('enters a chain bottom-up correctly (each new value recalculates the cells below, as it must)', () => {
     const { put, value } = setup();
