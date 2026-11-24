@@ -58,10 +58,15 @@ describe('DataValidationService', () => {
     expect(result.message).toContain('有效日期');
   });
 
-  it('mixed: list validation rejects empty string not in list', () => {
-    const rule: ValidationRule = { type: 'list', values: ['apple', 'banana'] };
-    const result = svc.validate('', rule);
-    expect(result.valid).toBe(false);
+  it('mixed: empty candidate passes every rule (Excel Ignore blank default)', () => {
+    // Excel's data validation has "Ignore blank" on by default: clearing a
+    // cell is allowed even when the blank value itself would not validate.
+    const listRule: ValidationRule = { type: 'list', values: ['apple', 'banana'] };
+    expect(svc.validate('', listRule).valid).toBe(true);
+    expect(svc.validate('', { type: 'integer', min: 1, max: 5 }).valid).toBe(true);
+    expect(svc.validate('', { type: 'textLength', min: 1, max: 5 }).valid).toBe(true);
+    // A non-empty value still rejects against the list.
+    expect(svc.validate('cherry', listRule).valid).toBe(false);
   });
 });
 

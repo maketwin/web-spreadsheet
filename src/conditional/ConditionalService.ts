@@ -2,7 +2,16 @@ import type { Store } from '../store/Store';
 import type { Cell, Style } from '../types';
 import { evaluate, EXCEL_ERRORS } from '../formula/evaluator';
 import { FormulaParser } from '../formula/parser';
+import { shiftFormula } from '../util/formulaRefs';
 import type { ConditionalOverlay, ConditionalRule } from './ConditionalRule';
+
+/**
+ * Size limit of the per-service rule-formula AST cache, same policy (and
+ * magnitude) as the formula engine's own MAX_CACHED_FORMULAS. Kept above one
+ * full grid (1000×26), so scrolling a single rule end to end fills the cache
+ * without ever thrashing it.
+ */
+export const MAX_CACHED_RULE_FORMULAS = 40_000;
 
 export class ConditionalService {
   private parser = new FormulaParser();
@@ -11,13 +20,27 @@ export class ConditionalService {
   /**
    * Icon-set percent thresholds need the range min/max; recomputing them per
    * visible cell per paint is O(range) each — cache per range and drop the
-   * whole cache on any store event (lazy-bound on first use).
+   * whole cache whenever the store's revision moves past the one it was
+   * filled at (no subscription needed: every event delivery bumps it).
    */
   private iconStats = new Map<string, { min: number; max: number }>();
-  private iconStatsBound = false;
+  private iconStatsStore: Store | null = null;
+  private iconStatsRevision = -1;
+
+  /** Cap override for tests; production services use MAX_CACHED_RULE_FORMULAS. */
+  private readonly maxCachedFormulas: number;
+
+  public constructor(maxCachedFormulas: number = MAX_CACHED_RULE_FORMULAS) {
+    this.maxCachedFormulas = maxCachedFormulas;
+  }
 
   private parseCached(formula: string): ReturnType<FormulaParser['parse']> {
-    if (!this.astCache.has(formula)) this.astCache.set(formula, this.parser.parse(formula));
+    if (!this.astCache.has(formula)) {
+      // Shifted rule formulas are one entry per visited cell — clear in one
+      // go instead of evicting entry by entry (mirrors the formula engine).
+      if (this.astCache.size >= this.maxCachedFormulas) this.astCache.clear();
+      this.astCache.set(formula, this.parser.parse(formula));
+    }
     return this.astCache.get(formula) ?? null;
   }
 
@@ -50,14 +73,15 @@ export class ConditionalService {
     if (rule.type === 'colorScale') return this.applyColorScale(store, r, c, rule, sheetId);
     if (rule.type === 'cellValue') return this.applyCellValue(store, r, c, rule, sheetId);
     if (rule.type === 'iconSet') return this.applyIconSet(store, r, c, rule, range, rangeKey, sheetId);
-    return this.applyFormula(store, rule, sheetId);
+    return this.applyFormula(store, rule, range, r, c, sheetId);
   }
 
-  /** Cached numeric min/max of a rule range; invalidated on any store event. */
+  /** Cached numeric min/max of a rule range; invalidated when the store changes. */
   private rangeStats(store: Store, range: { r1: number; c1: number; r2: number; c2: number }, rangeKey: string, sheetId?: string): { min: number; max: number } | null {
-    if (!this.iconStatsBound) {
-      this.iconStatsBound = true;
-      store.subscribe(() => this.iconStats.clear());
+    if (this.iconStatsStore !== store || this.iconStatsRevision !== store.revision) {
+      this.iconStatsStore = store;
+      this.iconStatsRevision = store.revision;
+      this.iconStats.clear();
     }
     const cacheKey = `${sheetId ?? ''}|${rangeKey}`;
     const hit = this.iconStats.get(cacheKey);
@@ -98,6 +122,10 @@ export class ConditionalService {
   private applyCellValue(store: Store, r: number, c: number, rule: ConditionalRule & { type: 'cellValue' }, sheetId?: string): ConditionalOverlay {
     const cell = store.getCell(r, c, sheetId);
     if (cell === undefined) return {};
+    // Excel: a blank cell matches no cell-value comparison (it is not 0 and
+    // not ''); only `contains`, which tests the text as-is, keeps its result.
+    const blank = (cell.value === undefined || cell.value === null) && cell.text === '';
+    if (blank && rule.operator !== 'contains') return {};
     const raw = cell.value ?? cell.text;
     if (matchCellValue(raw, rule.operator, rule.value, rule.value2)) return { style: rule.style };
     return {};
@@ -116,8 +144,19 @@ export class ConditionalService {
     return { style: { bgcolor } };
   }
 
-  private applyFormula(store: Store, rule: ConditionalRule & { type: 'formula' }, sheetId?: string): ConditionalOverlay {
-    const ast = this.parseCached(rule.formula);
+  /**
+   * Excel: the formula is written relative to the rule range's top-left cell,
+   * so the cell at (r, c) evaluates the formula shifted by its offset from
+   * that anchor. `$`-anchored references stay put; a relative reference pushed
+   * off the grid becomes `#REF!`, which — like any error result — never
+   * counts as a hit.
+   */
+  private applyFormula(store: Store, rule: ConditionalRule & { type: 'formula' }, range: { r1: number; c1: number; r2: number; c2: number }, r: number, c: number, sheetId?: string): ConditionalOverlay {
+    const dr = r - range.r1;
+    const dc = c - range.c1;
+    // The cache key is the shifted text: every cell of the range parses its
+    // variant once, and repaints reuse the cached ASTs.
+    const ast = this.parseCached(dr === 0 && dc === 0 ? rule.formula : shiftFormula(rule.formula, dr, dc));
     if (ast === null) return {};
     try {
       const result = evaluate(ast, (x, y, sheetName) =>

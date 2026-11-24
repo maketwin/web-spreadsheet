@@ -1,6 +1,10 @@
-import type { ValidationRule } from './types';
+import type { Cell } from '../types';
+import type { Store } from '../store/Store';
+import type { FormulaValue } from '../formula/types';
 import { evaluate } from '../formula/evaluator';
 import { FormulaParser } from '../formula/parser';
+import { shiftFormula } from '../util/formulaRefs';
+import type { ValidationRule } from './types';
 
 /** Result of validating a value against a rule. */
 export interface ValidationResult {
@@ -8,11 +12,32 @@ export interface ValidationResult {
   readonly message?: string;
 }
 
+/**
+ * Optional context for rules that need the surrounding sheet — custom
+ * formulas. With it, the formula is evaluated against the real cells: it is
+ * shifted to the validated cell's offset from the rule range's top-left
+ * (Excel semantics), references to the validated cell read the candidate
+ * value, and references to other cells read the store. Without it the sheet
+ * is unknown: references cannot be resolved, and a custom formula degenerates
+ * to reading the candidate value for every reference.
+ */
+export interface ValidationContext {
+  readonly store: Store;
+  /** The cell being validated. */
+  readonly r: number;
+  readonly c: number;
+  /** Defaults to the store's active sheet. */
+  readonly sheetId?: string;
+}
+
 /** Service for validating cell values against rules. */
 export class DataValidationService {
   private parser = new FormulaParser();
 
-  public validate(value: string, rule: ValidationRule): ValidationResult {
+  public validate(value: string, rule: ValidationRule, context?: ValidationContext): ValidationResult {
+    // Excel's "Ignore blank" is on by default: an empty candidate passes every
+    // rule type, so clearing a cell is never blocked.
+    if (value === '') return { valid: true };
     switch (rule.type) {
       case 'list':
         return this.validateList(value, rule.values);
@@ -25,7 +50,7 @@ export class DataValidationService {
       case 'textLength':
         return this.validateTextLength(value, rule.min, rule.max);
       case 'custom':
-        return this.validateCustom(value, rule.formula);
+        return this.validateCustom(value, rule.formula, context);
     }
   }
 
@@ -54,18 +79,50 @@ export class DataValidationService {
     return { valid: true };
   }
 
-  private validateCustom(value: string, formula: string): ValidationResult {
-    // Excel custom: formula should evaluate to TRUE. `value` is available as a hint via A1-less parse —
-    // we evaluate the formula string; callers typically write formulas referencing the active cell.
-    const ast = this.parser.parse(formula.startsWith('=') ? formula : `=${formula}`);
+  /**
+   * Excel custom: the formula is written relative to the rule range's
+   * top-left cell and must evaluate to TRUE for the candidate to pass. With a
+   * context the formula is shifted to the validated cell's offset and its
+   * references read the real cells; without one every reference reads the
+   * candidate value (legacy behaviour — references cannot be resolved).
+   */
+  private validateCustom(value: string, formula: string, context?: ValidationContext): ValidationResult {
+    const source = formula.startsWith('=') ? formula : `=${formula}`;
+    // Without a context (or without a matching stored range) the validated
+    // cell is its own anchor, so the formula is used exactly as written.
+    let text = source;
+    if (context !== undefined) {
+      const origin = this.ruleOrigin(formula, context) ?? { r1: context.r, c1: context.c };
+      text = shiftFormula(source, context.r - origin.r1, context.c - origin.c1);
+    }
+    const ast = this.parser.parse(text);
     if (ast === null) return { valid: false, message: '自定义公式无效' };
     try {
-      const result = evaluate(ast, () => value);
+      const result = evaluate(ast, context === undefined
+        ? () => value
+        : (x, y, sheetName) => {
+          if (sheetName !== undefined) return storedCellValue(context.store.getCellBySheetName(sheetName, y, x));
+          // The validated cell itself: the candidate, typed as Excel would.
+          if (x === context.c && y === context.r) return candidateCellValue(value);
+          return storedCellValue(context.store.getCell(y, x, context.sheetId));
+        });
       const ok = result === true || result === 1 || result === 'TRUE';
       return ok ? { valid: true } : { valid: false, message: '不满足自定义公式' };
     } catch {
       return { valid: false, message: '自定义公式无效' };
     }
+  }
+
+  /** Top-left of the stored range that holds this exact custom rule and contains (r, c); null when none matches. */
+  private ruleOrigin(formula: string, context: ValidationContext): { r1: number; c1: number } | null {
+    for (const [key, stored] of context.store.getValidationRules(context.sheetId)) {
+      if (stored.type !== 'custom' || stored.formula !== formula) continue;
+      const range = parseRuleRange(key);
+      if (range === null) continue;
+      if (context.r < range.r1 || context.r > range.r2 || context.c < range.c1 || context.c > range.c2) continue;
+      return { r1: range.r1, c1: range.c1 };
+    }
+    return null;
   }
 
   private validateDate(value: string, minDate: string, maxDate: string): ValidationResult {
@@ -76,4 +133,33 @@ export class DataValidationService {
     if (d < min || d > max) return { valid: false, message: `请输入 ${minDate} 到 ${maxDate} 之间的日期` };
     return { valid: true };
   }
+}
+
+/** Parse the `r1,c1:r2,c2` range key SetValidationCommand stores rules under. */
+function parseRuleRange(key: string): { r1: number; c1: number; r2: number; c2: number } | null {
+  const [lo, hi] = key.split(':');
+  if (lo === undefined || hi === undefined) return null;
+  const nums = [...lo.split(','), ...hi.split(',')].map(Number);
+  if (nums.length !== 4 || nums.some((n) => !Number.isInteger(n))) return null;
+  const r1 = nums[0] ?? 0;
+  const c1 = nums[1] ?? 0;
+  const r2 = nums[2] ?? 0;
+  const c2 = nums[3] ?? 0;
+  return { r1: Math.min(r1, r2), c1: Math.min(c1, c2), r2: Math.max(r1, r2), c2: Math.max(c1, c2) };
+}
+
+/** The candidate as Excel types it: numeric text becomes a number, empty is blank. */
+function candidateCellValue(value: string): FormulaValue {
+  if (value === '') return null;
+  const n = Number(value);
+  return value.trim() !== '' && Number.isFinite(n) ? n : value;
+}
+
+/** A cell as the formula engine sees it: `value ?? text`; a missing cell is blank. */
+function storedCellValue(cell: Cell | undefined): FormulaValue {
+  if (cell === undefined) return null;
+  const v = cell.value;
+  if (v === undefined || v === null) return cell.text;
+  if (v instanceof Date) return v.toISOString();
+  return v;
 }
