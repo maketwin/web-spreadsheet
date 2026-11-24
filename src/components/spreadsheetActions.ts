@@ -128,7 +128,8 @@ export function commitFormulaValue(selected: Selection | null, value: string, st
   const active = selected.active ?? { r: selected.range.r1, c: selected.range.c1 };
   const rule = store.getValidationRule(active.r, active.c);
   if (rule !== undefined) {
-    const result = new DataValidationService().validate(value, rule);
+    // With the cell's place: a custom formula reads the other cells it names, relative to its rule.
+    const result = new DataValidationService().validate(value, rule, { store, r: active.r, c: active.c });
     if (!result.valid) { message.warning(result.message ?? '输入值不符合验证规则'); return; }
   }
   if (value.startsWith('=')) {

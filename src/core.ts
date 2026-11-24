@@ -59,7 +59,7 @@ export { SetSparklineCommand } from './commands/impl/SetSparkline';
 // ── Events / plugins ────────────────────────────────────────────────────────
 export { EventBus } from './events/EventBus';
 export type { EventHandler, WildcardPayload } from './events/EventBus';
-export { PluginAPI } from './plugin/PluginAPI';
+export { PluginAPI, type PluginHost } from './plugin/PluginAPI';
 export { PluginManager } from './plugin/PluginManager';
 export type { Plugin } from './plugin/PluginManager';
 export { CsvImportPlugin } from './plugin/CsvImportPlugin';
@@ -79,7 +79,7 @@ export { applyStoredTheme, getTheme, setTheme, THEMES } from './theme';
 export type { Theme } from './theme';
 export { ConditionalService } from './conditional/ConditionalService';
 export type { ConditionalOverlay, ConditionalRule } from './conditional/ConditionalRule';
-export { DataValidationService } from './validation/DataValidationService';
+export { DataValidationService, type ValidationContext } from './validation/DataValidationService';
 export type { ValidationRule, ValidationType } from './validation/types';
 export { FilterService } from './filter/FilterService';
 export { toggleAutoFilterCommand } from './filter/toggleFilter';
@@ -95,3 +95,6 @@ export { sparklineValues, parseInternalRangeKey } from './sparkline/values';
 
 // ── CSV (hand-rolled; xlsx round-trip stays in the UI entry via io/) ────────
 export { exportCsv, exportCsvBlob, csvQuote } from './io/CsvExporter';
+
+// ── Sheet-level view state that travels with the workbook ──────────────────
+export type { SheetFreeze } from './store/SheetData';

@@ -63,6 +63,7 @@ import {
 import { applyRunStyle, applyTextChangeToRuns, charsAllHave, flattenRuns, isRich, normalizeRuns, runsFromText, type RunStylePatch } from '../util/richText';
 import { InteractionToolbar, ProtectionModal } from './InteractionToolbar';
 import { useCanvasRenderer } from './hooks/useCanvasRenderer';
+import { useSheetFreeze } from './hooks/useSheetFreeze';
 import { useFormulaSync } from './formulaSync';
 import { loadData, loadSheets } from './workbookInit';
 
@@ -104,6 +105,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const [workbookLocked, setWorkbookLocked] = useState(store.getWorkbookPasswordHash() !== undefined);
   const [workbookUnlocked, setWorkbookUnlocked] = useState(false);
   const [unlockInput, setUnlockInput] = useState('');
+  useSheetFreeze(store, activeSheetId, view, setView);
   useEffect(() => {
     const update = (): void => setWorkbookLocked(store.getWorkbookPasswordHash() !== undefined && !workbookUnlocked);
     const off = store.subscribe(update);
@@ -364,7 +366,8 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       const rule = store.getValidationRule(ed.r, ed.c);
       if (rule !== undefined) {
         const svc = new DataValidationService();
-        const result = svc.validate(value, rule);
+        // With the cell's place: a custom formula reads the other cells it names, relative to its rule.
+        const result = svc.validate(value, rule, { store, r: ed.r, c: ed.c });
         if (!result.valid) {
           message.warning(result.message ?? '输入值不符合验证规则');
           editingRef.current = ed;
@@ -832,7 +835,7 @@ export { createFormulaSync } from './formulaSync';
 
 /** Excel: rows grow to fit a just-applied font size / wrap. Direct write — see growRowsToContent note in MenuBar. */
 
-function useTheme(theme: Theme | false | undefined): void { useEffect(() => { if (theme === false) return; if (theme === undefined) applyStoredTheme(); else setTheme(theme); dispatchThemeChanged(); }, [theme]); }
+function useTheme(theme: Theme | false | undefined): void { useEffect(() => { if (theme === false) return; if (theme === undefined) applyStoredTheme(); else setTheme(theme); }, [theme]); }
 function useStoreSheets(store: Store, setSheets: (s: readonly SheetInfo[]) => void, setActive: (id: string) => void): void { useEffect(() => store.subscribe((event) => { if (event.type !== 'sheet') return; setSheets(store.getSheets()); setActive(store.getActiveSheetId()); }), [store, setSheets, setActive]); }
 function useStoreVersion(store: Store, bump: () => void): void { useEffect(() => store.subscribe(() => bump()), [store, bump]); }
 function useAutoSave(store: Store, storage: StorageOptions | false | undefined): void {
@@ -877,7 +880,8 @@ function deleteSheet(store: Store, id: string): void {
   });
 }
 
-function dispatchThemeChanged(): void { window.dispatchEvent(new CustomEvent('ss:theme-changed')); }
+/** `ss:theme-changed` is dispatched by setTheme() (src/theme/index.ts) — the
+ * in-app switch and public hosts share one dispatch path. */
 
 
 
