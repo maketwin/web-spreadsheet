@@ -9,6 +9,16 @@ export function setTheme(theme: Theme): void {
   try {
     localStorage.setItem('web-spreadsheet-theme', theme);
   } catch { /* not persisted */ }
+  dispatchThemeChanged();
+}
+
+/** Canvas repaint hooks (CanvasRenderer, the coordinate theme cache,
+ * FloatingChart) listen for this on window. Hosts that call the public
+ * setTheme get the same repaint the in-app theme switch triggers. Guarded:
+ * the headless ./core build must stay loadable where no window exists. */
+function dispatchThemeChanged(): void {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
+  window.dispatchEvent(new Event('ss:theme-changed'));
 }
 
 export function getTheme(): Theme {

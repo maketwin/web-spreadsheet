@@ -24,6 +24,19 @@
   --ss-tab-inactive-bg: #f3f3f3;
   --ss-status-bg: #217346;
   --ss-status-text: #ffffff;
+  /* Chrome surfaces: panels, inputs, chart objects, popovers. */
+  --ss-surface: #ffffff;
+  --ss-surface-alt: #f8f8f8;
+  --ss-surface-border: #d0d0d0;
+  /* Ribbon 工具栏两段渐变（dark.css 拍平成同一个值）。 */
+  --ss-toolbar-bg-start: #fafafa;
+  --ss-toolbar-bg-end: #f0f0f0;
+  /* Chart.js 坐标轴：浅色默认值 = chart.js 默认色。 */
+  --ss-chart-tick: #666666;
+  --ss-chart-grid: #e5e5e5;
+  /* 悬停填充（工具栏按钮 / 工作表标签）。 */
+  --ss-hover-bg: #e6e6e6;
+  --ss-tab-hover-bg: #eaeaea;
   --ss-font-family: Calibri, "Segoe UI", "Microsoft YaHei", sans-serif;
   --ss-font-size: 11px;
   --ss-row-height: 20px;

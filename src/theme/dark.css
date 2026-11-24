@@ -21,5 +21,15 @@
   --ss-tab-inactive-bg: #2d2d2d;
   --ss-status-bg: #185c37;
   --ss-status-text: #ffffff;
+  /* Chrome surfaces (see tokens.css). */
+  --ss-surface: #1e1e1e;
+  --ss-surface-alt: #252526;
+  --ss-surface-border: #454545;
+  --ss-toolbar-bg-start: #2d2d2d;
+  --ss-toolbar-bg-end: #2d2d2d;
+  --ss-chart-tick: #b3b3b3;
+  --ss-chart-grid: #2b2b2b;
+  --ss-hover-bg: #3a3a3a;
+  --ss-tab-hover-bg: #3a3a3a;
   --ss-font-size: 11px;
 }

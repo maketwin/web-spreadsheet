@@ -62,4 +62,17 @@ describe('BottomBar', () => {
     fireEvent.click(tab);
     expect(onSheetChange).toHaveBeenCalledWith('Sheet1');
   });
+
+  it('the tab context menu styles reference theme tokens (dark-theme aware)', () => {
+    render(<BottomBar sheets={['Sheet1']} activeSheetId="s1" />);
+    fireEvent.contextMenu(screen.getByRole('tab', { name: 'Sheet1' }));
+    const menu = screen.getByRole('menu') as HTMLUListElement;
+    // Fixed palette (color chips) stays literal; chrome colours must be tokens.
+    expect(menu.style.background).toContain('var(--ss-surface)');
+    expect(menu.style.border).toContain('var(--ss-surface-border)');
+    const item = screen.getByText('重命名').closest('button') as HTMLButtonElement;
+    expect(item.style.color).toContain('var(--ss-text)');
+    const separator = screen.getByRole('separator');
+    expect(separator.style.background).toContain('var(--ss-grid)');
+  });
 });

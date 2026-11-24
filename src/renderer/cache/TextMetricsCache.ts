@@ -22,7 +22,21 @@ export class TextMetricsCache {
       return hit;
     }
     this.misses += 1;
-    const width = typeof ctx.measureText === 'function' ? ctx.measureText(text).width : text.length * 8;
+    let width: number;
+    if (typeof ctx.measureText !== 'function') {
+      width = text.length * 8;
+    } else {
+      // Measure with the requested font, not whatever the canvas happens to
+      // carry: rich-text runs measure in their own font before the painter
+      // sets `ctx.font` per segment (the plain paths pass the font they just
+      // set, so the swap is a no-op for them). Restore afterwards so callers
+      // never observe the swap; cache hits never touch the context at all.
+      const previousFont = ctx.font;
+      const fontChanged = previousFont !== font;
+      if (fontChanged) ctx.font = font;
+      width = ctx.measureText(text).width;
+      if (fontChanged) ctx.font = previousFont;
+    }
     this.cache.set(key, width);
     if (this.cache.size > this.capacity) {
       const oldest = this.cache.keys().next();

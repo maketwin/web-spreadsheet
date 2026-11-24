@@ -4,7 +4,7 @@ import { Chart, registerables, type ChartData } from 'chart.js';
 Chart.register(...registerables);
 import type { Store } from '../store/Store';
 import type { CanvasRenderer } from '../renderer/CanvasRenderer';
-import { COL_HEADER_HEIGHT, ROW_HEADER_WIDTH, TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
+import { COL_HEADER_HEIGHT, ROW_HEADER_WIDTH, TOTAL_COLS, TOTAL_ROWS, readCanvasTheme } from '../renderer/coordinate';
 import { normalizeAnchor } from './geometry';
 import { CHART_MIN_H, CHART_MIN_W, type ChartAnchor, type ChartSpec } from './types';
 
@@ -55,10 +55,20 @@ export const FloatingChart: FC<FloatingChartProps> = ({ spec, store, renderer, s
   liveRectRef.current = liveRect;
   const anchor = spec.anchor ?? legacyAnchor(spec);
 
-  // Chart.js plot (redrawn when the spec or data changes).
+  // Bumped by `ss:theme-changed` so the plot redraws with the new theme text
+  // color (title/legend used to be hardcoded dark and vanished on dark bg).
+  const [themeVersion, setThemeVersion] = useState(0);
+
+  // Chart.js plot (redrawn when the spec, data or theme changes).
   useEffect(() => {
     if (canvasRef.current === null) return undefined;
     const data = readChartData(store, spec);
+    const text = readCanvasTheme().text;
+    // Axis colours follow the theme tokens (light defaults equal the chart.js
+    // defaults #666/#e5e5e5; dark.css overrides both). Pie charts have no axes.
+    const tickColor = cssToken('--ss-chart-tick', '#666666');
+    const gridColor = cssToken('--ss-chart-grid', '#e5e5e5');
+    const axis = { ticks: { color: tickColor }, grid: { color: gridColor } };
     const chart = new Chart(canvasRef.current, {
       type: spec.type,
       data,
@@ -66,15 +76,24 @@ export const FloatingChart: FC<FloatingChartProps> = ({ spec, store, renderer, s
         responsive: true,
         maintainAspectRatio: false,
         animation: false,
+        ...(spec.type === 'pie' ? {} : { scales: { x: { ...axis }, y: { ...axis } } }),
         plugins: {
-          title: { display: spec.title !== undefined, text: spec.title ?? '', color: '#444', font: { size: 12, weight: 600 } },
-          legend: { display: spec.type === 'pie', labels: { boxWidth: 12, font: { size: 10 } } },
+          title: { display: spec.title !== undefined, text: spec.title ?? '', color: text, font: { size: 12, weight: 600 } },
+          legend: { display: spec.type === 'pie', labels: { boxWidth: 12, font: { size: 10 }, color: text } },
         },
       },
     });
     chartRef.current = chart;
     return () => { chart.destroy(); chartRef.current = null; };
-  }, [spec, store]);
+  }, [spec, store, themeVersion]);
+
+  // Mount/unmount-paired theme listener: flip `themeVersion` to rebuild the chart.
+  useEffect(() => {
+    if (typeof window.addEventListener !== 'function') return undefined;
+    const onThemeChanged = (): void => setThemeVersion((v) => v + 1);
+    window.addEventListener('ss:theme-changed', onThemeChanged);
+    return () => { window.removeEventListener('ss:theme-changed', onThemeChanged); };
+  }, []);
 
   // The spec object never changes when the source cells do, so the effect
   // above does not re-run: redraw from the store on every change instead,
@@ -320,6 +339,14 @@ function palette(index: number): string {
     'rgba(153, 102, 255, 0.7)',
   ];
   return colors[index % colors.length] ?? colors[0]!;
+}
+
+/** Read a theme token off `<html>` (like readCanvasTheme does); the light
+ * default applies when the stylesheet is absent or the variable unset. */
+function cssToken(name: string, fallback: string): string {
+  if (typeof document === 'undefined') return fallback;
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value !== '' ? value : fallback;
 }
 
 function parseRangeKey(range: string): { readonly r1: number; readonly c1: number; readonly r2: number; readonly c2: number } {

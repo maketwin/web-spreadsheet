@@ -24,14 +24,17 @@ interface SheetMenuState {
 
 const TAB_COLORS = ['#217346', '#5b9bd5', '#ed7d31', '#a5a5a5', '#ffc000', '#70ad47', '#7030a0'] as const;
 
+// 主题 token（light 默认值 = 原写死的浅色值）：深色主题下菜单随主题变色，
+// 悬停/按下态内联样式写不了，由 spreadsheet.css 的 .ss-sheet-tab-menu 补充。
 const menuStyle: CSSProperties = {
   position: 'fixed',
   zIndex: 1000,
   margin: 0,
   padding: '4px 0',
   listStyle: 'none',
-  background: '#fff',
-  border: '1px solid #d0d0d0',
+  background: 'var(--ss-surface)',
+  color: 'var(--ss-text)',
+  border: '1px solid var(--ss-surface-border)',
   boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
   minWidth: 140,
 };
@@ -42,6 +45,7 @@ const menuItemBtnStyle: CSSProperties = {
   textAlign: 'left',
   border: 'none',
   background: 'transparent',
+  color: 'var(--ss-text)',
   padding: '6px 12px',
   cursor: 'pointer',
   font: 'inherit',
@@ -179,23 +183,23 @@ const BottomBarComponent: FC<BottomBarProps> = ({
           onClick={(e) => e.stopPropagation()}
         >
           <li role="menuitem">
-            <button type="button" style={menuItemBtnStyle} onClick={() => { onRenameSheet?.(menu.id); setMenu(null); }}>
+            <button type="button" className="ss-sheet-tab-menu-item" style={menuItemBtnStyle} onClick={() => { onRenameSheet?.(menu.id); setMenu(null); }}>
               重命名
             </button>
           </li>
           <li role="menuitem">
-            <button type="button" style={menuItemBtnStyle} onClick={() => { onDeleteSheet?.(menu.id); setMenu(null); }}>
+            <button type="button" className="ss-sheet-tab-menu-item" style={menuItemBtnStyle} onClick={() => { onDeleteSheet?.(menu.id); setMenu(null); }}>
               删除
             </button>
           </li>
           <li role="menuitem">
-            <button type="button" style={menuItemBtnStyle} onClick={() => { onMoveOrCopySheet?.(menu.id); setMenu(null); }}>
+            <button type="button" className="ss-sheet-tab-menu-item" style={menuItemBtnStyle} onClick={() => { onMoveOrCopySheet?.(menu.id); setMenu(null); }}>
               移动或复制…
             </button>
           </li>
-          <li role="separator" style={{ height: 1, background: '#e0e0e0', margin: '4px 0' }} />
+          <li role="separator" style={{ height: 1, background: 'var(--ss-grid)', margin: '4px 0' }} />
           <li role="menuitem" style={{ padding: '4px 12px' }}>
-            <span style={{ fontSize: 12, color: '#666' }}>标签颜色</span>
+            <span style={{ fontSize: 12, color: 'var(--ss-text-light)' }}>标签颜色</span>
             <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
               {TAB_COLORS.map((color) => (
                 <button
@@ -209,6 +213,7 @@ const BottomBarComponent: FC<BottomBarProps> = ({
               ))}
               <button
                 type="button"
+                className="ss-sheet-tab-menu-item"
                 aria-label="Clear sheet color"
                 style={{ ...menuItemBtnStyle, padding: '0 4px', width: 'auto' }}
                 onClick={() => { onSheetColor?.(menu.id, undefined); setMenu(null); }}

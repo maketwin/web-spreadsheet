@@ -204,7 +204,7 @@ for (const [selector, wanted] of LAYOUT_RULES) {
   }
 }
 
-const TOKENS = ['--ss-bg', '--ss-text', '--ss-text-light', '--ss-border', '--ss-accent', '--ss-menu-bg', '--ss-selected', '--ss-header-bg', '--ss-toolbar-bg', '--ss-status-bg', '--ss-status-text'];
+const TOKENS = ['--ss-bg', '--ss-text', '--ss-text-light', '--ss-border', '--ss-accent', '--ss-menu-bg', '--ss-selected', '--ss-header-bg', '--ss-header-text', '--ss-toolbar-bg', '--ss-status-bg', '--ss-status-text', '--ss-surface', '--ss-surface-alt', '--ss-surface-border', '--ss-toolbar-bg-start', '--ss-toolbar-bg-end', '--ss-chart-tick', '--ss-chart-grid', '--ss-hover-bg', '--ss-tab-hover-bg'];
 const themeTokens = (selector) => {
   const declared = distRules
     .filter(([prelude]) => prelude.replace(/["'\s]/g, '') === selector)
