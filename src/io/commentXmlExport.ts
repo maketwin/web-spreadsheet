@@ -109,18 +109,24 @@ function ensureVmlDefault(files: Record<string, Uint8Array>): void {
 
 interface RelSpec { readonly ridBase: string; readonly type: string; readonly target: string }
 
+/** Declaration + root open tag every .rels part starts with. */
+const RELS_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">';
+
 /** Register comment/vml relationships on the sheet's rels; returns the vml rId. */
 function addSheetRels(files: Record<string, Uint8Array>, sheetPath: string, specs: readonly RelSpec[]): string {
   const fileName = sheetPath.split('/').pop() ?? '';
   const relsPath = `xl/worksheets/_rels/${fileName}.rels`;
   const existing = files[relsPath] !== undefined ? strFromU8(files[relsPath]) : undefined;
   const used = new Set<number>([0]);
+  // A freshly created part must be a complete document (declaration + root);
+  // an existing part already has both, so keep everything before its close tag.
+  let head = RELS_HEAD;
   let body = '';
   if (existing === undefined) {
     used.clear();
   } else {
     for (const m of existing.matchAll(/Id="rId(\d+)"/g)) used.add(Number(m[1]));
-    body = existing.replace('</Relationships>', '');
+    head = existing.replace('</Relationships>', '');
   }
   let lastRid = '';
   for (const spec of specs) {
@@ -130,7 +136,7 @@ function addSheetRels(files: Record<string, Uint8Array>, sheetPath: string, spec
     body += `<Relationship Id="rId${rid}" Type="${spec.type}" Target="${spec.target}"/>`;
     lastRid = `rId${rid}`;
   }
-  files[relsPath] = strToU8(`${body}</Relationships>`);
+  files[relsPath] = strToU8(`${head}${body}</Relationships>`);
   return lastRid;
 }
 

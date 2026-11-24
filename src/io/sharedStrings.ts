@@ -1,5 +1,6 @@
 import type { RichTextRun, RunStyle } from '../types';
 import { normalizeRuns } from '../util/richText';
+import { decodeXmlEntities } from '../util/xmlEntities';
 
 /**
  * Rich-text strings for xlsx import, read from the raw package XML.
@@ -171,8 +172,4 @@ function textOf(body: string): string {
 function attr(attrs: string, name: string): string | undefined {
   const m = attrs.match(new RegExp(`(?:^|\\s)${name}=(?:"([^"]*)"|'([^']*)')`));
   return m?.[1] ?? m?.[2];
-}
-
-function decodeXmlEntities(s: string): string {
-  return s.replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&quot;', '"').replaceAll('&apos;', "'").replaceAll('&amp;', '&');
 }

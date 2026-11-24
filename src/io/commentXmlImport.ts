@@ -1,5 +1,6 @@
 import type { ChartSpec } from '../charts/types';
 import type { Cell, CellComment } from '../types';
+import { decodeXmlEntities } from '../util/xmlEntities';
 
 /**
  * 安全说明：本模块是纯前端的 xlsx 批注解析器——只做字符串/正则处理 zip 内的
@@ -13,15 +14,6 @@ import type { Cell, CellComment } from '../types';
 interface SerializedSheetDataLike {
   readonly cells: Array<[string, Cell]>;
   readonly charts: ChartSpec[];
-}
-
-function unescapeXmlEntities(s: string): string {
-  return s
-    .replaceAll('&lt;', '<')
-    .replaceAll('&gt;', '>')
-    .replaceAll('&quot;', '"')
-    .replaceAll('&apos;', "'")
-    .replaceAll('&amp;', '&');
 }
 
 function refOf(col: number, row: number): string {
@@ -53,14 +45,14 @@ function parseCommentsPart(xml: string): Map<string, CellComment> {
   const authorById = new Map<string, string>();
   let authorIdx = 0;
   for (const m of xml.matchAll(/<author(?:\s[^>]*)?>([\s\S]*?)<\/author>/g)) {
-    authorById.set(String(authorIdx), unescapeXmlEntities(m[1] ?? ''));
+    authorById.set(String(authorIdx), decodeXmlEntities(m[1] ?? ''));
     authorIdx += 1;
   }
   for (const m of xml.matchAll(/<comment\b[^>]*ref="([^"]+)"[^>]*>([\s\S]*?)<\/comment>/g)) {
     const ref = m[1] ?? '';
     const body = m[2] ?? '';
     const text = [...body.matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)]
-      .map((t) => unescapeXmlEntities(t[1] ?? ''))
+      .map((t) => decodeXmlEntities(t[1] ?? ''))
       .join('')
       .replace(/\r\n/g, '\n');
     if (text === '') continue;

@@ -137,6 +137,23 @@ describe('xlsx chart round-trip', () => {
     expect(raw).toContain('Sheet1!$A$1');
   });
 
+  it('decodes XML entities in chart titles (named + numeric references)', () => {
+    const xml = '<c:chart><c:title><c:tx><c:rich><a:p><a:r><a:t>&lt;b&gt; &amp; &quot;q&quot; &apos;a&apos; &#20013;</a:t></a:r></a:p></c:rich></c:tx></c:title>'
+      + '<c:plotArea><c:barChart/></c:plotArea></c:chart>';
+    expect(parseChartXml(xml)?.title).toBe('<b> & "q" \'a\' 中');
+  });
+
+  it('round-trips a title holding XML-significant characters', () => {
+    const store = storeWithCharts();
+    const cmd = new CreateChartCommand({ r1: 5, c1: 0, r2: 7, c2: 1, type: 'line', title: '图 <1> & "x"', anchor: barAnchor });
+    cmd.execute.bind(cmd)(store);
+    const buf = exportXlsxBuffer(store);
+    const restored = importXlsx(buf);
+    const charts = restored.sheets[0]?.data.charts ?? [];
+    expect(charts.length).toBe(2);
+    expect(charts[1]?.title).toBe('图 <1> & "x"');
+  });
+
   it('parseChartXml maps bar/line/pie families and unions series refs', () => {
     const line = parseChartXml('<c:chart><c:plotArea><c:lineChart><c:ser><c:val><c:numRef><c:f>Sheet1!$B$2:$B$5</c:f></c:numRef></c:val></c:ser></c:lineChart></c:plotArea></c:chart>');
     expect(line?.type).toBe('line');

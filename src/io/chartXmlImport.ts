@@ -1,5 +1,6 @@
 import type { ChartSpec, ChartType } from '../charts/types';
 import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
+import { decodeXmlEntities } from '../util/xmlEntities';
 import * as XLSX from 'xlsx';
 
 /**
@@ -173,7 +174,7 @@ export function parseChartXml(xml: string): ParsedChart | undefined {
   const titleMatch = xml.match(/<c:title>[\s\S]*?<\/c:title>/);
   let title: string | undefined;
   if (titleMatch !== null) {
-    const text = [...titleMatch[0].matchAll(/<a:t>([^<]*)<\/a:t>/g)].map((t) => t[1] ?? '').join('');
+    const text = [...titleMatch[0].matchAll(/<a:t>([^<]*)<\/a:t>/g)].map((t) => decodeXmlEntities(t[1] ?? '')).join('');
     title = text.trim() === '' ? undefined : text;
   }
   return { type, range, title };

@@ -71,8 +71,11 @@ export function appendChartsToXlsx(buf: ArrayBuffer, store: Store, sheetIds: rea
   return zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength) as ArrayBuffer;
 }
 
+/** Declaration + root open tag every .rels part starts with. */
+const RELS_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">';
+
 function relsXml(body: string): string {
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${body}</Relationships>`;
+  return `${RELS_HEAD}${body}</Relationships>`;
 }
 
 /** Register the drawing on the sheet's rels (creating the rels part if absent); returns the rId. */
@@ -80,17 +83,20 @@ function addSheetDrawingRel(files: Record<string, Uint8Array>, sheetPath: string
   const relsPath = `xl/worksheets/_rels/${sheetPath.split('/').pop()}.rels`;
   const existing = files[relsPath] !== undefined ? strFromU8(files[relsPath]) : undefined;
   const used = new Set<number>([0]);
+  // A freshly created part must be a complete document (declaration + root);
+  // an existing part already has both, so keep everything before its close tag.
+  let head = RELS_HEAD;
   let body = '';
   if (existing === undefined) {
     used.clear();
   } else {
     for (const m of existing.matchAll(/Id="rId(\d+)"/g)) used.add(Number(m[1]));
-    body = existing.replace('</Relationships>', '');
+    head = existing.replace('</Relationships>', '');
   }
   let rid = 1;
   while (used.has(rid)) rid += 1;
   body += `<Relationship Id="rId${rid}" Type="${REL_DRAWING}" Target="../${drawingPath.replace(/^xl\//, '')}"/>`;
-  files[relsPath] = strToU8(`${body}</Relationships>`);
+  files[relsPath] = strToU8(`${head}${body}</Relationships>`);
   return `rId${rid}`;
 }
 

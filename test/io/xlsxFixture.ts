@@ -22,7 +22,8 @@ function crc32(data: Uint8Array): number {
 
 export interface ZipEntry {
   readonly name: string;
-  readonly content: string;
+  /** Text parts as xml; binary parts (media, printer settings) as raw bytes. */
+  readonly content: string | Uint8Array;
 }
 
 /** Minimal ZIP archive (stored entries), sufficient for SheetJS to read. */
@@ -43,7 +44,7 @@ export function buildZip(entries: readonly ZipEntry[]): ArrayBuffer {
 
   for (const entry of entries) {
     const name = encoder.encode(entry.name);
-    const data = encoder.encode(entry.content);
+    const data = typeof entry.content === 'string' ? encoder.encode(entry.content) : entry.content;
     const crc = crc32(data);
     const local = concat([
       u32(0x04034B50), u16(20), u16(0x0800), u16(0), u16(0), u16(0),
@@ -152,4 +153,67 @@ export function buildFixtureXlsx(): ArrayBuffer {
     { name: 'xl/worksheets/sheet1.xml', content: SHEET1 },
     { name: 'xl/worksheets/sheet2.xml', content: SHEET2 },
   ]);
+}
+
+/** Parametrized workbook: custom styles.xml + raw worksheet bodies (Sheet1…SheetN). */
+export interface WorkbookOptions {
+  /** styles.xml override; defaults to the shared fixture table. */
+  readonly styles?: string;
+  /** Worksheet bodies, sheet1.xml … sheetN.xml in order. */
+  readonly sheets: readonly string[];
+  /** Arbitrary non-text parts (media, printer settings, …) appended verbatim. */
+  readonly binaryParts?: readonly ZipEntry[];
+}
+
+/**
+ * Workbook builder for feature-focused importer tests (borders, freeze panes,
+ * conditional formats, data validations, auto filter). Generated parts
+ * (workbook.xml / rels / content types) stay minimal; worksheets are verbatim.
+ */
+export function buildWorkbookXlsx(options: WorkbookOptions): ArrayBuffer {
+  const count = Math.max(1, options.sheets.length);
+  const entries: ZipEntry[] = [
+    { name: '[Content_Types].xml', content: contentTypesFor(count) },
+    { name: '_rels/.rels', content: ROOT_RELS },
+    { name: 'xl/workbook.xml', content: workbookFor(count) },
+    { name: 'xl/_rels/workbook.xml.rels', content: workbookRelsFor(count) },
+    { name: 'xl/styles.xml', content: options.styles ?? STYLES },
+  ];
+  options.sheets.forEach((content, i) => entries.push({ name: `xl/worksheets/sheet${i + 1}.xml`, content }));
+  for (const part of options.binaryParts ?? []) entries.push(part);
+  return buildZip(entries);
+}
+
+function contentTypesFor(count: number): string {
+  const overrides = Array.from({ length: count }, (_, i) =>
+    `<Override PartName="/xl/worksheets/sheet${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+${overrides}
+</Types>`;
+}
+
+function workbookFor(count: number): string {
+  const sheets = Array.from({ length: count }, (_, i) => `<sheet name="Sheet${i + 1}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets>
+${sheets}
+</sheets>
+</workbook>`;
+}
+
+function workbookRelsFor(count: number): string {
+  const rels = Array.from({ length: count }, (_, i) =>
+    `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('\n');
+  const stylesId = count + 1;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+${rels}
+<Relationship Id="rId${stylesId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`;
 }
