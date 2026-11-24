@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import type { JSX } from 'react';
 import { FormatPainter, useFormatPainter } from '../../src/components/FormatPainter';
 import { Store } from '../../src/store/Store';
 

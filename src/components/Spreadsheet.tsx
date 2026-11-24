@@ -1,7 +1,7 @@
 import { Button, Input, Modal, message } from 'antd';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
-import { useCallback, useEffect, useRef, useState, type FC } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type FC, type RefObject } from 'react';
 import { applyMatrix, clearRange } from '../util/rangeValues';
 import { fillSelectionPatches } from '../fill/fillSelection';
 import { openHyperlink } from '../util/hyperlink';
@@ -9,7 +9,7 @@ import { openHyperlink } from '../util/hyperlink';
 import { useMultiSelection } from './hooks/useMultiSelection';
 import { useClipboardSession } from './hooks/useClipboardSession';
 import type { Command } from '../commands/Command';
-import type { DialogName } from './menu/types';
+import type { DialogName, MenuContext } from './menu/types';
 import { CommandManager } from '../commands/CommandManager';
 
 import { hashPassword } from '../util/passwordHash';
@@ -43,7 +43,7 @@ import { ErrorBoundary } from './ErrorBoundary';
 import { StatusBar } from './StatusBar';
 import { FormulaBar, type FormulaBarHandle } from './FormulaBar';
 import { MoveOrCopySheetDialog } from './menu/dialogs/MoveOrCopySheetDialog';
-import { MenuBar, allSheetRange } from './menu/MenuBar';
+import { MenuBar, allSheetRange, type MenuBarProps } from './menu/MenuBar';
 import { FloatingChart } from '../charts/FloatingChart';
 import { FloatingImage } from '../charts/FloatingImage';
 import { FilterDropdown } from './FilterDropdown';
@@ -70,8 +70,19 @@ export { snapshotCells, buildSessionPasteValues, tilePlainCells, combineMultiRan
 export type { ClipboardSessionState } from '../clipboard/session';
 export type CellInput = CellDataInput;
 export interface SheetInput { readonly id?: string; readonly name: string; readonly data?: readonly (readonly CellInput[])[] }
-export interface SpreadsheetOptions { readonly data?: readonly (readonly CellInput[])[]; readonly sheets?: readonly SheetInput[]; readonly theme?: Theme | false }
-export interface SpreadsheetProps { readonly store: Store; readonly cmdManager?: CommandManager; readonly formulaEngine?: FormulaEngine; readonly theme?: Theme | false | undefined; readonly onClose?: () => void }
+/**
+ * Where the workbook is kept between sessions (IndexedDB, library
+ * `web-spreadsheet`). Omitted: automatic saving to the shared `default` record.
+ * `false`: nothing is saved and nothing is restored.
+ */
+export interface StorageOptions {
+  /** Save automatically after each change; default true. */
+  readonly enabled?: boolean;
+  /** Record key. Give each embedded workbook its own, or instances on one origin restore each other's content. Default `default`. */
+  readonly key?: string;
+}
+export interface SpreadsheetOptions { readonly data?: readonly (readonly CellInput[])[]; readonly sheets?: readonly SheetInput[]; readonly theme?: Theme | false; readonly storage?: StorageOptions | false }
+export interface SpreadsheetProps { readonly store: Store; readonly cmdManager?: CommandManager; readonly formulaEngine?: FormulaEngine; readonly theme?: Theme | false | undefined; readonly onClose?: () => void; readonly storage?: StorageOptions | false | undefined }
 interface FilterPopupState { readonly r: number; readonly c: number; readonly x: number; readonly y: number }
 /** Module-level hook the active instance registers so applyShortcutStyle can offer run-level styling to the open cell editor. */
 type SpreadsheetContextMenu =
@@ -80,7 +91,7 @@ type SpreadsheetContextMenu =
   | { readonly kind: 'column'; readonly index: number; readonly count: number; readonly x: number; readonly y: number };
 
 
-export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, formulaEngine, theme, onClose }) => {
+export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, formulaEngine, theme, onClose, storage }) => {
   const [selected, setSelected] = useState<Selection | null>(cellSelection(0, 0));
   const [editing, setEditing] = useState<EditingCell | null>(null);
   const [sheets, setSheets] = useState<readonly SheetInfo[]>(store.getSheets());
@@ -113,6 +124,19 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const formulaInputRef = useRef<HTMLInputElement>(null);
   const formulaBarHandleRef = useRef<FormulaBarHandle | null>(null);
+  /**
+   * A pointer press on the formula bar hands it the caret; the blur that
+   * causes in an open cell editor is not a click-away — Excel keeps the edit
+   * and continues it in the bar. The bar reports the press itself: during a
+   * click-away blur the active element is always <body>, so it cannot be read
+   * off the DOM. Answered once, then it expires — a later blur commits as usual.
+   */
+  const formulaBarPressRef = useRef(Number.NEGATIVE_INFINITY);
+  const formulaBarTakingFocus = useCallback((): boolean => {
+    if (performance.now() - formulaBarPressRef.current >= 1000) return false;
+    formulaBarPressRef.current = Number.NEGATIVE_INFINITY;
+    return true;
+  }, []);
   /** Ready-mode formula-bar draft runs (kept in sync so commits preserve rich text). */
   const formulaRunsRef = useRef<RichTextRun[] | undefined>(undefined);
   const [formulaRunsTick, setFormulaRunsTick] = useState(0);
@@ -481,7 +505,8 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   useTheme(theme);
   useFormulaSync(store, formulaEngine);
   useStoreSheets(store, setSheets, setActiveSheetId);
-  useStoreVersion(store, () => setStoreVersion((value) => value + 1));
+  const bumpStoreVersion = useCallback((): void => setStoreVersion((value) => value + 1), []);
+  useStoreVersion(store, bumpStoreVersion);
   useFormulaValue(selected, editing, store, storeVersion, setFormulaValue);
   // Keep ready-mode formula-bar runs aligned with the active cell.
   useEffect(() => {
@@ -497,7 +522,13 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     formulaRunsRef.current = isRich(cell.richText) ? [...cell.richText] : (runsFromText(cell.text) ?? [{ text: cell.text ?? '' }]);
     bumpFormulaRuns();
   }, [selected, editing, store, storeVersion]);
-  useAutoSave(store);
+  useAutoSave(store, storage);
+  // A command refused by sheet protection would otherwise do nothing at all.
+  useEffect(() => {
+    const bus = cmdManager?.eventBus;
+    if (bus === undefined) return undefined;
+    return bus.on('command:rejected', () => { message.warning('工作表已保护，无法编辑'); });
+  }, [cmdManager]);
   // Excel: opening the editor places the caret after the typed text (typing)
   // or at the end of the content (F2/double-click) — never at position 0.
   // The cell-key guard keeps mid-edit caret moves (same cell) untouched.
@@ -509,14 +540,19 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   useEffect(() => {
     const el = inputRef.current;
     if (el === null) { lastEditKeyRef.current = null; return; }
-    el.focus();
     if (editing === null) { lastEditKeyRef.current = null; return; }
-    const key = `${editing.r}:${editing.c}`;
-    if (lastEditKeyRef.current !== key) {
+    // The formula bar mirrors the draft keystroke by keystroke, so every key
+    // typed there updates the editor state too. Focus stays where the user is
+    // typing; anywhere else (a toolbar button that just applied a style) it
+    // returns to the editor, as in Excel.
+    const active = document.activeElement;
+    if (active !== null && active !== el && active.closest('.ss-formula-bar') !== null) return;
+    el.focus();
+    if (lastEditKeyRef.current !== `${editing.r}:${editing.c}`) {
       // Typing starts at end of the typed char; F2 at end; double-click uses hit caret.
       const pos = editing.caret !== undefined ? editing.caret : el.value.length;
       el.setSelectionRange(pos, pos);
-      lastEditKeyRef.current = key;
+      lastEditKeyRef.current = `${editing.r}:${editing.c}`;
     }
   }, [editing]);
   // Ctrl/Cmd+P: browser-native print would dump the viewport bitmap only —
@@ -535,9 +571,55 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [editing]);
 
+  // Stable, so the toolbars can skip rendering when nothing they show changed.
+  const selectAll = useCallback((): void => selectSelection(sheetSelection(allSheetRange())), [selectSelection]);
+  const openProtection = useCallback((): void => setProtectOpen(true), []);
+  const togglePainter = useCallback((): void => {
+    if (painting) { setPainting(false); setSourceStyle(undefined); return; }
+    const cell = selectedRef.current?.active;
+    const data = cell === undefined ? undefined : store.getCell(cell.r, cell.c);
+    setSourceStyle(data?.styleId === undefined ? undefined : store.getStyle(data.styleId));
+    setPainting(true);
+  }, [painting, store]);
+  const onSheetChange = useCallback((id: string): void => { setMulti([]); store.activateSheet(id); }, [store, setMulti]);
+  const onAddSheet = useCallback((): void => setSheetPrompt({ mode: 'add', value: `Sheet${store.getSheets().length + 1}` }), [store]);
+  const onRenameSheet = useCallback((id: string): void => setSheetPrompt({ mode: 'rename', id, value: sheets.find((s) => s.id === id)?.name ?? '' }), [sheets]);
+  const onDeleteSheet = useCallback((id: string): void => deleteSheet(store, id), [store]);
+  const onMoveSheet = useCallback((id: string, toIndex: number): void => { store.moveSheet(id, toIndex); }, [store]);
+  const onSheetColor = useCallback((id: string, color: string | undefined): void => { store.setSheetColor(id, color); }, [store]);
+  const onMoveOrCopySheet = useCallback((id: string): void => setMoveOrCopySheetId(id), []);
+  // The menu bar reads the selection when a command runs and renders again only
+  // when the store or the view changes — not on every step of a drag.
+  const menuCommands = useMemo(() => menuContext(store, cmdManager, selectedRef, selectRange, selectAll, onClose, applyRunStyleToEditor, storage), [store, cmdManager, selectRange, selectAll, onClose, applyRunStyleToEditor, storage]);
+  const menuView = useMemo(() => ({
+    ...view,
+    setZoom: (zoom: number): void => setView((current) => ({ ...current, zoom })),
+    setShowFormula: (showFormula: boolean): void => setView((current) => ({ ...current, showFormula })),
+    setShowGrid: (showGrid: boolean): void => setView((current) => ({ ...current, showGrid })),
+    setFreeze: (frozenRows: number, frozenCols: number): void => setView((current) => ({ ...current, frozenRows, frozenCols })),
+  }), [view]);
+  const onFindNavigate = useCallback<NonNullable<MenuBarProps['onFindNavigate']>>((match) => {
+    if (match.sheetId !== store.getActiveSheetId()) store.activateSheet(match.sheetId);
+    selectSelection(cellSelection(match.r, match.c));
+  }, [store, selectSelection]);
+  const onFindHighlight = useCallback<NonNullable<MenuBarProps['onFindHighlight']>>((matches, current) => {
+    setFindHighlights(matches.length === 0 ? null : { matches, current });
+  }, []);
+  const onCreateChart = useCallback<NonNullable<MenuBarProps['onCreateChart']>>((type, title) => {
+    submitCreateChart(type, title, store, selectedRef.current, execCmd, rendererRef.current, setSelectedChartId);
+  }, [store, execCmd]);
+  const onCreateImage = useCallback<NonNullable<MenuBarProps['onCreateImage']>>((src, name) => {
+    submitCreateImage(src, name, selectedRef.current, execCmd, setSelectedImageId);
+  }, [execCmd]);
+  const onSetWorkbookPassword = useCallback<NonNullable<MenuBarProps['onSetWorkbookPassword']>>((hash) => {
+    store.setWorkbookPasswordHash(hash);
+    void saveToDB(DEFAULT_ID, store.serialize());
+  }, [store]);
+  const onInsertSparkline = useCallback<NonNullable<MenuBarProps['onInsertSparkline']>>((type, rangeInput) => submitInsertSparkline(type, rangeInput, store, selectedRef.current, execCmd), [store, execCmd]);
+
   return <ErrorBoundary><div className="ss-root">
-    <MenuBar {...menuBarProps(store, cmdManager, selected, selectRange, () => selectSelection(sheetSelection(allSheetRange())), onClose, applyRunStyleToEditor)} view={{ ...view, setZoom: (zoom) => setView((current) => ({ ...current, zoom })), setShowFormula: (showFormula) => setView((current) => ({ ...current, showFormula })), setShowGrid: (showGrid) => setView((current) => ({ ...current, showGrid })), setFreeze: (frozenRows, frozenCols) => setView((current) => ({ ...current, frozenRows, frozenCols })) }} onFindNavigate={(match) => { if (match.sheetId !== store.getActiveSheetId()) store.activateSheet(match.sheetId); selectSelection(cellSelection(match.r, match.c)); }} onFindHighlight={(matches, current) => setFindHighlights(matches.length === 0 ? null : { matches, current })} openDialogKey={findDialogOpen} onCreateChart={(type, title) => submitCreateChart(type, title, store, selected, execCmd, rendererRef.current, setSelectedChartId)} onCreateImage={(src, name) => submitCreateImage(src, name, selected, execCmd, setSelectedImageId)} onSetWorkbookPassword={(hash) => { store.setWorkbookPasswordHash(hash); void saveToDB(DEFAULT_ID, store.serialize()); }} onInsertSparkline={(type, rangeInput) => submitInsertSparkline(type, rangeInput, store, selected, execCmd)} />
-    <InteractionToolbar selected={selected} store={store} cmdManager={cmdManager} view={view} setView={setView} selectAll={() => selectSelection(sheetSelection(allSheetRange()))} painting={painting} onTogglePainter={() => { if (painting) { setPainting(false); setSourceStyle(undefined); } else { const cell = selected?.active; const s = cell === undefined ? undefined : store.getCell(cell.r, cell.c)?.styleId === undefined ? undefined : store.getStyle(store.getCell(cell.r, cell.c)!.styleId!); setSourceStyle(s); setPainting(true); } }} onToggleProtection={() => setProtectOpen(true)} />
+    <MenuBar {...menuCommands} view={menuView} onFindNavigate={onFindNavigate} onFindHighlight={onFindHighlight} openDialogKey={findDialogOpen} storeVersion={storeVersion} onCreateChart={onCreateChart} onCreateImage={onCreateImage} onSetWorkbookPassword={onSetWorkbookPassword} onInsertSparkline={onInsertSparkline} />
+    <InteractionToolbar selected={selected} liveSelection={selectedRef} storeVersion={storeVersion} store={store} cmdManager={cmdManager} view={view} setView={setView} selectAll={selectAll} painting={painting} onTogglePainter={togglePainter} onToggleProtection={openProtection} />
     <ProtectionModal open={protectOpen} onClose={() => setProtectOpen(false)} store={store} />
     {workbookLocked && <Modal
       title="工作簿已锁定"
@@ -590,7 +672,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
         }}
       />
     </Modal>
-    <FormulaBar selected={selected} value={formulaValue} runs={formulaRunsTick < 0 ? undefined : formulaRunsRef.current} onChange={(next, nextRuns) => {
+    <FormulaBar selected={selected} value={formulaValue} onPointerDown={() => { formulaBarPressRef.current = performance.now(); }} runs={formulaRunsTick < 0 ? undefined : formulaRunsRef.current} onChange={(next, nextRuns) => {
       const prev = formulaValue;
       setFormulaValue(next);
       const ed = editingRef.current;
@@ -664,14 +746,14 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
         const caret = caretOffsetAtClick(rendererRef.current, store, cell, e.clientX, e.clientY, view.zoom);
         startEditing(cell, undefined, true, caret);
       }} />
-      {editing !== null && <EditorOverlay refEl={inputRef} editingRefSetter={(cell) => { editingRef.current = cell; setEditing(cell); }} editing={editing} setEditing={setEditing} cancel={cancelEditing} commit={commitEditing} zoom={view.zoom} store={store} richApiRef={richApiRef} onCharStyleKey={applyCharStyleKey} onRefHighlights={handleRefHighlights} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}
+      {editing !== null && <EditorOverlay keepDraftOnBlur={formulaBarTakingFocus} refEl={inputRef} editingRefSetter={(cell) => { editingRef.current = cell; setEditing(cell); }} editing={editing} setEditing={setEditing} cancel={cancelEditing} commit={commitEditing} zoom={view.zoom} store={store} richApiRef={richApiRef} onCharStyleKey={applyCharStyleKey} onRefHighlights={handleRefHighlights} {...(rendererRef.current !== null ? { cellRect: rendererRef.current.getCellViewportRect(editing.r, editing.c) } : {})} />}
       <div className="ss-chart-layer">{store.getCharts().map((spec) => <FloatingChart key={spec.id} spec={spec} store={store} renderer={rendererRef.current} selected={selectedChartId === spec.id} onSelect={setSelectedChartId} onGeometry={(id, anchor) => execCmd(new SetChartAnchorCommand({ id, anchor }))} onRemove={(id) => { execCmd(new RemoveChartCommand({ id })); setSelectedChartId((current) => current === id ? null : current); canvasRef.current?.focus(); }} onUndo={() => cmdManager?.undo()} onRedo={() => cmdManager?.redo()} />)}
         {store.getImages().map((img) => <FloatingImage key={img.id} spec={img} renderer={rendererRef.current} selected={selectedImageId === img.id} onSelect={setSelectedImageId} onGeometry={(id, anchor) => execCmd(new SetImageAnchorCommand({ id, anchor }))} onRemove={(id) => { execCmd(new RemoveImageCommand({ id })); setSelectedImageId((current) => current === id ? null : current); canvasRef.current?.focus(); }} onUndo={() => cmdManager?.undo()} onRedo={() => cmdManager?.redo()} />)}
       </div></div>
       <PasteSpecialDialog open={pasteSpecialOpen} onOk={(opts) => void applyPasteSpecial(opts)} onCancel={() => setPasteSpecialOpen(false)} />
       {filterPopup !== null && <FilterDropdown store={store} cmdManagerExecutor={execCmd} r={filterPopup.r} c={filterPopup.c} x={filterPopup.x} y={filterPopup.y} onClose={() => setFilterPopup(null)} />}
     <StatusBar store={store} selected={selected?.range ?? null} zoom={view.zoom} />
-    <BottomBar sheets={sheets} activeSheetId={activeSheetId} onSheetChange={(id) => { setMulti([]); store.activateSheet(id); }} onAddSheet={() => setSheetPrompt({ mode: 'add', value: `Sheet${store.getSheets().length + 1}` })} onRenameSheet={(id) => setSheetPrompt({ mode: 'rename', id, value: sheets.find((s) => s.id === id)?.name ?? '' })} onDeleteSheet={(id) => deleteSheet(store, id)} onMoveSheet={(id, toIndex) => store.moveSheet(id, toIndex)} onSheetColor={(id, color) => store.setSheetColor(id, color)} onMoveOrCopySheet={(id) => setMoveOrCopySheetId(id)} />
+    <BottomBar sheets={sheets} activeSheetId={activeSheetId} onSheetChange={onSheetChange} onAddSheet={onAddSheet} onRenameSheet={onRenameSheet} onDeleteSheet={onDeleteSheet} onMoveSheet={onMoveSheet} onSheetColor={onSheetColor} onMoveOrCopySheet={onMoveOrCopySheet} />
       {moveOrCopySheetId !== null && (
         <MoveOrCopySheetDialog
           open
@@ -719,7 +801,7 @@ export class Spreadsheet {
   private userTouched = false;
   private offTouch: (() => void) | null = null;
   public constructor(private readonly mountRoot: HTMLElement, private readonly options: SpreadsheetOptions = {}) {}
-  public mount(): void { this.loadInitialData(); this.offTouch = this.store.subscribe(() => { this.userTouched = true; }); void this.tryRestoreFromDB(); this.root = createRoot(this.mountRoot); this.root.render(<SpreadsheetComponent store={this.store} cmdManager={this.cmdManager} formulaEngine={this.formula} theme={this.options.theme} />); }
+  public mount(): void { this.loadInitialData(); this.offTouch = this.store.subscribe(() => { this.userTouched = true; }); void this.tryRestoreFromDB(); this.root = createRoot(this.mountRoot); this.root.render(<SpreadsheetComponent store={this.store} cmdManager={this.cmdManager} formulaEngine={this.formula} theme={this.options.theme} storage={this.options.storage} />); }
   public destroy(): void { this.root?.unmount(); this.root = null; this.offTouch?.(); this.offTouch = null; this.plugins.clear(); }
   public use(plugin: Plugin): this { this.plugins.use(plugin); return this; }
   public get rowCount(): number { return this.options.data?.length ?? this.options.sheets?.[0]?.data?.length ?? 0; }
@@ -731,9 +813,9 @@ export class Spreadsheet {
   }
 
   private async tryRestoreFromDB(): Promise<void> {
-    if (this.options.sheets !== undefined || this.options.data !== undefined) return;
+    if (this.options.storage === false || this.options.sheets !== undefined || this.options.data !== undefined) return;
     try {
-      const data = await loadWorkbook(DEFAULT_ID);
+      const data = await loadWorkbook(this.options.storage?.key ?? DEFAULT_ID);
       // The load is async: anything the user (or app code) wrote meanwhile
       // wins — a late restore must not clobber it or wipe fresh undo state.
       if (data === undefined || this.userTouched) return;
@@ -753,7 +835,13 @@ export { createFormulaSync } from './formulaSync';
 function useTheme(theme: Theme | false | undefined): void { useEffect(() => { if (theme === false) return; if (theme === undefined) applyStoredTheme(); else setTheme(theme); dispatchThemeChanged(); }, [theme]); }
 function useStoreSheets(store: Store, setSheets: (s: readonly SheetInfo[]) => void, setActive: (id: string) => void): void { useEffect(() => store.subscribe((event) => { if (event.type !== 'sheet') return; setSheets(store.getSheets()); setActive(store.getActiveSheetId()); }), [store, setSheets, setActive]); }
 function useStoreVersion(store: Store, bump: () => void): void { useEffect(() => store.subscribe(() => bump()), [store, bump]); }
-function useAutoSave(store: Store): void { useEffect(() => { const handle = startAutoSave(store); return () => handle.stop(); }, [store]); }
+function useAutoSave(store: Store, storage: StorageOptions | false | undefined): void {
+  useEffect(() => {
+    if (storage === false || storage?.enabled === false) return undefined;
+    const handle = startAutoSave(store, storage?.key);
+    return () => handle.stop();
+  }, [store, storage]);
+}
 function useFormulaValue(selected: Selection | null, editing: EditingCell | null, store: Store, storeVersion: number, setFormulaValue: (value: string) => void): void {
   useEffect(() => {
     if (selected === null) return;
@@ -796,14 +884,24 @@ function dispatchThemeChanged(): void { window.dispatchEvent(new CustomEvent('ss
 
 
 
-function menuBarProps(store: Store, cmdManager: CommandManager | undefined, selected: Selection | null, selectRange: (range: RangeAddress) => void, allRange: () => void, onClose: (() => void) | undefined, applyRunStyleToEditor: (style: Partial<Style>) => boolean): React.ComponentProps<typeof MenuBar> {
-  const range = selected?.range ?? null;
-  const activeCell = selected?.active ?? null;
-  const props = { store, selected: range, activeCell, selectRange, clearRange: () => { if (range !== null) clearRange(store, cmdManager, range); }, allRange, applyRunStyleToEditor };
-  return cmdManager === undefined ? withClose(props, onClose) : withClose({ ...props, cmdManager }, onClose);
-}
-function withClose<T extends Omit<React.ComponentProps<typeof MenuBar>, 'closeDemo'>>(props: T, onClose: (() => void) | undefined): React.ComponentProps<typeof MenuBar> {
-  return onClose === undefined ? props : { ...props, closeDemo: onClose };
+/**
+ * What the menu commands act on. The selection is handed over as an accessor:
+ * the bar reads it when a command runs, so it need not render again each time
+ * the selection moves.
+ */
+function menuContext(store: Store, cmdManager: CommandManager | undefined, selection: RefObject<Selection | null>, selectRange: (range: RangeAddress) => void, allRange: () => void, onClose: (() => void) | undefined, applyRunStyleToEditor: (style: Partial<Style>) => boolean, storage: StorageOptions | false | undefined): Omit<MenuContext, 'selected' | 'activeCell'> & { readonly liveSelection: () => Selection | null } {
+  const storageKey = storage === false ? undefined : storage?.key;
+  const context = {
+    store,
+    selectRange,
+    clearRange: (): void => { const range = selection.current?.range; if (range != null) clearRange(store, cmdManager, range); },
+    allRange,
+    liveSelection: (): Selection | null => selection.current,
+    applyRunStyleToEditor,
+    ...(storageKey !== undefined ? { storageKey } : {}),
+    ...(onClose !== undefined ? { closeDemo: onClose } : {}),
+  };
+  return cmdManager === undefined ? context : { ...context, cmdManager };
 }
 
 /** Excel: Enter/Tab cycle the active cell through a multi-cell selection (Shift reverses). */

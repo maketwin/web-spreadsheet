@@ -1,10 +1,11 @@
 import { Button, ColorPicker, Divider, Dropdown, Form, Input, Modal, Select, Space, Switch, Tooltip, message } from 'antd';
 import { DownOutlined, AlignCenterOutlined, AlignLeftOutlined, AlignRightOutlined, BgColorsOutlined, BoldOutlined, BorderBottomOutlined, BorderInnerOutlined, BorderLeftOutlined, BorderOuterOutlined, BorderRightOutlined, BorderTopOutlined, ClearOutlined, ColumnHeightOutlined, FontColorsOutlined, FormatPainterOutlined, ItalicOutlined, LockOutlined, SelectOutlined, UnderlineOutlined, StrikethroughOutlined, ZoomInOutlined, ZoomOutOutlined, TableOutlined, VerticalAlignTopOutlined, VerticalAlignMiddleOutlined, VerticalAlignBottomOutlined, MergeCellsOutlined } from '@ant-design/icons';
-import type { Dispatch, FC, SetStateAction } from 'react';
+import { memo, type Dispatch, type FC, type RefObject, type SetStateAction } from 'react';
 import type { CommandManager } from '../commands/CommandManager';
 import type { BorderPreset } from '../commands/impl/SetRangeBorder';
 import { clearRange } from '../util/rangeValues';
 import type { Store } from '../store/Store';
+import type { RangeAddress } from '../selection/Range';
 import type { Selection } from '../selection/Selection';
 import type { Style } from '../types';
 import { adjustDecimalPlaces } from '../format/decimalPlaces';
@@ -26,10 +27,32 @@ const FONT_FAMILIES = [
 
 const FONT_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72] as const;
 
-export const InteractionToolbar: FC<{ readonly selected: Selection | null; readonly store: Store; readonly cmdManager: CommandManager | undefined; readonly view: ViewState; readonly setView: Dispatch<SetStateAction<ViewState>>; readonly selectAll: () => void; readonly painting: boolean; readonly onTogglePainter: () => void; readonly onToggleProtection: () => void }> = ({ selected, store, cmdManager, view, setView, selectAll, painting, onTogglePainter, onToggleProtection }) => {
+export interface InteractionToolbarProps {
+  readonly selected: Selection | null;
+  /**
+   * Where the buttons read the selection when clicked. Without it they act on
+   * the range the toolbar last rendered with, so it has to render again each
+   * time the selection moves.
+   */
+  readonly liveSelection?: RefObject<Selection | null>;
+  /** Changes whenever the store does: the toolbar renders again to show the active cell's new style. */
+  readonly storeVersion?: number;
+  readonly store: Store;
+  readonly cmdManager: CommandManager | undefined;
+  readonly view: ViewState;
+  readonly setView: Dispatch<SetStateAction<ViewState>>;
+  readonly selectAll: () => void;
+  readonly painting: boolean;
+  readonly onTogglePainter: () => void;
+  readonly onToggleProtection: () => void;
+}
+
+export const InteractionToolbar = memo(function InteractionToolbar({ selected, liveSelection, store, cmdManager, view, setView, selectAll, painting, onTogglePainter, onToggleProtection }: InteractionToolbarProps) {
   const range = selected?.range;
   const current = activeCellStyle(store, selected);
-  const style = (next: Partial<Style>): void => { if (range !== undefined) applyShortcutStyle(store, cmdManager, range, next); };
+  // Buttons act on the selection as it is when clicked.
+  const target = (): RangeAddress | undefined => (liveSelection?.current ?? selected)?.range;
+  const style = (next: Partial<Style>): void => { const r = target(); if (r !== undefined) applyShortcutStyle(store, cmdManager, r, next); };
   const setZoom = (zoom: number): void => setView((currentView) => ({ ...currentView, zoom }));
   const fontFamily = current?.fontFamily ?? 'Calibri';
   const fontSize = current?.fontSize ?? DEFAULT_FONT_SIZE;
@@ -42,7 +65,7 @@ export const InteractionToolbar: FC<{ readonly selected: Selection | null; reado
     onMouseDown={(e) => { const t = e.target as HTMLElement; if (t.closest('button') !== null && t.closest('.ant-select, .ant-popover, .ant-dropdown, .ant-picker') === null) e.preventDefault(); }}>
     <Space size={4} wrap>
       <Tooltip title="全选"><Button size="small" icon={<SelectOutlined />} aria-label="Select all" onClick={selectAll} /></Tooltip>
-      <Tooltip title="清除内容"><Button size="small" icon={<ClearOutlined />} aria-label="Clear contents" onClick={() => { if (range !== undefined) clearRange(store, cmdManager, range); }} /></Tooltip>
+      <Tooltip title="清除内容"><Button size="small" icon={<ClearOutlined />} aria-label="Clear contents" onClick={() => { const r = target(); if (r !== undefined) clearRange(store, cmdManager, r); }} /></Tooltip>
       <Divider type="vertical" />
       <Tooltip title={painting ? '退出格式刷' : '格式刷'}><Button size="small" type={painting ? 'primary' : 'default'} icon={<FormatPainterOutlined />} aria-label="Format painter" onClick={onTogglePainter} /></Tooltip>
       <Divider type="vertical" />
@@ -63,8 +86,9 @@ export const InteractionToolbar: FC<{ readonly selected: Selection | null; reado
         popupMatchSelectWidth={false}
         options={FONT_SIZES.map((value) => ({ value, label: String(value) }))}
         onChange={(value) => {
+          const r = target();
           style({ fontSize: value });
-          if (range !== undefined) growRowsToContent(store, range);
+          if (r !== undefined) growRowsToContent(store, r);
         }}
       />
       <Tooltip title="加粗"><Button size="small" type={current?.bold === true ? 'primary' : 'default'} icon={<BoldOutlined />} aria-label="Bold" onClick={() => style({ bold: !(current?.bold === true) })} /></Tooltip>
@@ -134,9 +158,9 @@ export const InteractionToolbar: FC<{ readonly selected: Selection | null; reado
             { key: 'plain', label: '合并单元格' },
             { key: 'unmerge', label: '取消合并' },
           ],
-          onClick: ({ key }) => { if (range !== undefined) mergeSelection(store, cmdManager, range, key as 'center' | 'across' | 'plain' | 'unmerge'); },
+          onClick: ({ key }) => { const r = target(); if (r !== undefined) mergeSelection(store, cmdManager, r, key as 'center' | 'across' | 'plain' | 'unmerge'); },
         }}
-        onClick={() => { if (range !== undefined) mergeSelection(store, cmdManager, range, 'center'); }}
+        onClick={() => { const r = target(); if (r !== undefined) mergeSelection(store, cmdManager, r, 'center'); }}
       ><MergeCellsOutlined /> 合并后居中</Dropdown.Button>
       <Divider type="vertical" />
       <Tooltip title="自动换行">
@@ -149,8 +173,9 @@ export const InteractionToolbar: FC<{ readonly selected: Selection | null; reado
           icon={<ColumnHeightOutlined />}
           onClick={() => {
             const next = !wrapping;
+            const r = target();
             style({ wrap: next });
-            if (next && range !== undefined) growRowsToContent(store, range);
+            if (next && r !== undefined) growRowsToContent(store, r);
           }}
         >自动换行</Button>
       </Tooltip>
@@ -169,7 +194,7 @@ export const InteractionToolbar: FC<{ readonly selected: Selection | null; reado
           { type: 'divider' },
           { key: 'none', icon: <ClearOutlined />, label: '无边框' },
         ],
-        onClick: ({ key }) => { if (range === undefined) return; if (key === 'thickOuter') applyRangeBorder(store, cmdManager, range, 'outer', 'thick'); else applyRangeBorder(store, cmdManager, range, key as BorderPreset); },
+        onClick: ({ key }) => { const r = target(); if (r === undefined) return; if (key === 'thickOuter') applyRangeBorder(store, cmdManager, r, 'outer', 'thick'); else applyRangeBorder(store, cmdManager, r, key as BorderPreset); },
       }}>
         <Tooltip title="边框"><Button size="small" icon={<TableOutlined />} aria-label="Borders" /></Tooltip>
       </Dropdown>
@@ -184,7 +209,39 @@ export const InteractionToolbar: FC<{ readonly selected: Selection | null; reado
       <span className="ss-toolbar-toggle"><Switch size="small" checked={view.showGrid} onChange={(showGrid) => setView((currentView) => ({ ...currentView, showGrid }))} />网格</span>
     </Space>
   </div>;
-};
+}, sameToolbarState);
+
+/**
+ * The toolbar shows the active cell's style, whether the selection is one
+ * merged cell, and whether the sheet is protected — nothing else about the
+ * selection. Moving between cells that look the same changes nothing on
+ * screen, so the toolbar does not render again: rendering it on every step
+ * of a drag was about two thirds of what a selection change cost.
+ */
+export function sameToolbarState(prev: InteractionToolbarProps, next: InteractionToolbarProps): boolean {
+  // Both sides read the same store, so a store change is invisible to the style
+  // comparison below: the version is what makes a restyle reach the toolbar.
+  if (prev.storeVersion !== next.storeVersion) return false;
+  if (prev.store !== next.store || prev.cmdManager !== next.cmdManager || prev.view !== next.view || prev.setView !== next.setView
+    || prev.painting !== next.painting || prev.selectAll !== next.selectAll || prev.onTogglePainter !== next.onTogglePainter
+    || prev.onToggleProtection !== next.onToggleProtection || prev.liveSelection !== next.liveSelection) return false;
+  // Without a live selection the buttons hold the range they rendered with.
+  if (next.liveSelection === undefined && prev.selected !== next.selected) return false;
+  return sameStyle(activeCellStyle(prev.store, prev.selected), activeCellStyle(next.store, next.selected))
+    && mergePressed(prev.store, prev.selected) === mergePressed(next.store, next.selected)
+    && prev.store.isSheetProtected() === next.store.isSheetProtected();
+}
+
+function mergePressed(store: Store, selected: Selection | null): boolean {
+  return selected !== null && isSingleMergeSelection(store, selected.range);
+}
+
+/** Styles are plain data; the same style read through another cell is the same object. */
+function sameStyle(a: Style | undefined, b: Style | undefined): boolean {
+  if (a === b) return true;
+  if (a === undefined || b === undefined) return false;
+  return JSON.stringify(a) === JSON.stringify(b);
+}
 
 function activeCellStyle(store: Store, selected: Selection | null): Style | undefined {
   const cell = selected?.active;

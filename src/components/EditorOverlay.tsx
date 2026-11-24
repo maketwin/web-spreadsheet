@@ -17,13 +17,22 @@ export interface EditingCell extends CellAddress { readonly value: string; /** E
 
 export function clampVal(v: number, min: number, max: number): number { return Math.max(min, Math.min(max, v)); }
 
-interface EditorOverlayProps { readonly refEl: RefObject<HTMLTextAreaElement | null>; readonly editingRefSetter: (cell: EditingCell) => void; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly cancel: () => void; readonly commit: (value: string, moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection?: boolean, runs?: RichTextRun[]) => void; readonly zoom: number; readonly store: Store; readonly cellRect?: { x: number; y: number; w: number; h: number }; readonly richApiRef: MutableRefObject<RichEditorApi | null>; readonly onCharStyleKey?: (key: 'bold' | 'italic' | 'underline') => void; readonly onRefHighlights?: (ranges: readonly FormulaRefHighlight[] | null) => void }
+interface EditorOverlayProps { readonly refEl: RefObject<HTMLTextAreaElement | null>; readonly editingRefSetter: (cell: EditingCell) => void; readonly editing: EditingCell; readonly setEditing: (cell: EditingCell | null) => void; readonly cancel: () => void; readonly commit: (value: string, moveAfter?: { readonly dr: number; readonly dc: number }, fillSelection?: boolean, runs?: RichTextRun[]) => void; readonly zoom: number; readonly store: Store; readonly cellRect?: { x: number; y: number; w: number; h: number }; readonly richApiRef: MutableRefObject<RichEditorApi | null>; readonly onCharStyleKey?: (key: 'bold' | 'italic' | 'underline') => void; readonly onRefHighlights?: (ranges: readonly FormulaRefHighlight[] | null) => void; /** True for a blur that must keep the draft: the formula bar is taking the caret (it reports the press itself — during a click-away blur the active element is always <body>). */ readonly keepDraftOnBlur?: () => boolean }
 // Soft-keyboard repositioning needs no prop: the host's visualViewport sync
 // bumps its own state, re-renders, and passes a FRESH cellRect (computed in
 // its render) — positioning is fully derived from that prop.
-export const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editing, setEditing, cancel, commit, zoom, store, cellRect, richApiRef, onCharStyleKey, onRefHighlights }) => {
+export const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter, editing, setEditing, cancel, commit, zoom, store, cellRect, richApiRef, onCharStyleKey, onRefHighlights, keepDraftOnBlur }) => {
   const composing = useRef(false);
   const assist = useFormulaAssist();
+  /**
+   * A blur that must not commit: toolbar/menu interaction keeps the draft
+   * alive so formatting can land in the selection, and the formula bar takes
+   * the caret over (Excel continues the edit there).
+   */
+  const keepDraft = (active: Element | null): boolean => {
+    if (active !== null && active.closest('.ss-interaction-toolbar, .ss-menu-bar, .ss-formula-bar, .ant-dropdown, .ant-popover') !== null) return true;
+    return keepDraftOnBlur?.() === true;
+  };
   const editingValue = editing.value;
   // Excel formula editing: colored boxes over every range the formula references.
   useEffect(() => {
@@ -60,10 +69,9 @@ export const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter,
       cancel={cancel}
       onValueChange={(value) => editingRefSetter({ ...editing, value })}
       onBlur={() => {
-        // Toolbar/menu interaction keeps the draft alive so formatting can land
-        // in the selection; any other blur (click-away) commits like the textarea.
-        const active = document.activeElement as HTMLElement | null;
-        if (active !== null && active.closest('.ss-interaction-toolbar, .ss-menu-bar, .ss-formula-bar, .ant-dropdown, .ant-popover') !== null) return;
+        // Toolbar/menu interaction and the formula bar keep the draft alive;
+        // any other blur (click-away) commits like the textarea.
+        if (keepDraft(document.activeElement)) return;
         commitRich();
       }}
     />;
@@ -88,10 +96,9 @@ export const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter,
     onCompositionStart={() => { composing.current = true; }}
     onCompositionEnd={() => { composing.current = false; }}
     onBlur={() => {
-      // Same toolbar/menu guard as the rich editor: formatting from the
-      // toolbars must land in the draft, not commit it.
-      const active = document.activeElement as HTMLElement | null;
-      if (active !== null && active.closest('.ss-interaction-toolbar, .ss-menu-bar, .ss-formula-bar, .ant-dropdown, .ant-popover') !== null) return;
+      // Same guard as the rich editor: formatting from the toolbars must land
+      // in the draft, not commit it.
+      if (keepDraft(document.activeElement)) return;
       commit(refEl.current?.value ?? editing.value);
     }}
     onKeyDown={(e) => {

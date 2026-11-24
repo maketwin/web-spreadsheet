@@ -140,6 +140,28 @@ describe('editor exit paths return focus to the grid', () => {
     expect(document.activeElement).toBe(canvas);
   });
 
+  it('typing in the formula bar keeps the focus there while the cell editor is open', () => {
+    installCanvasContext();
+    const store = new Store();
+    store.setCell(0, 0, { text: 'draft' });
+    render(<SpreadsheetComponent store={store} theme={false} />);
+    openEditorAtA1();
+    const bar = screen.getByLabelText('Formula bar') as HTMLInputElement;
+
+    // Pressing the bar hands it the caret (the bar reports the press; the blur
+    // that follows must not commit), then the bar mirrors the draft — each
+    // keystroke used to refocus the cell editor.
+    const barRoot = bar.closest('.ss-formula-bar') as HTMLElement;
+    barRoot.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    bar.focus();
+    fireEvent.blur(screen.getByLabelText('Cell editor'));
+    expect(screen.getByLabelText('Cell editor')).toBeInTheDocument();
+    fireEvent.change(bar, { target: { value: 'draft2' } });
+
+    expect(document.activeElement).toBe(bar);
+    expect(store.getCell(0, 0)?.text).toBe('draft');
+  });
+
   it('protected sheet blocks edit-mode entry outright (grid keeps focus)', () => {
     installCanvasContext();
     const store = new Store();

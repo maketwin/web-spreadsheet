@@ -21,6 +21,8 @@ export interface MenuContext {
   readonly applyRunStyleToEditor?: (style: Partial<Style>) => boolean;
   /** 插入 → 图片：owner executes AddImageCommand with the chosen image file. */
   readonly onCreateImage?: (src: string, name: string) => void;
+  /** 文件 → 保存 writes this IndexedDB record (the one auto-saved and restored); default `default`. */
+  readonly storageKey?: string;
 }
 
 export type DialogName =

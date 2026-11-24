@@ -1,5 +1,5 @@
 import type { CSSProperties, FC, DragEvent } from 'react';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { SheetInfo } from '../store/Store';
 import { LONG_PRESS_MS, LONG_PRESS_SLOP } from '../renderer/gestureConstants';
 
@@ -47,7 +47,7 @@ const menuItemBtnStyle: CSSProperties = {
   font: 'inherit',
 };
 
-export const BottomBar: FC<BottomBarProps> = ({
+const BottomBarComponent: FC<BottomBarProps> = ({
   sheets = ['Sheet1'],
   activeSheet = 'Sheet1',
   activeSheetId,
@@ -222,6 +222,12 @@ export const BottomBar: FC<BottomBarProps> = ({
     </div>
   );
 };
+
+/**
+ * The tabs change with the workbook, not with the selection: given stable
+ * callbacks they do not render again on every step of a drag across the grid.
+ */
+export const BottomBar = memo(BottomBarComponent);
 
 function sheetInfo(sheet: SheetInfo | string): SheetInfo {
   if (typeof sheet === 'string') return { id: sheet, name: sheet };

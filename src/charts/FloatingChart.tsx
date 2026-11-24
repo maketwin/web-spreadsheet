@@ -76,6 +76,25 @@ export const FloatingChart: FC<FloatingChartProps> = ({ spec, store, renderer, s
     return () => { chart.destroy(); chartRef.current = null; };
   }, [spec, store]);
 
+  // The spec object never changes when the source cells do, so the effect
+  // above does not re-run: redraw from the store on every change instead,
+  // at most once per frame (a recalculation fans out into many events).
+  useEffect(() => {
+    let raf = 0;
+    const schedule = (): void => {
+      if (raf !== 0 || chartRef.current === null) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const chart = chartRef.current;
+        if (chart === null) return;
+        chart.data = readChartData(store, spec);
+        chart.update();
+      });
+    };
+    const unsubscribe = store.subscribe(schedule);
+    return () => { unsubscribe(); if (raf !== 0) cancelAnimationFrame(raf); };
+  }, [spec, store]);
+
   // Keep DOM position glued to the anchor even when only the canvas scrolls
   // (scroll does not re-render React). Direct style writes avoid re-render churn.
   useEffect(() => {

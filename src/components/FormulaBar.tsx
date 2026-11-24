@@ -28,13 +28,15 @@ export interface FormulaBarProps {
   readonly handleRef?: MutableRefObject<FormulaBarHandle | null>;
   readonly onCharStyleKey?: (key: 'bold' | 'italic' | 'underline') => void;
   readonly onCancel?: () => void;
+  /** A pointer press landed on the bar — it is about to take the caret from an open cell editor. */
+  readonly onPointerDown?: () => void;
 }
 
 const TEXT_NODE = 3;
 const ELEMENT_NODE = 1;
 
 export const FormulaBar: FC<FormulaBarProps> = ({
-  selected, value, runs, onChange, onCommit, onGoTo, inputRef, handleRef, onCharStyleKey, onCancel,
+  selected, value, runs, onChange, onCommit, onGoTo, inputRef, handleRef, onCharStyleKey, onCancel, onPointerDown,
 }) => {
   const label = selectionLabel(selected);
   const [nameInput, setNameInput] = useState(label);
@@ -108,7 +110,7 @@ export const FormulaBar: FC<FormulaBarProps> = ({
   };
 
   return (
-    <div className="ss-formula-bar">
+    <div className="ss-formula-bar" onPointerDown={onPointerDown}>
       <input
         className="ss-formula-name"
         aria-label="Selected cell"

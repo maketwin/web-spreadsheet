@@ -1,8 +1,9 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Chart } from 'chart.js';
 import { FloatingChart, applyGesture, commitAnchor, type Gesture, type Rect } from '../../src/charts/FloatingChart';
 import { FloatingImage } from '../../src/charts/FloatingImage';
-import type { ChartSpec, ImageSpec } from '../../src/charts/types';
+import type { ChartAnchor, ChartSpec, ImageSpec } from '../../src/charts/types';
 import type { CanvasRenderer } from '../../src/renderer/CanvasRenderer';
 import { COL_HEADER_HEIGHT, ROW_HEADER_WIDTH } from '../../src/renderer/coordinate';
 import { Store } from '../../src/store/Store';
@@ -10,8 +11,15 @@ import { Store } from '../../src/store/Store';
 vi.mock('chart.js', () => {
   class FakeChart {
     static register(): void {}
-    constructor(public canvas: HTMLCanvasElement, public config: unknown) {}
-    destroy(): void {}
+    /** Every chart still alive, newest last. */
+    static live: FakeChart[] = [];
+    data: unknown;
+    update = vi.fn();
+    constructor(public canvas: HTMLCanvasElement, public config: unknown) {
+      this.data = (config as { data?: unknown }).data;
+      FakeChart.live.push(this);
+    }
+    destroy(): void { FakeChart.live = FakeChart.live.filter((chart) => chart !== this); }
   }
   return { Chart: FakeChart, registerables: [] };
 });
@@ -23,14 +31,14 @@ vi.mock('chart.js', () => {
  */
 function makeRenderer(): CanvasRenderer {
   return {
-    chartRect: (anchor) => ({
+    chartRect: (anchor: ChartAnchor) => ({
       x: ROW_HEADER_WIDTH + anchor.from.c * 70 + anchor.from.offX,
       y: COL_HEADER_HEIGHT + anchor.from.r * 20 + anchor.from.offY,
       w: 140,
       h: 60,
     }),
     gridClientRect: () => ({ x: ROW_HEADER_WIDTH, y: COL_HEADER_HEIGHT, w: 800, h: 400 }),
-    anchorFromRect: (rect) => ({
+    anchorFromRect: (rect: Rect) => ({
       from: { r: Math.round((rect.y - COL_HEADER_HEIGHT) / 20), c: Math.round((rect.x - ROW_HEADER_WIDTH) / 70), offX: 0, offY: 0 },
       to: { r: Math.round((rect.y - COL_HEADER_HEIGHT + rect.h) / 20), c: Math.round((rect.x - ROW_HEADER_WIDTH + rect.w) / 70), offX: 0, offY: 0 },
     }),
@@ -54,7 +62,7 @@ const imageSpec: ImageSpec = {
   id: 'img-1',
   name: 'logo.png',
   src: 'data:image/png;base64,iVBORw0KGgo=',
-  anchor: chartSpec.anchor,
+  anchor: chartSpec.anchor!,
 };
 
 /**
@@ -109,6 +117,22 @@ describe('FloatingChart', () => {
     const el = container.querySelector<HTMLElement>('.ss-chart-object');
     expect(el).not.toBeNull();
     expect(el!.style.visibility).toBe('hidden');
+  });
+
+  it('redraws from the store when a source cell changes', async () => {
+    // Let animation frames fire (the default spy parks them): the redraw is coalesced per frame.
+    vi.mocked(window.requestAnimationFrame).mockImplementation((cb: FrameRequestCallback): number => { window.setTimeout(() => cb(performance.now()), 0); return 1; });
+    const live = (): { data: { datasets: { data: number[] }[] }; update: ReturnType<typeof vi.fn> } =>
+      (Chart as unknown as { live: Array<{ data: { datasets: { data: number[] }[] }; update: ReturnType<typeof vi.fn> }> }).live.at(-1)!;
+    render(<FloatingChart spec={chartSpec} store={store} renderer={renderer} selected={false} onSelect={() => {}} onGeometry={() => {}} onRemove={() => {}} />);
+    expect(live().data.datasets[0]!.data).toEqual([10, 0, 0]);
+
+    // The spec object is untouched by an edit — only the store changed.
+    act(() => { store.setCell(1, 1, { text: '7', value: 7 }); });
+    await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 30); }); });
+
+    expect(live().data.datasets[0]!.data).toEqual([10, 7, 0]);
+    expect(live().update).toHaveBeenCalled();
   });
 
   it('pointer-down selects and arms a drag; moving commits the new anchor', () => {

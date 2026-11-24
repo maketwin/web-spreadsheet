@@ -43,14 +43,22 @@ export const FindReplaceDialog: FC<FindReplaceDialogProps> = ({ open, replaceMod
   const useRegex = Form.useWatch('useRegex', form) === true;
   const scope = (Form.useWatch('scope', form) ?? 'sheet') as FindScope;
 
+  // Latest props, read when a scan runs. The scan must re-run only when the
+  // find criteria change — never because the parent re-rendered and passed
+  // new callback identities (reporting a match re-renders the parent, which
+  // used to re-arm the scan: a 4 Hz loop for as long as a match existed).
+  const latest = useRef({ selected, onHighlight, onNavigate });
+  latest.current = { selected, onHighlight, onNavigate };
+
   const publish = useCallback((next: FindResult): void => {
     setResult(next);
-    onHighlight(next.matches, next.current);
-    if (next.currentCell !== null) onNavigate(next.currentCell);
-  }, [onHighlight, onNavigate]);
+    latest.current.onHighlight(next.matches, next.current);
+    if (next.currentCell !== null) latest.current.onNavigate(next.currentCell);
+  }, []);
 
   const rescan = useCallback((): void => {
     if (!open) return;
+    const { selected, onHighlight } = latest.current;
     if (findText.length === 0) {
       setResult(null);
       setPatternError(null);
@@ -81,7 +89,7 @@ export const FindReplaceDialog: FC<FindReplaceDialogProps> = ({ open, replaceMod
       }
       throw err;
     }
-  }, [open, findText, replaceText, caseSensitive, matchEntireCell, useRegex, scope, selected, service, store, onHighlight]);
+  }, [open, findText, replaceText, caseSensitive, matchEntireCell, useRegex, scope, service, store]);
 
   // Option or query change → re-scan (debounced), like Excel's live find.
   useEffect(() => {
@@ -92,8 +100,8 @@ export const FindReplaceDialog: FC<FindReplaceDialogProps> = ({ open, replaceMod
 
   // Closing the dialog must clear canvas highlights.
   useEffect(() => {
-    if (!open) onHighlight([], -1);
-  }, [open, onHighlight]);
+    if (!open) latest.current.onHighlight([], -1);
+  }, [open]);
 
   const doNext = useCallback((): void => publish(service.findNext()), [publish, service]);
   const doPrev = useCallback((): void => publish(service.findPrevious()), [publish, service]);
@@ -125,9 +133,9 @@ export const FindReplaceDialog: FC<FindReplaceDialogProps> = ({ open, replaceMod
   }, [findText, replaceText, caseSensitive, matchEntireCell, useRegex, scope, store, cmdManager, service, rescan]);
 
   const close = useCallback((): void => {
-    onHighlight([], -1);
+    latest.current.onHighlight([], -1);
     onCancel();
-  }, [onHighlight, onCancel]);
+  }, [onCancel]);
 
   const hasMatches = result !== null && result.matches.length > 0;
   const countLabel = hasMatches ? `${result!.current + 1} / ${result!.matches.length}` : result === null ? '' : '无匹配项';

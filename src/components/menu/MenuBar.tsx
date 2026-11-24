@@ -2,7 +2,7 @@ import { BarChartOutlined, DatabaseOutlined, EditOutlined, FileOutlined, CheckOu
 import { num2alpha } from '../../util/alphabet';
 import { Dropdown, Form, Input, Modal, Switch, message } from 'antd';
 import type { MenuProps } from 'antd';
-import { useMemo, useRef, useState, useEffect, type FC, type ReactElement, type ReactNode } from 'react';
+import { memo, useMemo, useRef, useState, useEffect, type FC, type ReactElement, type ReactNode, type RefObject } from 'react';
 import { ClipboardService } from '../../clipboard/ClipboardService';
 import { autofitRowHeights } from '../../util/rowAutofit';
 import type { ChartType } from '../../charts/types';
@@ -32,6 +32,7 @@ import { FindReplaceService, type FindMatch } from '../../find/FindReplaceServic
 import { protectSheet, unprotectSheet, verifyPassword } from '../../protection/SheetProtection';
 import { TOTAL_COLS, TOTAL_ROWS } from '../../renderer/coordinate';
 import { Range, type RangeAddress } from '../../selection/Range';
+import type { Selection } from '../../selection/Selection';
 import { Store, type SerializedStore } from '../../store/Store';
 import type { Command } from '../../commands/Command';
 import type { Cell, Style } from '../../types';
@@ -39,8 +40,7 @@ import { mergeSelection } from '../mergeActions';
 import { mergesIntersecting } from '../../util/merge';
 import { saveWorkbook as saveToDB, DEFAULT_ID } from '../../db/WorkbookDB';
 import { exportCsvBlob } from '../../io/CsvExporter';
-import { exportXlsx } from '../../io/XlsxExporter';
-import { importXlsx } from '../../io/XlsxImporter';
+import { exportXlsxOffThread, importXlsxOffThread } from '../../io/xlsxWorkerClient';
 import { AboutDialog } from './dialogs/AboutDialog';
 import { ChartDialog } from './dialogs/ChartDialog';
 import { DataValidationDialog, type ValidationConfig } from './dialogs/DataValidationDialog';
@@ -62,11 +62,21 @@ import { HistoryPanel } from '../HistoryPanel';
 import { PrintPreview } from '../PrintPreview';
 import { applyGroupRows, applyUngroupRows, applyCollapseGroup, applyExpandGroup } from '../../outline/rowGroups';
 
-export interface MenuBarProps extends MenuContext {
+/**
+ * The selection the commands act on: its range as a value, or an accessor the
+ * bar reads when a command runs or a menu opens.
+ */
+export type MenuBarSelection =
+  | { readonly selected: RangeAddress | null; readonly activeCell?: { readonly r: number; readonly c: number } | null; readonly liveSelection?: undefined }
+  | { readonly selected?: undefined; readonly activeCell?: undefined; readonly liveSelection: () => Selection | null };
+
+export type MenuBarProps = Omit<MenuContext, 'selected' | 'activeCell'> & MenuBarSelection & {
   readonly view?: Partial<ViewState>;
   readonly onFindNavigate?: (match: FindMatch) => void;
   readonly onFindHighlight?: (matches: readonly FindMatch[], current: number) => void;
   readonly openDialogKey?: DialogName | null;
+  /** Changes whenever the store does: the bar renders again to refresh what its items enable. */
+  readonly storeVersion?: number;
   /** 插入 → 图表：owner executes CreateChartCommand against its command manager. */
   readonly onCreateChart?: (type: ChartType, title: string) => void;
   /** 插入 → 图片：owner executes AddImageCommand with the chosen file. */
@@ -75,9 +85,12 @@ export interface MenuBarProps extends MenuContext {
   readonly onSetWorkbookPassword?: (hash: string | undefined) => void;
   /** 插入 → 迷你图：return false to keep the dialog open (invalid range). */
   readonly onInsertSparkline?: (type: SparklineType, rangeInput: string) => boolean;
-}
+};
 
-export const MenuBar: FC<MenuBarProps> = (props) => {
+/** What the commands act on: the owner's props with the selection resolved. */
+type LiveMenuBarProps = MenuBarProps & MenuContext;
+
+export const MenuBar = memo(function MenuBar(props: MenuBarProps) {
   const [dialog, setDialog] = useState<DialogName | null>(null);
   const [zoom, setZoom] = useState(props.view?.zoom ?? 100);
   const [showFormula, setShowFormula] = useState(props.view?.showFormula ?? false);
@@ -105,15 +118,23 @@ export const MenuBar: FC<MenuBarProps> = (props) => {
   const findService = useRef(new FindReplaceService());
   const fileInput = useRef<HTMLInputElement>(null);
   const xlsxInput = useRef<HTMLInputElement>(null);
+  // The commands act on the owner's props and on the selection as they are
+  // when the command runs — not as they were when the bar last rendered,
+  // which may have been before the selection moved.
+  const propsRef = useRef(props);
+  propsRef.current = props;
+  const live = props.liveSelection;
+  const liveContextValue = useMemo(() => (live === undefined ? null : liveContext(propsRef, live)), [live]);
+  const ctx: LiveMenuBarProps = props.liveSelection === undefined ? props : liveContextValue!;
   const view = makeView(props.view, zoom, showFormula, showGrid, frozenRows, frozenCols, setZoom, setShowFormula, setShowGrid, setFrozenRows, setFrozenCols);
-  const actions = useMemo(() => makeActions(props, setDialog, view, fileInput, xlsxInput), [props, view]);
+  const actions = useMemo(() => makeActions(ctx, setDialog, view, fileInput, xlsxInput), [ctx, view]);
   useEffect(() => { if (props.openDialogKey !== undefined && props.openDialogKey !== null) setDialog(props.openDialogKey); }, [props.openDialogKey]);
   useEffect(() => {
     if (props.view?.frozenRows !== undefined) setFrozenRows(props.view.frozenRows);
     if (props.view?.frozenCols !== undefined) setFrozenCols(props.view.frozenCols);
   }, [props.view?.frozenRows, props.view?.frozenCols]);
 
-  const menus = topMenus(actions, view, props);
+  const menus = topMenus(actions, view, ctx);
   const imageInput = useRef<HTMLInputElement>(null);
   const menuClick = (key: string): void => {
     // 插入图片由 MenuBar 自管的隐藏 input 选文件，选中后回调 onCreateImage。
@@ -133,8 +154,8 @@ export const MenuBar: FC<MenuBarProps> = (props) => {
         </button>
       </Dropdown>)}
     </div>
-    <input ref={fileInput} hidden type="file" accept=".csv,.tsv,.xlsx,.json" onChange={(e) => openLocalFile(e, props)} />
-    <input ref={xlsxInput} hidden type="file" accept=".xlsx" onChange={(e) => openXlsxFile(e, props)} />
+    <input ref={fileInput} hidden type="file" accept=".csv,.tsv,.json" onChange={(e) => openLocalFile(e, ctx)} />
+    <input ref={xlsxInput} hidden type="file" accept=".xlsx" onChange={(e) => openXlsxFile(e, ctx)} />
     <input ref={imageInput} hidden type="file" accept="image/*" onChange={(e) => {
       const file = e.currentTarget.files?.[0];
       if (file === undefined) return;
@@ -145,13 +166,31 @@ export const MenuBar: FC<MenuBarProps> = (props) => {
       reader.readAsDataURL(file);
       e.currentTarget.value = '';
     }} />
-    <Dialogs dialog={dialog} setDialog={setDialog} props={props} view={view} findService={findService.current} />
+    <Dialogs dialog={dialog} setDialog={setDialog} props={ctx} view={view} findService={findService.current} />
   </div>;
-};
+});
+
+/**
+ * The owner's props, every field read at the moment it is used, with the
+ * selection resolved through the accessor. With it the bar does not have to
+ * render again each time the selection moves: what it last rendered still
+ * acts on the current selection, and a menu re-renders when it opens.
+ */
+function liveContext(props: RefObject<MenuBarProps>, live: () => Selection | null): LiveMenuBarProps {
+  const context: Record<string, unknown> = {};
+  for (const key of Object.keys(props.current)) {
+    if (key === 'liveSelection') continue;
+    Object.defineProperty(context, key, { get: () => props.current[key as keyof MenuBarProps], enumerable: true });
+  }
+  const selection = (): Selection | null => live() ?? null;
+  Object.defineProperty(context, 'selected', { get: () => selection()?.range ?? null, enumerable: true });
+  Object.defineProperty(context, 'activeCell', { get: () => selection()?.active ?? null, enumerable: true });
+  return context as unknown as LiveMenuBarProps;
+}
 
 interface TopMenu { readonly key: string; readonly label: string; readonly icon: ReactElement; readonly items: NonNullable<MenuProps['items']> }
 
-function topMenus(actions: MenuActions, view: ViewState, ctx: MenuBarProps): readonly TopMenu[] {
+function topMenus(actions: MenuActions, view: ViewState, ctx: MenuContext): readonly TopMenu[] {
   void actions;
   return [
     { key: 'file', label: '文件(F)', icon: <FileOutlined />, items: fileItems() },
@@ -238,7 +277,7 @@ function insertItems(): NonNullable<MenuProps['items']> {
   ];
 }
 
-function formatItems(ctx: MenuBarProps): NonNullable<MenuProps['items']> {
+function formatItems(ctx: MenuContext): NonNullable<MenuProps['items']> {
   return [
     item('format:bold', shortcutLabel('加粗', 'Ctrl+B')),
     item('format:italic', shortcutLabel('斜体', 'Ctrl+I')),
@@ -320,7 +359,7 @@ function formulaItems(): NonNullable<MenuProps['items']> {
   ];
 }
 
-function dataItems(ctx: MenuBarProps): NonNullable<MenuProps['items']> {
+function dataItems(ctx: MenuContext): NonNullable<MenuProps['items']> {
   const filter = new FilterService(ctx.store).getAutoFilter();
   const active = filter !== undefined;
   const hasCriteria = filter !== undefined && Object.keys(filter.criteria).length > 0;
@@ -346,7 +385,7 @@ function dataItems(ctx: MenuBarProps): NonNullable<MenuProps['items']> {
   ];
 }
 
-function reviewItems(ctx?: MenuBarProps): NonNullable<MenuProps['items']> {
+function reviewItems(ctx?: MenuContext): NonNullable<MenuProps['items']> {
   const items: NonNullable<MenuProps['items']> = [
     item('review:protect', '保护工作表...'),
     item('review:unprotect', '取消保护工作表...'),
@@ -390,7 +429,7 @@ function runFileAction(key: string, ctx: MenuContext, openDialog: (name: DialogN
   if (key === 'file:new') confirmNew(ctx);
   if (key === 'file:open' || key === 'file:import') fileInput.current?.click();
   if (key === 'file:importXlsx') xlsxInput.current?.click();
-  if (key === 'file:save') saveWorkbook(ctx.store);
+  if (key === 'file:save') saveWorkbook(ctx.store, ctx.storageKey);
   if (key === 'file:saveAs' || key === 'file:export') downloadWorkbook(ctx.store);
   if (key === 'file:exportCsv') downloadCsv(ctx.store);
   if (key === 'file:exportXlsx') downloadXlsx(ctx.store);
@@ -606,8 +645,8 @@ function restoreEmpty(ctx: MenuContext): void {
   message.success('已新建空白工作簿');
 }
 
-function saveWorkbook(store: Store): void {
-  void saveToDB(DEFAULT_ID, store.serialize()).then(() => message.success('已保存到 IndexedDB'));
+function saveWorkbook(store: Store, storageKey: string | undefined): void {
+  void saveToDB(storageKey ?? DEFAULT_ID, store.serialize()).then(() => message.success('已保存到 IndexedDB'));
 }
 
 function downloadWorkbook(store: Store): void {
@@ -618,12 +657,16 @@ function downloadWorkbook(store: Store): void {
   message.success('已导出 workbook JSON');
 }
 
+/** Built off the main thread when the page allows a worker (see xlsxWorkerClient): the grid stays responsive meanwhile. */
 function downloadXlsx(store: Store): void {
-  const blob = exportXlsx(store);
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = 'workbook.xlsx'; a.click(); URL.revokeObjectURL(url);
-  message.success('已导出 xlsx');
+  void exportXlsxOffThread(store.serialize())
+    .then((buffer) => {
+      const url = URL.createObjectURL(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = 'workbook.xlsx'; a.click(); URL.revokeObjectURL(url);
+      message.success('已导出 xlsx');
+    })
+    .catch((error: Error) => { message.error(error.message); });
 }
 
 /** Active sheet as CSV (BOM'd UTF-8, displayed values). */
@@ -642,12 +685,48 @@ function activeSheetFileName(store: Store, ext: string): string {
   return `${base}.${ext}`;
 }
 
+/**
+ * What an opened file is: an Excel package (by name, or by its zip signature
+ * whatever the name), a workbook saved as JSON, or tabular text. The "打开…"
+ * box used to decode every file as text, so an .xlsx chosen there was parsed
+ * as CSV out of its binary.
+ */
+export function openedFileKind(name: string, bytes: Uint8Array): 'xlsx' | 'json' | 'text' {
+  if (/\.(xlsx|xlsm)$/i.test(name)) return 'xlsx';
+  const isZip = bytes.length > 3 && bytes[0] === 0x50 && bytes[1] === 0x4b && (bytes[2] === 0x03 || bytes[2] === 0x05 || bytes[2] === 0x07) && (bytes[3] === 0x04 || bytes[3] === 0x06 || bytes[3] === 0x08);
+  if (isZip) return 'xlsx';
+  return /\.json$/i.test(name) ? 'json' : 'text';
+}
+
+/**
+ * Shape check for a workbook saved as JSON: `replaceAll` reads a dozen lists
+ * per sheet, so a file that is merely valid JSON would abort half-way.
+ */
+export function parseWorkbookJson(text: string): SerializedStore {
+  const data: unknown = JSON.parse(text);
+  const invalid = (why: string): Error => new Error(`不是工作簿文件：${why}`);
+  if (typeof data !== 'object' || data === null) throw invalid('顶层不是对象');
+  const sheets = (data as { sheets?: unknown }).sheets;
+  if (!Array.isArray(sheets) || sheets.length === 0) throw invalid('没有工作表');
+  const lists = ['cells', 'rows', 'cols', 'styles', 'merges', 'conditionalRules', 'charts', 'images', 'validationRules', 'sparklines', 'namedRanges'];
+  for (const sheet of sheets as unknown[]) {
+    if (typeof sheet !== 'object' || sheet === null) throw invalid('工作表不是对象');
+    const { id, name, data: content } = sheet as { id?: unknown; name?: unknown; data?: Record<string, unknown> };
+    if (typeof id !== 'string' || typeof name !== 'string' || typeof content !== 'object' || content === null) throw invalid('工作表缺少 id、名称或数据');
+    if (lists.some((list) => !Array.isArray(content[list]))) throw invalid('工作表数据不完整');
+  }
+  return data as SerializedStore;
+}
+
 function openLocalFile(event: React.ChangeEvent<HTMLInputElement>, ctx: MenuContext): void {
   const file = event.currentTarget.files?.[0];
   if (file === undefined) return;
-  // CSV 常见 GBK/GB2312 编码：UTF-8 严格解码失败时自动回退 GBK（含 BOM 处理）。
-  void file.arrayBuffer().then((buf) => importText(decodeSpreadsheetText(buf), ctx));
   event.currentTarget.value = '';
+  void file.arrayBuffer().then((buf) => {
+    if (openedFileKind(file.name, new Uint8Array(buf)) === 'xlsx') { applyXlsx(buf, ctx); return; }
+    // CSV 常见 GBK/GB2312 编码：UTF-8 严格解码失败时自动回退 GBK（含 BOM 处理）。
+    importText(decodeSpreadsheetText(buf), ctx);
+  }).catch(() => message.error('文件读取失败'));
 }
 
 function decodeSpreadsheetText(buf: ArrayBuffer): string {
@@ -668,29 +747,41 @@ function decodeSpreadsheetText(buf: ArrayBuffer): string {
 function openXlsxFile(event: React.ChangeEvent<HTMLInputElement>, ctx: MenuContext): void {
   const file = event.currentTarget.files?.[0];
   if (file === undefined) return;
-  void file.arrayBuffer().then((buf) => {
-    try {
-      const imported = importXlsx(buf);
-      // Excel semantics: opening a file replaces the document and cannot be undone.
-      ctx.store.replaceAll(imported);
-      ctx.cmdManager?.clear();
-      message.success(`已导入 xlsx（${imported.sheets.length} 个工作表）`);
-    } catch {
-      message.error('xlsx 解析失败，请检查文件是否损坏');
-    }
-  }).catch(() => message.error('文件读取失败'));
+  void file.arrayBuffer().then((buf) => applyXlsx(buf, ctx)).catch(() => message.error('文件读取失败'));
   event.currentTarget.value = '';
+}
+
+/** Open an Excel package as the document: replaces the workbook and cannot be undone (Excel semantics). */
+function applyXlsx(buf: ArrayBuffer, ctx: MenuContext): void {
+  // Parsed off the main thread when possible; `ctx` still names the current store when the read is done.
+  void importXlsxOffThread(buf)
+    .then(({ workbook, warnings }) => {
+      ctx.store.replaceAll(workbook);
+      ctx.cmdManager?.clear();
+      // Cells beyond the fixed grid are not imported: say so instead of toasting success over a lossy read.
+      for (const warning of warnings) message.warning(warning);
+      message.success(`已导入 xlsx（${workbook.sheets.length} 个工作表）`);
+    })
+    .catch((error: Error) => { message.error(error.message); });
 }
 
 function importText(text: string, ctx: MenuContext): void {
   if (text.trim().startsWith('{')) {
+    let workbook: SerializedStore;
     try {
-      const data = JSON.parse(text) as SerializedStore;
+      workbook = parseWorkbookJson(text);
+    } catch (err) {
+      message.error(err instanceof SyntaxError ? 'JSON 解析失败' : (err as Error).message);
+      return;
+    }
+    try {
       // JSON workbooks replace the document wholesale, like the xlsx path.
-      ctx.store.replaceAll(data);
+      ctx.store.replaceAll(workbook);
       ctx.cmdManager?.clear();
       message.success('已导入 JSON 工作簿');
-    } catch { message.error('JSON 解析失败'); }
+    } catch {
+      message.error('JSON 工作簿内容无效');
+    }
     return;
   }
   const cells = ClipboardService.parseText(text.replaceAll(',', '\t'));
@@ -699,7 +790,7 @@ function importText(text: string, ctx: MenuContext): void {
   execute(ctx, new SetRangeValues({ r1: 0, c1: 0, r2: values.length - 1, c2: (values[0]?.length ?? 1) - 1, values }));
 }
 
-function Dialogs({ dialog, setDialog, props, view, findService: svc }: { readonly dialog: DialogName | null; readonly setDialog: (name: DialogName | null) => void; readonly props: MenuBarProps; readonly view: ViewState; readonly findService: FindReplaceService }): ReactElement {
+function Dialogs({ dialog, setDialog, props, view, findService: svc }: { readonly dialog: DialogName | null; readonly setDialog: (name: DialogName | null) => void; readonly props: LiveMenuBarProps; readonly view: ViewState; readonly findService: FindReplaceService }): ReactElement {
   const close = (): void => setDialog(null);
   return <>
     <WorkbookPasswordDialogs dialog={dialog} store={props.store} onClose={() => setDialog(null)} onSetHash={(hash) => { props.onSetWorkbookPassword?.(hash); setDialog(null); }} />

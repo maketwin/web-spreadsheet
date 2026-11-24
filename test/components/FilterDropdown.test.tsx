@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { FilterDropdown } from '../../src/components/FilterDropdown';
-import type { SetAutoFilterCriteriaCommand } from '../../src/commands/impl/SetAutoFilterCriteria';
+import type { SetAutoFilterCriteriaArgs, SetAutoFilterCriteriaCommand } from '../../src/commands/impl/SetAutoFilterCriteria';
 import { FilterService } from '../../src/filter/FilterService';
 import { Store } from '../../src/store/Store';
 
@@ -11,6 +11,11 @@ function lastCriteria(executed: SetAutoFilterCriteriaCommand[]): SetAutoFilterCr
   const args = (last as unknown as { args?: unknown } | undefined)?.args;
   if (Array.isArray(args)) return args.at(-1) as SetAutoFilterCriteriaCommand;
   return last;
+}
+
+/** `Command.args` is protected; the assertions read it through this type-only view. */
+function argsOf(command: SetAutoFilterCriteriaCommand | undefined): SetAutoFilterCriteriaArgs | undefined {
+  return (command as unknown as { args?: SetAutoFilterCriteriaArgs } | undefined)?.args;
 }
 
 describe('FilterDropdown', () => {
@@ -76,9 +81,9 @@ describe('FilterDropdown', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /确\s*定/ }));
     expect(onClose).toHaveBeenCalled();
-    const command = lastCriteria(executed);
-    expect(command?.args.mode).toBe('set');
-    expect(command?.args.criteria).toEqual({ selected: ['Alice', 'Charlie'], includeBlanks: true });
+    const args = argsOf(lastCriteria(executed));
+    expect(args?.mode).toBe('set');
+    expect(args?.criteria).toEqual({ selected: ['Alice', 'Charlie'], includeBlanks: true });
     expect(store.getRow(2)?.hide).toBe(true);
   });
 
@@ -105,7 +110,7 @@ describe('FilterDropdown', () => {
     const { executed, onClose } = setup(store);
 
     fireEvent.click(screen.getByRole('button', { name: '清除筛选' }));
-    expect(executed.at(-1)?.args.mode).toBe('clearColumn');
+    expect(argsOf(executed.at(-1))?.mode).toBe('clearColumn');
     expect(store.getAutoFilter()?.criteria[0]).toBeUndefined();
     expect(store.getAutoFilter()?.criteria[1]).toEqual({ selected: ['85'], includeBlanks: true });
     expect(onClose).toHaveBeenCalled();
@@ -121,7 +126,7 @@ describe('FilterDropdown', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: /Bob/ }));
     fireEvent.click(screen.getByRole('checkbox', { name: /Charlie/ }));
     fireEvent.click(screen.getByRole('button', { name: /确\s*定/ }));
-    expect(lastCriteria(executed)?.args.mode).toBe('clearColumn');
+    expect(argsOf(lastCriteria(executed))?.mode).toBe('clearColumn');
     expect(store.getAutoFilter()?.criteria[0]).toBeUndefined();
   });
 
@@ -134,7 +139,7 @@ describe('FilterDropdown', () => {
     fireEvent.click(screen.getByRole('button', { name: /确\s*定/ }));
 
     // Unchecking the visible "Alice" while Bob/Charlie stay checked.
-    expect(lastCriteria(executed)?.args.criteria).toEqual({ selected: ['Bob', 'Charlie'], includeBlanks: true });
+    expect(argsOf(lastCriteria(executed))?.criteria).toEqual({ selected: ['Bob', 'Charlie'], includeBlanks: true });
   });
 
   it('applies a custom condition and closes', async () => {
@@ -148,10 +153,10 @@ describe('FilterDropdown', () => {
     fireEvent.click(await screen.findByText('包含'));
     fireEvent.change(screen.getByPlaceholderText('值'), { target: { value: 'ali' } });
     const buttons = screen.getAllByRole('button', { name: /确\s*定/ });
-    fireEvent.click(buttons[0]); // the condition editor's 确定
+    fireEvent.click(buttons[0]!); // the condition editor's 确定
 
     expect(onClose).toHaveBeenCalled();
-    expect(lastCriteria(executed)?.args.criteria).toEqual({
+    expect(argsOf(lastCriteria(executed))?.criteria).toEqual({
       selected: [],
       includeBlanks: false,
       conditions: [{ operator: 'contains', value: 'ali' }],

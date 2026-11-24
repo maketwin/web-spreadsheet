@@ -7,13 +7,13 @@ export interface AutoSaveHandle {
   readonly stop: () => void;
 }
 
-export function startAutoSave(store: Store): AutoSaveHandle {
+export function startAutoSave(store: Store, id: string = DEFAULT_ID): AutoSaveHandle {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const flush = (): void => {
     timer = undefined;
     // Quota exceeded / private mode / blocked upgrades surface as an error,
     // never an unhandled rejection crashing later unrelated code.
-    void saveWorkbook(DEFAULT_ID, store.serialize()).catch((err) => {
+    void saveWorkbook(id, store.serialize()).catch((err) => {
       console.error('Auto-save to IndexedDB failed:', err);
     });
   };

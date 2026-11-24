@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { useState, type ReactElement } from 'react';
 import { FindReplaceDialog } from '../../../../src/components/menu/dialogs/FindReplaceDialog';
-import { FindReplaceService } from '../../../../src/find/FindReplaceService';
+import { FindReplaceService, type FindMatch } from '../../../../src/find/FindReplaceService';
 import { Store } from '../../../../src/store/Store';
 
 function mockMatchMedia(): void {
@@ -89,5 +90,39 @@ describe('FindReplaceDialog', () => {
     expect(screen.getAllByRole('listitem')[1]!.className).toContain('ss-find-row--current');
     fireEvent.click(screen.getByRole('button', { name: '上一个' }));
     expect(screen.getAllByRole('listitem')[0]!.className).toContain('ss-find-row--current');
+  });
+
+  it('does not re-scan when the parent re-renders in response to a match', async () => {
+    // Like the app: reporting highlights stores a fresh object in parent
+    // state, which re-renders the parent and hands the dialog fresh inline
+    // callbacks. (Storing a number here would let React bail out and hide the loop.)
+    const calls: number[] = [];
+    // Stable, as in the app (the store is owned above the tree, the service is a ref).
+    const store = makeStore();
+    const service = new FindReplaceService();
+    const Harness = (): ReactElement => {
+      const [highlight, setHighlight] = useState<{ readonly matches: readonly FindMatch[]; readonly current: number } | null>(null);
+      return <>
+        <span data-testid="count">{highlight?.matches.length ?? 0}</span>
+        <FindReplaceDialog
+          open
+          onCancel={() => undefined}
+          store={store}
+          selected={null}
+          service={service}
+          onNavigate={() => undefined}
+          onHighlight={(matches, current) => { calls.push(matches.length); setHighlight(matches.length === 0 ? null : { matches, current }); }}
+        />
+      </>;
+    };
+    mockMatchMedia();
+    render(<Harness />);
+    fireEvent.change(screen.getByLabelText('查找内容'), { target: { value: 'hello' } });
+    await waitFor(() => expect(screen.getByTestId('count').textContent).toBe('2'), { timeout: 3000 });
+    const scans = (): number => calls.filter((n) => n > 0).length;
+    const before = scans();
+    // The old loop re-scanned every 250 ms for as long as a match existed.
+    await new Promise((resolve) => { setTimeout(resolve, 700); });
+    expect(scans()).toBe(before);
   });
 });
