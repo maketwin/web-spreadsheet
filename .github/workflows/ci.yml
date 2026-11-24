@@ -32,8 +32,11 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # The package's own script (vitest run --coverage): with the shorthand
+      # `pnpm test --coverage`, pnpm 9 claims the flag for itself and fails
+      # with "Unknown option: 'coverage'" before any test runs.
       - name: Test (coverage report)
-        run: pnpm test --coverage
+        run: pnpm coverage
 
       - name: Build
         run: pnpm build
