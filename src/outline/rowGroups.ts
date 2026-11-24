@@ -1,4 +1,3 @@
-import { message } from 'antd';
 import type { RowGroupDef } from '../store/SheetData';
 import type { Store } from '../store/Store';
 
@@ -38,12 +37,10 @@ export function applyUngroupRows(store: Store, r1: number, r2: number): void {
   store.setRowGroups(store.getRowGroups().filter((g) => g.end < r1 || g.start > r2));
 }
 
-export function applyCollapseGroup(store: Store, r1: number, r2: number): void {
+/** @returns false when the selection intersects no group (caller shows the toast). */
+export function applyCollapseGroup(store: Store, r1: number, r2: number): boolean {
   const targets = intersectingGroups(store.getRowGroups(), r1, r2);
-  if (targets.length === 0) {
-    message.info('选区不在任何行组内');
-    return;
-  }
+  if (targets.length === 0) return false;
   // One coalesced store event for the whole span instead of one per row —
   // formula recalc and rendering must not see thousands of half-updated states.
   store.batch(() => {
@@ -54,14 +51,13 @@ export function applyCollapseGroup(store: Store, r1: number, r2: number): void {
       }
     }
   });
+  return true;
 }
 
-export function applyExpandGroup(store: Store, r1: number, r2: number): void {
+/** @returns false when the selection intersects no group (caller shows the toast). */
+export function applyExpandGroup(store: Store, r1: number, r2: number): boolean {
   const targets = intersectingGroups(store.getRowGroups(), r1, r2);
-  if (targets.length === 0) {
-    message.info('选区不在任何行组内');
-    return;
-  }
+  if (targets.length === 0) return false;
   store.batch(() => {
     for (const target of targets) {
       for (let r0 = target.start; r0 <= target.end; r0 += 1) {
@@ -71,4 +67,5 @@ export function applyExpandGroup(store: Store, r1: number, r2: number): void {
       }
     }
   });
+  return true;
 }

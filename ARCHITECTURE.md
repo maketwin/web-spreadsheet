@@ -20,7 +20,26 @@ web-spreadsheet is organized as a modern TypeScript spreadsheet SDK with a small
 
 ### Layer 1: Renderer / UI
 
-`src/renderer/` contains virtual scrolling, dirty-region tracking, and canvas painting. `src/components/` is the React UI shell around the canvas. After the EditorOverlay and Spreadsheet.tsx splits it is organized as:
+`src/renderer/` contains virtual scrolling, dirty-region tracking, and canvas painting. `src/components/` is the React UI shell around the canvas. The renderer has been split along painter/geometry lines — `CanvasRenderer.ts` remains the orchestrator (render loop, scroll/blit, gestures, selection chrome) and delegates to focused modules:
+
+```text
+src/renderer/
+├── CanvasRenderer.ts     Orchestrator: render loop, dirty regions, scroll/blit,
+│                         pointer/touch gestures, selection chrome
+├── GridGeometry.ts       Stateless hit-testing & coordinates: cellVP freeze-quadrant
+│                         model, pointer→cell/column/row, viewport rects, chart anchors
+├── AutoFilterChrome.ts   Filter-range header buttons: paint + hit-test (injected deps)
+├── SparklinePainter.ts   Line/bar/win-loss sparklines (injected deps)
+├── ConditionalPainter.ts Icon-set glyphs & data bars (pure ctx functions)
+├── BorderPainter.ts      Logical border-edge dedup + segment styling (pure)
+├── ResizeHandler.ts      Row/col resize drag (injected deps)
+├── gestureConstants.ts   Shared touch-gesture timing (LONG_PRESS_MS/SLOP)
+├── coordinate.ts         Grid constants + CanvasTheme + static coordinate helpers
+├── VirtualScroller.ts / AxisIndex.ts   Scroll position & prefix-sum size index
+└── DirtyRegionTracker.ts / selectionFill.ts / narrowOverflow.ts / richTextLayout.ts
+```
+
+`src/components/` after the EditorOverlay and Spreadsheet.tsx splits:
 
 ```text
 src/components/
@@ -49,7 +68,14 @@ src/components/
 
 ### Layer 4: API / Facade
 
-`src/index.ts` exports the public SDK surface. The `Spreadsheet` facade accepts an element or element id, exposes core services, and delegates plugin installation through `.use(plugin)`.
+Two package entries:
+
+- `web-spreadsheet` (`src/index.ts`) — the full SDK including the React UI stack (antd/chart.js stay runtime-external).
+- `web-spreadsheet/core` (`src/core.ts`) — the headless entry: Store/FormulaEngine/CommandManager/EventBus/CanvasRenderer and services, with **zero** antd/chart.js/xlsx/dexie imports. Host apps rendering their own chrome compose from here.
+
+The `Spreadsheet` facade accepts an element or element id, exposes core services, and delegates plugin installation through `.use(plugin)`.
+
+Layer discipline is CI-enforced via `eslint.config.js` `no-restricted-imports`: `src/{store,formula,commands,events}` may not import React/UI/renderer/platform/io/db, and `src/platform/` core files may not value-import the engine (type imports allowed; engine access is confined to the 4 adapter files apiFunctions/replay/deps/PlatformPanel).
 
 ## Data flow
 
@@ -71,7 +97,7 @@ src/components/
 
 ## Testing
 
-- **Unit** — vitest + jsdom (`test/`): 185 files / 1240 tests; `pnpm coverage` reports ≈92% on `src/`. Canvas paths use a stubbed 2D context; IndexedDB uses `fake-indexeddb`.
+- **Unit** — vitest + jsdom (`test/`): 194 files / 1309 tests; `pnpm coverage` reports ≈92% on `src/`. Canvas paths use a stubbed 2D context; IndexedDB uses `fake-indexeddb`.
 - **E2E** — Playwright (`e2e/`, `pnpm e2e`) for the interaction surfaces jsdom cannot reach: right-click context menus, row/column-header menus, the sheet-tab menu, hover submenus and the dialogs behind them (chromium project), plus touch gestures on a 390×844 viewport (`chromium-touch` project: tap-select, long-press menus, one-finger pan, pinch zoom, sheet-tab long-press). The config reuses a dev server on `:5199` when one is running, otherwise boots one for the run.
 
 ## File map
@@ -86,7 +112,7 @@ src/components/
 | `src/print/` | Print pipeline: used-range detection, page pagination, offscreen page painter, print DOM + `@page` injection |
 | `src/io/` | xlsx round-trip (SheetJS + style/chart/comment XML), CSV import/export, PDF export |
 | `src/outline/` `src/analysis/` `src/find/` | Row groups / pivot table / find & replace |
-| `src/plugin/` | PluginManager, PluginAPI, public plugin contract |
+| `src/plugin/` | PluginManager, PluginAPI, public plugin contract, built-in plugins (CsvImportPlugin) |
 | `src/events/` | EventBus with direct and wildcard subscriptions |
 | `src/theme/` | CSS variables, light/dark theme utilities |
 | `e2e/` | Playwright e2e scripts (real-browser context menus, dialogs) |

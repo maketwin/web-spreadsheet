@@ -1,7 +1,7 @@
 import { expandRangeToMerges, parseMerge, rangesIntersect } from '../util/merge';
 import { Range, type RangeAddress } from './Range';
 import { cellSelection, rangeSelection, type Selection } from './Selection';
-import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/CanvasRenderer';
+import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
 import type { Store } from '../store/Store';
 
 /**

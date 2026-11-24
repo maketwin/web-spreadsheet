@@ -48,7 +48,7 @@ web-spreadsheet 是一个分层清晰的 TypeScript SDK：上层业务只接触 
 | `src/selection/` `src/keys/` | 名称框解析与可见步进 / 键盘事件解析 |
 | `src/db/` | IndexedDB 自动保存（Dexie） |
 | `src/io/` | xlsx 导入导出（SheetJS，含样式/图表/批注/超链接 XML）、CSV、PDF |
-| `src/plugin/` `src/plugins/` | 插件系统与内置插件 |
+| `src/plugin/` | 插件系统（PluginAPI/PluginManager）与内置插件（CsvImportPlugin） |
 | `src/util/` | 共享工具（网格常量 `gridSize`、富文本、合并、超链接等） |
 
 ## 渲染性能要点

@@ -11,6 +11,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/web-spreadsheet.es.js",
       "require": "./dist/web-spreadsheet.umd.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/web-spreadsheet-core.es.js"
     }
   },
   "files": [
@@ -20,7 +24,7 @@
   ],
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && vite build --config vite.core.config.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",

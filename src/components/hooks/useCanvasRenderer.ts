@@ -1,6 +1,7 @@
 import { flushSync } from 'react-dom';
 import { useEffect, useRef, type Dispatch, type RefObject, type SetStateAction } from 'react';
-import { CanvasRenderer, COL_WIDTH, TOTAL_COLS, TOTAL_ROWS, type CellAddress } from '../../renderer/CanvasRenderer';
+import { CanvasRenderer } from '../../renderer/CanvasRenderer';
+import { COL_WIDTH, TOTAL_COLS, TOTAL_ROWS, type CellAddress } from '../../renderer/coordinate';
 import type { CommandManager } from '../../commands/CommandManager';
 import { SetRowHeight } from '../../commands/impl/SetRowHeight';
 import { SetColWidth } from '../../commands/impl/SetColWidth';

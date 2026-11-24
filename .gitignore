@@ -10,3 +10,4 @@ gui-test-screenshots
 .zcode/
 test-results/
 playwright-report/
+*.zip

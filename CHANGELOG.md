@@ -2,6 +2,28 @@
 
 ## v2.2.0 — 开发中（移动端适配）
 
+### Architecture
+
+- **Headless core entry `web-spreadsheet/core`** (`src/core.ts` + second lib
+  build `vite.core.config.ts`) — Store / FormulaEngine / CommandManager /
+  EventBus / CanvasRenderer and all services with zero antd / chart.js / xlsx /
+  dexie imports. The root entry keeps the full React UI stack; both build off
+  the same modules. `outline/rowGroups.ts` no longer imports antd `message`
+  (collapse/expand return a boolean; MenuBar shows the toast).
+- **CanvasRenderer first-batch split (2230 → 1963 lines)** — extracted
+  `GridGeometry` (freeze-quadrant cellVP, hit-testing, viewport rects, chart
+  anchors; renderer keeps thin delegates so its public surface is unchanged),
+  `AutoFilterChrome`, `SparklinePainter`, `ConditionalPainter`, and
+  `gestureConstants`. Six modules, each with its own unit tests (19 new cases).
+  Grid constants no longer import through CanvasRenderer — importers point at
+  `renderer/coordinate` / `util/gridSize` directly.
+- **Layer discipline enforced by eslint** — `no-restricted-imports` blocks
+  React/UI/renderer/platform/io/db imports inside `src/{store,formula,
+  commands,events}`, and confines platform→engine value imports to the four
+  adapter files (type imports allowed).
+- **`src/plugin` + `src/plugins` merged** into the single `src/plugin/`
+  directory (contracts and CsvImportPlugin together).
+
 ### Features
 
 - **Touch gesture layer (canvas)** — one-finger drag now PANS the sheet

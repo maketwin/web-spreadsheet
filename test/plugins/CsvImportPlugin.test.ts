@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Spreadsheet } from '../../src/components/Spreadsheet';
-import { CsvImportPlugin } from '../../src/plugins/CsvImportPlugin';
+import { CsvImportPlugin } from '../../src/plugin/CsvImportPlugin';
 
 function createSpreadsheet(): Spreadsheet {
   return new Spreadsheet(document.createElement('div'), { theme: false });

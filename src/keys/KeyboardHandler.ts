@@ -1,5 +1,5 @@
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/CanvasRenderer';
+import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
 import { Range, type RangeAddress } from '../selection/Range';
 
 export interface KeyboardAction {

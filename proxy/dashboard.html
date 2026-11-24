@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>接口侦察 · 实时流量</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #1e2228; color: #dfe3e8; font: 12px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif; }
+  header { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #32373f; position: sticky; top: 0; background: #1e2228; z-index: 2; }
+  .logo { width: 9px; height: 9px; border-radius: 50%; background: #217346; box-shadow: 0 0 0 3px rgba(33,115,70,.22); }
+  h1 { font-size: 13px; margin: 0; }
+  .count { color: #9aa0a8; }
+  .spacer { flex: 1; }
+  button { border: 1px solid #3a4048; border-radius: 10px; background: transparent; color: #b7bdc5; font: 11px/18px "Segoe UI","Microsoft YaHei",sans-serif; padding: 0 10px; cursor: pointer; }
+  button.on { border-color: #217346; background: rgba(33,115,70,.18); color: #9fdcb6; }
+  button:hover { color: #fff; }
+  #rows { padding: 6px 10px 20px; }
+  .row { border-bottom: 1px solid #282d34; padding: 4px 6px; cursor: pointer; }
+  .row:hover { background: #242932; }
+  .head { display: flex; gap: 8px; align-items: baseline; }
+  .seq { color: #6d747e; font: 10px Consolas, monospace; min-width: 38px; text-align: right; }
+  .method { font: 600 10px/16px Consolas, monospace; border-radius: 3px; padding: 0 5px; }
+  .m-get { background: #1c3a5e; color: #7fb3ff; } .m-post { background: #3d2f5e; color: #b597ff; }
+  .m-put, .m-delete, .m-patch { background: #5e2f34; color: #ff9c9e; }
+  .path { font-family: Consolas, monospace; color: #e8ebee; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .st-2 { color: #7fd066; } .st-3, .st-4, .st-5 { color: #ff8f91; }
+  .ms { color: #6d747e; font: 10px Consolas, monospace; }
+  .time { color: #6d747e; font-size: 10px; }
+  .detail { display: none; margin: 6px 0 2px 46px; }
+  .row.open .detail { display: block; }
+  pre { margin: 4px 0; padding: 8px; background: #14171c; border: 1px solid #2b3038; border-radius: 4px; overflow: auto; max-height: 320px; font: 11px/1.5 Consolas, monospace; color: #b7d6c2; white-space: pre-wrap; word-break: break-all; }
+  .lbl { color: #9aa0a8; margin-top: 6px; }
+  .empty { text-align: center; color: #6d747e; padding: 40px 0; }
+</style>
+</head>
+<body>
+<header>
+  <span class="logo"></span>
+  <h1>接口侦察</h1>
+  <span class="count" id="count">0 条</span>
+  <span class="spacer"></span>
+  <button id="xhrOnly" class="on">只看接口</button>
+  <button id="auto">自动滚动</button>
+  <button id="clear">清空</button>
+  <button id="export">导出 JSON</button>
+</header>
+<div id="rows"><div class="empty">暂无记录 —— 在 OA 页面里操作，这里会实时出现它调用的接口</div></div>
+<script>
+  const bySeq = new Map();
+  const openSet = new Set();
+  let xhrOnly = true;
+  let auto = false;
+  let lastSeq = 0;
+  const rowsEl = document.getElementById('rows');
+  const countEl = document.getElementById('count');
+
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+  const fmt = (body) => body === null || body === undefined || body === '' ? '（空）' : esc(body);
+
+  function rowHtml(c) {
+    const stCls = c.status >= 200 && c.status < 300 ? 'st-2' : 'st-3';
+    const method = (c.method || 'GET').toLowerCase();
+    const qs = Object.keys(c.query ?? {}).length > 0 ? ` <span style="color:#8b929b">${esc(new URLSearchParams(c.query).toString()).slice(0, 120)}</span>` : '';
+    return `<div class="head">
+      <span class="seq">#${c.seq}</span>
+      <span class="method m-${method}">${esc(c.method)}</span>
+      <span class="path">${esc(c.path)}${qs}</span>
+      <span class="${stCls}">${c.status ?? '---'}</span>
+      <span class="ms">${c.ms ?? '?'}ms</span>
+      <span class="time">${new Date(c.ts).toLocaleTimeString('zh-CN', { hour12: false })}</span>
+    </div>
+    <div class="detail">
+      <div class="lbl">请求 ${esc(c.reqType || '')}</div><pre>${fmt(c.reqBody)}</pre>
+      <div class="lbl">响应 ${esc(c.resType || '')}${c.error ? ' · 错误：' + esc(c.error) : ''}</div><pre>${fmt(c.resBody)}</pre>
+    </div>`;
+  }
+
+  function render() {
+    const list = [...bySeq.values()].sort((a, b) => b.seq - a.seq);
+    const shown = list.filter((c) => !xhrOnly || c.kind === 'xhr');
+    countEl.textContent = `${list.filter((c) => c.kind === 'xhr').length} 条接口 / ${list.length} 条请求`;
+    if (shown.length === 0) {
+      rowsEl.innerHTML = '<div class="empty">暂无记录 —— 在 OA 页面里操作，这里会实时出现它调用的接口</div>';
+      return;
+    }
+    rowsEl.innerHTML = shown.map((c) => `<div class="row${openSet.has(c.seq) ? ' open' : ''}" data-seq="${c.seq}">${rowHtml(c)}</div>`).join('');
+    if (auto) window.scrollTo(0, 0);
+  }
+
+  async function poll() {
+    try {
+      const res = await fetch(`/__spy/api/calls?since=${lastSeq}`);
+      const data = await res.json();
+      for (const c of data.calls) { bySeq.set(c.seq, c); lastSeq = Math.max(lastSeq, c.seq); }
+      if (data.calls.length > 0) render();
+    } catch { /* 代理重启时静默重试 */ }
+  }
+
+  rowsEl.addEventListener('click', (e) => {
+    const row = e.target.closest('.row');
+    if (row === null) return;
+    row.classList.toggle('open');
+    if (row.classList.contains('open')) openSet.add(Number(row.dataset.seq));
+    else openSet.delete(Number(row.dataset.seq));
+  });
+  document.getElementById('xhrOnly').addEventListener('click', (e) => {
+    xhrOnly = !xhrOnly; e.target.classList.toggle('on', xhrOnly); render();
+  });
+  document.getElementById('auto').addEventListener('click', (e) => {
+    auto = !auto; e.target.classList.toggle('on', auto);
+  });
+  document.getElementById('clear').addEventListener('click', async () => {
+    await fetch('/__spy/api/clear', { method: 'POST' });
+    bySeq.clear(); openSet.clear(); lastSeq = 0; render();
+  });
+  document.getElementById('export').addEventListener('click', () => {
+    window.location.href = '/__spy/api/export';
+  });
+
+  render();
+  poll();
+  setInterval(poll, 1000);
+</script>
+</body>
+</html>

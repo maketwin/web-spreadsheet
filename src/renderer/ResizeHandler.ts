@@ -1,4 +1,4 @@
-import { COL_HEADER_HEIGHT, ROW_HEADER_WIDTH } from './CanvasRenderer';
+import { COL_HEADER_HEIGHT, ROW_HEADER_WIDTH } from './coordinate';
 import type { VirtualScroller } from './VirtualScroller';
 import type { Store } from '../store/Store';
 

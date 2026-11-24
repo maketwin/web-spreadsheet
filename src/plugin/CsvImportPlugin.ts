@@ -1,4 +1,4 @@
-import type { Plugin } from '../plugin/PluginManager';
+import type { Plugin } from './PluginManager';
 
 export const CsvImportPlugin: Plugin = {
   name: 'csv-import',

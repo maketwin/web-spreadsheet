@@ -1,7 +1,7 @@
 import type { CSSProperties, FC, DragEvent } from 'react';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { SheetInfo } from '../store/Store';
-import { LONG_PRESS_MS, LONG_PRESS_SLOP } from '../renderer/CanvasRenderer';
+import { LONG_PRESS_MS, LONG_PRESS_SLOP } from '../renderer/gestureConstants';
 
 export interface BottomBarProps {
   readonly sheets?: readonly (SheetInfo | string)[];

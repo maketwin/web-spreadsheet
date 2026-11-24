@@ -2,3 +2,6 @@ packages:
   - '.'
 allowBuilds:
   esbuild: true
+# pnpm 11 不再读项目 .npmrc 的 store-dir；全局 store（~/Library/pnpm）属主为
+# root 不可写，因此把本地 store 显式钉在仓库内（与 .npmrc 历史行为一致）。
+storeDir: ./.pnpm-store

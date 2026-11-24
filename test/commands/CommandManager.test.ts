@@ -53,13 +53,19 @@ describe('CommandManager', () => {
 
     manager.execute(new SetCellText({ r: 0, c: 0, text: 'b' }));
 
+    // 事件成对出现：executing 在 store 变更前，executed 在其后（平台因果锚点依赖此顺序）
     const firstCall = fn.mock.calls[0];
     const secondCall = fn.mock.calls[1];
+    const thirdCall = fn.mock.calls[2];
+    const fourthCall = fn.mock.calls[3];
 
     expect(manager.canRedo()).toBe(false);
-    expect(firstCall?.[0]).toMatchObject({ event: 'command:executed' });
+    expect(firstCall?.[0]).toMatchObject({ event: 'command:executing' });
     expect(firstCall?.[0].payload.cmd).toBeInstanceOf(SetCellText);
-    expect(secondCall?.[0]).toMatchObject({ event: 'command:undone' });
+    expect(secondCall?.[0]).toMatchObject({ event: 'command:executed' });
     expect(secondCall?.[0].payload.cmd).toBeInstanceOf(SetCellText);
+    expect(thirdCall?.[0]).toMatchObject({ event: 'command:undoing' });
+    expect(fourthCall?.[0]).toMatchObject({ event: 'command:undone' });
+    expect(fourthCall?.[0].payload.cmd).toBeInstanceOf(SetCellText);
   });
 });

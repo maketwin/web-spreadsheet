@@ -30,7 +30,7 @@ import { SetAutoFilterCriteriaCommand } from '../../commands/impl/SetAutoFilterC
 import { SortRangeCommand } from '../../commands/impl/SortRange';
 import { FindReplaceService, type FindMatch } from '../../find/FindReplaceService';
 import { protectSheet, unprotectSheet, verifyPassword } from '../../protection/SheetProtection';
-import { TOTAL_COLS, TOTAL_ROWS } from '../../renderer/CanvasRenderer';
+import { TOTAL_COLS, TOTAL_ROWS } from '../../renderer/coordinate';
 import { Range, type RangeAddress } from '../../selection/Range';
 import { Store, type SerializedStore } from '../../store/Store';
 import type { Command } from '../../commands/Command';
@@ -546,8 +546,9 @@ function runDataAction(key: string, ctx: MenuContext, openDialog: (name: DialogN
   if (key === 'data:ungroupRows' && ctx.selected !== null) applyUngroupRows(ctx.store, ctx.selected.r1, ctx.selected.r2);
   // 折叠/展开作用于与选区相交的所有行组——折叠后组内行不可见，活动格
   // 永远落在组外，只看活动格会让"展开"无从下手（Excel 由大纲条 [+] 承担）。
-  if (key === 'data:collapseGroup' && ctx.selected !== null) applyCollapseGroup(ctx.store, ctx.selected.r1, ctx.selected.r2);
-  if (key === 'data:expandGroup' && ctx.selected !== null) applyExpandGroup(ctx.store, ctx.selected.r1, ctx.selected.r2);
+  // 提示职责在 UI 层：outline 模块保持无 antd 依赖（headless core 可用）。
+  if (key === 'data:collapseGroup' && ctx.selected !== null && !applyCollapseGroup(ctx.store, ctx.selected.r1, ctx.selected.r2)) message.info('选区不在任何行组内');
+  if (key === 'data:expandGroup' && ctx.selected !== null && !applyExpandGroup(ctx.store, ctx.selected.r1, ctx.selected.r2)) message.info('选区不在任何行组内');
 }
 
 function reapplyAutoFilter(store: Store): void {

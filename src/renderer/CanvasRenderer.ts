@@ -1,6 +1,5 @@
 import { num2alpha } from '../util/alphabet';
 import type { ChartAnchor } from '../charts/types';
-import { anchorToRect, rectToAnchor } from '../charts/geometry';
 import type { SelectionKind } from '../selection/Selection';
 import { Range, type RangeAddress } from '../selection/Range';
 import type { Store } from '../store/Store';
@@ -14,7 +13,9 @@ export interface FormulaRefHighlight {
   readonly y2: number;
   readonly color: string;
 }
-import { TOTAL_ROWS, TOTAL_COLS, ROW_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, COL_HEADER_HEIGHT, type CellAddress, type HeaderHit, canvasPointToCell, canvasPointToHeader, canvasPointToColumn, canvasPointToRow, clamp, type CanvasTheme, readCanvasTheme, headerSelectionColor } from './coordinate';
+import { TOTAL_ROWS, TOTAL_COLS, ROW_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, COL_HEADER_HEIGHT, type CellAddress, type HeaderHit, canvasPointToCell, canvasPointToHeader, canvasPointToColumn, canvasPointToRow, clamp, cssHeaderText, type CanvasTheme, readCanvasTheme, headerSelectionColor } from './coordinate';
+import { autoFilterAtPoint as afAtPoint, filteredRowNumberColor as afRowNumberColor, paintAutoFilterIcons as afPaintIcons, type AutoFilterChromeDeps } from './AutoFilterChrome';
+import { GridGeometry } from './GridGeometry';
 import { collectCellBorderEdges, edgesToPaintSegs, hasBorderOnEdge, strokeBorderSegs, type LogicalBorderEdge } from './BorderPainter';
 import { DirtyRegionTracker, type Rect } from './DirtyRegionTracker';
 import { FillHandle, selectionAfterFill } from '../fill/FillHandle';
@@ -32,8 +33,8 @@ import { DEFAULT_FONT_SIZE } from '../util/defaults';
 import { HYPERLINK_COLOR } from '../util/hyperlink';
 import { formatValue } from '../format/NumberFormatter';
 import { ConditionalService } from '../conditional/ConditionalService';
-import { sparklineValues } from '../sparkline/values';
-import type { SparklineSpec } from '../sparkline/types';
+import { paintSparklines as sparkPaint, type SparklineDeps } from './SparklinePainter';
+import { paintDataBar as drawDataBar, paintIconSetIcon as drawIconSetIcon } from './ConditionalPainter';
 import { WRAP_LINE_HEIGHT, wrapTextLines } from '../util/wrapText';
 import { isRich } from '../util/richText';
 import { drawRichLines, layoutRichText, richContentHeight } from './richTextLayout';
@@ -82,16 +83,10 @@ interface MoveDragState {
 }
 
 const SELECTION_BORDER_HIT_PX = 4;
-const AUTO_FILTER_BUTTON_WIDTH = 16;
-/** Excel colors the row numbers surviving a filter in blue (not the theme accent). */
-const FILTERED_ROW_NUMBER_COLOR = '#0057C2';
-/** Sparkline series colors, matching the React Sparkline component. */
-const SPARKLINE_COLOR = '#4A90D9';
-const SPARKLINE_LOSS_COLOR = '#D94A4A';
-/** Shared touch-gesture timing — BottomBar's sheet-tab long-press must match
- * the canvas's, so the value lives here once instead of as two magic numbers. */
-export const LONG_PRESS_MS = 550;
-export const LONG_PRESS_SLOP = 12;
+/** Touch-gesture timing lives in gestureConstants; re-exported here for the
+ * existing public surface. */
+import { LONG_PRESS_MS, LONG_PRESS_SLOP } from './gestureConstants';
+export { LONG_PRESS_MS, LONG_PRESS_SLOP };
 
 /** Logical border edges for the current paint pass (deduped in edge-space). */
 
@@ -102,6 +97,9 @@ export class CanvasRenderer {
   private readonly freeze: FreezeManager;
   private readonly resizeHandler: ResizeHandler;
   private readonly fillHandle: FillHandle;
+  private readonly geom!: GridGeometry;
+  private readonly afChrome!: AutoFilterChromeDeps;
+  private readonly sparkDeps!: SparklineDeps;
   private readonly unsubscribe: () => void;
   private readonly conditionalService = new ConditionalService();
   private selectedRange: RangeAddress | undefined;
@@ -151,7 +149,10 @@ export class CanvasRenderer {
     this.scroller = new VirtualScroller({ totalRows: TOTAL_ROWS, totalCols: TOTAL_COLS, defaultRowHeight: this.defaultRowHeight(), defaultColWidth: this.defaultColWidth(), viewportW: this.gridW(), viewportH: this.gridH() });
     this.freeze = new FreezeManager({ totalRows: TOTAL_ROWS, totalCols: TOTAL_COLS });
     if ((opts.frozenRows ?? 0) > 0 || (opts.frozenCols ?? 0) > 0) this.freeze.freezeAt(opts.frozenRows ?? 0, opts.frozenCols ?? 0);
+    this.afChrome = { ctx: this.ctx, store: opts.store, canvas: opts.canvas, scroller: this.scroller, freeze: this.freeze, cellVP: (r, c) => this.cellVP(r, c), frozenW: () => this.frozenW(), frozenH: () => this.frozenH(), vpW: () => this.vpW(), vpH: () => this.vpH(), pointerCell: (x, y) => this.pointerCell(x, y) };
+    this.sparkDeps = { ctx: this.ctx, store: opts.store, scroller: this.scroller, cellVP: (r, c) => this.cellVP(r, c) };
     this.syncSizesFromStore();
+    this.geom = new GridGeometry({ canvas: opts.canvas, scroller: this.scroller, freeze: this.freeze, store: opts.store, zoom: () => this.zoom(), gridW: () => this.gridW(), gridH: () => this.gridH(), vpW: () => this.vpW(), vpH: () => this.vpH(), scrollBy: (dx, dy) => this.scrollBy(dx, dy) });
     this.resizeHandler = new ResizeHandler({ canvas: opts.canvas, scroller: this.scroller, store: opts.store, zoom: () => this.zoom(), onRowResize: opts.onRowResize, onColResize: opts.onColResize, onRowDblClick: opts.onRowDblClick, onColDblClick: opts.onColDblClick, invalidate: () => this.invalidateAll(), rowTopAt: (r) => this.cellVP(r, 0).y, colLeftAt: (c) => this.cellVP(0, c).x, frozenRows: () => this.freeze.getFrozenRows(), frozenCols: () => this.freeze.getFrozenCols() });
     // While ants replace the selection border the fill handle is hidden (Excel):
     // report no selection so its hit-test and crosshair cursor stay inactive.
@@ -1043,71 +1044,11 @@ export class CanvasRenderer {
 
   /** Excel paints visible row numbers blue inside the AutoFilter range while criteria hide rows. */
   private filteredRowNumberColor(r: number, theme: CanvasTheme): string {
-    const filter = this.opts.store.getAutoFilter();
-    if (filter === undefined || Object.keys(filter.criteria).length === 0) return cssHeaderText(theme);
-    return r > filter.range.r1 && r <= filter.range.r2 ? FILTERED_ROW_NUMBER_COLOR : cssHeaderText(theme);
+    return afRowNumberColor(this.opts.store, r, theme);
   }
 
   private paintAutoFilterIcons(vis: VisibleRange, theme: CanvasTheme): void {
-    const filter = this.opts.store.getAutoFilter();
-    if (filter === undefined) return;
-    // Excel draws the dropdown button inside each header-row cell, not on
-    // the column-letter header.
-    const headerRow = filter.range.r1;
-    const fr = this.freeze.getFrozenRows();
-    const fc = this.freeze.getFrozenCols();
-    const fw = this.frozenW();
-    const fh = this.frozenH();
-    const frozenVisible = headerRow < fr;
-    if (!frozenVisible && (headerRow < vis.startRow || headerRow >= vis.endRow)) return;
-    // Icons live inside cells, so each icon clips to its cell's quadrant: a header
-    // row/column sliding under a frozen strip must not bleed its icon over pinned cells.
-    const quadY = frozenVisible ? COL_HEADER_HEIGHT : COL_HEADER_HEIGHT + fh;
-    const quadH = frozenVisible ? fh : this.vpH() - COL_HEADER_HEIGHT - fh;
-    const rowHeight = this.scroller.getRowHeight(headerRow);
-    const { y } = this.cellVP(headerRow, filter.range.c1);
-    const first = Math.max(vis.startCol, filter.range.c1);
-    const last = Math.min(vis.endCol - 1, filter.range.c2);
-    for (let c = first; c <= last; c += 1) {
-      const { x } = this.cellVP(headerRow, c);
-      const w = this.scroller.getColWidth(c);
-      const active = filter.criteria[c] !== undefined;
-      this.ctx.save();
-      this.ctx.beginPath();
-      this.ctx.rect(c < fc ? ROW_HEADER_WIDTH : ROW_HEADER_WIDTH + fw, quadY, c < fc ? fw : this.vpW() - ROW_HEADER_WIDTH - fw, quadH);
-      this.ctx.clip();
-      this.paintAutoFilterIcon(x + w - AUTO_FILTER_BUTTON_WIDTH - 4, y + rowHeight / 2, theme, active);
-      this.ctx.restore();
-    }
-  }
-
-  private paintAutoFilterIcon(x: number, y: number, theme: CanvasTheme, active: boolean): void {
-    this.ctx.save();
-    this.ctx.fillStyle = active ? theme.accent : cssHeaderText(theme);
-    this.ctx.strokeStyle = this.ctx.fillStyle;
-    this.ctx.lineWidth = 1;
-    this.ctx.beginPath();
-    if (active) {
-      // Excel's active funnel icon
-      const left = x + 2;
-      const right = x + AUTO_FILTER_BUTTON_WIDTH - 2;
-      const top = y - 5;
-      const bottom = y + 6;
-      this.ctx.moveTo(left, top); this.ctx.lineTo(right, top);
-      this.ctx.lineTo(x + AUTO_FILTER_BUTTON_WIDTH / 2 + 1, y + 1);
-      this.ctx.lineTo(x + AUTO_FILTER_BUTTON_WIDTH / 2 + 1, bottom);
-      this.ctx.lineTo(x + AUTO_FILTER_BUTTON_WIDTH / 2 - 1, bottom - 1);
-      this.ctx.lineTo(x + AUTO_FILTER_BUTTON_WIDTH / 2 - 1, y + 1);
-      this.ctx.closePath();
-      this.ctx.fill();
-    } else {
-      // Excel's idle dropdown chevron
-      this.ctx.moveTo(x + 4, y - 2);
-      this.ctx.lineTo(x + AUTO_FILTER_BUTTON_WIDTH / 2, y + 3);
-      this.ctx.lineTo(x + AUTO_FILTER_BUTTON_WIDTH - 4, y - 2);
-      this.ctx.stroke();
-    }
-    this.ctx.restore();
+    afPaintIcons(this.afChrome, vis, theme);
   }
 
   private paintCellBackgrounds(quads: PaintQuad[], vis: VisibleRange, theme: CanvasTheme): void {
@@ -1174,73 +1115,9 @@ export class CanvasRenderer {
 
   /** Excel sparklines: mini line/bar/win-loss charts drawn inside their anchor cell. */
   private paintSparklines(quads: PaintQuad[]): void {
-    const sparklines = this.opts.store.getSparklines();
-    if (sparklines.length === 0) return;
-    for (const spec of sparklines) {
-      if (this.opts.store.getRow(spec.row)?.hide === true) continue;
-      if (this.opts.store.getCol(spec.col)?.hide === true) continue;
-      for (const q of quads) {
-        if (spec.row < q.r0 || spec.row >= q.r1 || spec.col < q.c0 || spec.col >= q.c1) continue;
-        this.withClip(q.clip, () => this.paintSparkline(spec));
-      }
-    }
+    sparkPaint(this.sparkDeps, quads);
   }
 
-  private paintSparkline(spec: SparklineSpec): void {
-    const data = sparklineValues(this.opts.store, spec.range);
-    if (data.length === 0) return;
-    const { x, y } = this.cellVP(spec.row, spec.col);
-    const w = this.scroller.getColWidth(spec.col);
-    const h = this.scroller.getRowHeight(spec.row);
-    const pad = 3;
-    const iw = Math.max(w - pad * 2, 0);
-    const ih = Math.max(h - pad * 2, 0);
-    if (iw < 2 || ih < 2) return;
-    const cx = x + pad;
-    const cy = y + pad;
-    if (spec.type === 'line') {
-      const min = Math.min(...data);
-      const max = Math.max(...data);
-      const span = max - min || 1;
-      const step = iw / Math.max(data.length - 1, 1);
-      this.ctx.strokeStyle = SPARKLINE_COLOR;
-      this.ctx.lineWidth = 1.5;
-      this.ctx.beginPath();
-      data.forEach((v, i) => {
-        const px = cx + i * step;
-        const py = cy + ih - ((v - min) / span) * ih;
-        if (i === 0) this.ctx.moveTo(px, py); else this.ctx.lineTo(px, py);
-      });
-      this.ctx.stroke();
-      return;
-    }
-    const gap = 1;
-    const barW = Math.max(iw / data.length - gap, 1);
-    if (spec.type === 'winloss') {
-      // Excel 盈亏图: magnitudes are ignored — every win is an equal block above
-      // the midline, every loss an equal (red) block below it; zeros are gaps.
-      const half = ih / 2;
-      data.forEach((v, i) => {
-        if (v === 0) return;
-        const bx = cx + i * (barW + gap);
-        this.ctx.fillStyle = v > 0 ? SPARKLINE_COLOR : SPARKLINE_LOSS_COLOR;
-        this.ctx.fillRect(bx, v > 0 ? cy : cy + half, barW, half);
-      });
-      return;
-    }
-    // Bar (Excel 柱形迷你图): bars start at the zero line — positives grow up,
-    // negatives hang below it.
-    const min = Math.min(0, ...data);
-    const max = Math.max(...data, 0);
-    const span = max - min || 1;
-    const zeroY = cy + ((max - 0) / span) * ih;
-    data.forEach((v, i) => {
-      const bx = cx + i * (barW + gap);
-      const bh = Math.max((Math.abs(v) / span) * ih, v === 0 ? 0 : 1);
-      this.ctx.fillStyle = SPARKLINE_COLOR;
-      this.ctx.fillRect(bx, v >= 0 ? zeroY - bh : zeroY, barW, bh);
-    });
-  }
 
   /** Run `paint` clipped to a viewport rect (quadrant separation). */
   private withClip(clip: Rect, paint: () => void): void {
@@ -1375,37 +1252,7 @@ export class CanvasRenderer {
 
   /** Excel icon-set glyph at the left edge of the cell: arrows3 = ▲►▼, lights3 = ●●●. */
   private paintIconSetIcon(x: number, y: number, rh: number, icons: 'arrows3' | 'lights3', level: 0 | 1 | 2): void {
-    const size = Math.min(10, rh - 6);
-    if (size <= 2) return;
-    const cx = x + 3 + size / 2;
-    const cy = y + rh / 2;
-    const half = size / 2;
-    this.ctx.save();
-    if (icons === 'lights3') {
-      this.ctx.fillStyle = level === 0 ? '#63BE7B' : level === 1 ? '#FFDD71' : '#F8696B';
-      this.ctx.beginPath();
-      this.ctx.arc(cx, cy, half, 0, Math.PI * 2);
-      this.ctx.fill();
-    } else {
-      this.ctx.fillStyle = level === 0 ? '#63BE7B' : level === 1 ? '#FFDD71' : '#F8696B';
-      this.ctx.beginPath();
-      if (level === 0) { // up triangle
-        this.ctx.moveTo(cx, cy - half);
-        this.ctx.lineTo(cx + half, cy + half);
-        this.ctx.lineTo(cx - half, cy + half);
-      } else if (level === 1) { // right triangle
-        this.ctx.moveTo(cx - half, cy - half);
-        this.ctx.lineTo(cx + half, cy);
-        this.ctx.lineTo(cx - half, cy + half);
-      } else { // down triangle
-        this.ctx.moveTo(cx - half, cy - half);
-        this.ctx.lineTo(cx + half, cy - half);
-        this.ctx.lineTo(cx, cy + half);
-      }
-      this.ctx.closePath();
-      this.ctx.fill();
-    }
-    this.ctx.restore();
+    drawIconSetIcon(this.ctx, x, y, rh, icons, level);
   }
 
   /**
@@ -1463,13 +1310,7 @@ export class CanvasRenderer {
 
 
   private paintDataBar(x: number, y: number, cw: number, rh: number, ratio: number, color: string): void {
-    const barW = Math.max(0, (cw - 2) * ratio);
-    this.ctx.save();
-    this.ctx.globalAlpha = 0.4;
-    this.ctx.fillStyle = color;
-    this.ctx.fillRect(x + 1, y + 1, barW, rh - 2);
-    this.ctx.globalAlpha = 1;
-    this.ctx.restore();
+    drawDataBar(this.ctx, x, y, cw, rh, ratio, color);
   }
 
   private mergeSkipSet(vis: VisibleRange): Set<string> {
@@ -1932,10 +1773,7 @@ export class CanvasRenderer {
   }
 
   private rangeRect(range: RangeAddress): { x: number; y: number; w: number; h: number } {
-    const { x, y } = this.cellVP(range.r1, range.c1);
-    let w = 0; for (let c = range.c1; c <= range.c2; c += 1) w += this.scroller.getColWidth(c);
-    let h = 0; for (let r = range.r1; r <= range.r2; r += 1) h += this.scroller.getRowHeight(r);
-    return { x, y, w, h };
+    return this.geom.rangeRect(range);
   }
 
 
@@ -1958,25 +1796,7 @@ export class CanvasRenderer {
   }
 
   private moveTargetFromPointer(drag: MoveDragState, pointer: CellAddress): CellAddress {
-    const rows = drag.source.r2 - drag.source.r1 + 1;
-    const cols = drag.source.c2 - drag.source.c1 + 1;
-    // Excel: a move never crosses the freeze boundary — the target stays in the
-    // source's own region (frozen band or scrollable area) on each axis. A range
-    // straddling the boundary pins to its anchor, disabling the move.
-    let minR = 0;
-    let maxR = TOTAL_ROWS - rows;
-    if (drag.source.r2 < this.freeze.getFrozenRows()) maxR = this.freeze.getFrozenRows() - rows;
-    else if (drag.source.r1 < this.freeze.getFrozenRows()) { minR = drag.source.r1; maxR = drag.source.r1; }
-    else minR = this.freeze.getFrozenRows();
-    let minC = 0;
-    let maxC = TOTAL_COLS - cols;
-    if (drag.source.c2 < this.freeze.getFrozenCols()) maxC = this.freeze.getFrozenCols() - cols;
-    else if (drag.source.c1 < this.freeze.getFrozenCols()) { minC = drag.source.c1; maxC = drag.source.c1; }
-    else minC = this.freeze.getFrozenCols();
-    return {
-      r: clamp(pointer.r - drag.offset.r, minR, Math.max(minR, maxR)),
-      c: clamp(pointer.c - drag.offset.c, minC, Math.max(minC, maxC)),
-    };
+    return this.geom.moveTargetFromPointer(drag, pointer);
   }
 
   /** Paint the move-drag target outline (freeze-quadrant clipped, same as selection). */
@@ -2002,14 +1822,7 @@ export class CanvasRenderer {
     }
   }
   private pointerCell(cx: number, cy: number): CellAddress | null {
-    const rect = this.opts.canvas.getBoundingClientRect();
-    const gx = cx - rect.left - ROW_HEADER_WIDTH;
-    const gy = cy - rect.top - COL_HEADER_HEIGHT;
-    if (gx < 0 || gy < 0) return null;
-    // Past the scrollable content end (and not inside a frozen strip) — no cell.
-    if (gx >= this.frozenW() && gx + this.scroller.scrollLeft >= this.scroller.totalWidth()) return null;
-    if (gy >= this.frozenH() && gy + this.scroller.scrollTop >= this.scroller.totalHeight()) return null;
-    return { r: this.rowAtViewportY(cy - rect.top) as number, c: this.colAtViewportX(cx - rect.left) as number };
+    return this.geom.pointerCell(cx, cy);
   }
 
   /** Public size-aware hit tests (scroller units are already zoomed). */
@@ -2020,11 +1833,7 @@ export class CanvasRenderer {
 
   /** Viewport rect of a cell (includes scroll) — use this for the editor overlay so it matches canvas geometry. */
   public getCellViewportRect(r: number, c: number): { x: number; y: number; w: number; h: number } {
-    // Excel: the in-cell editor covers the whole merged area, not just the anchor cell.
-    const merge = this.opts.store.getMergeAt(r, c);
-    if (merge !== undefined) return this.rangeRect(parseRange(merge));
-    const { x, y } = this.cellVP(r, c);
-    return { x, y, w: this.scroller.getColWidth(c), h: this.scroller.getRowHeight(r) };
+    return this.geom.getCellViewportRect(r, c);
   }
 
   /** Scroll the sheet so the cell is fully visible inside the grid area.
@@ -2033,32 +1842,22 @@ export class CanvasRenderer {
    * keyboard (Excel mobile). Frozen-region cells are already on screen and
    * never trigger scrolling. */
   public scrollCellIntoView(r: number, c: number, visibleHeight?: number): void {
-    const { x, y } = this.cellVP(r, c);
-    const w = this.scroller.getColWidth(c);
-    const h = this.scroller.getRowHeight(r);
-    const usableH = Math.max(ROW_HEIGHT, Math.min(this.gridH(), visibleHeight ?? this.gridH()));
-    let dy = 0;
-    if (y < COL_HEADER_HEIGHT) dy = y - COL_HEADER_HEIGHT;
-    else if (y + h > COL_HEADER_HEIGHT + usableH) dy = y + h - (COL_HEADER_HEIGHT + usableH);
-    let dx = 0;
-    if (x < ROW_HEADER_WIDTH) dx = x - ROW_HEADER_WIDTH;
-    else if (x + w > ROW_HEADER_WIDTH + this.gridW()) dx = x + w - (ROW_HEADER_WIDTH + this.gridW());
-    if (dy !== 0 || dx !== 0) this.scrollBy(dx, dy);
+    this.geom.scrollCellIntoView(r, c, visibleHeight);
   }
 
   /** Floating chart-object rect for a two-cell anchor (canvas-space px, freeze/scroll/zoom aware). */
   public chartRect(anchor: ChartAnchor): Rect {
-    return anchorToRect(this.scroller, this.zoom(), this.freeze.getFrozenRows(), this.freeze.getFrozenCols(), anchor);
+    return this.geom.chartRect(anchor);
   }
 
   /** Inverse of chartRect: snap a canvas-space rect back to a two-cell anchor. */
   public anchorFromRect(rect: { x: number; y: number; w: number; h: number }): ChartAnchor {
-    return rectToAnchor(this.scroller, this.zoom(), this.freeze.getFrozenRows(), this.freeze.getFrozenCols(), rect);
+    return this.geom.anchorFromRect(rect);
   }
 
   /** Visible grid client area (canvas space, headers excluded) — used to place/clip floating objects. */
   public gridClientRect(): Rect {
-    return { x: ROW_HEADER_WIDTH, y: COL_HEADER_HEIGHT, w: this.gridW(), h: this.gridH() };
+    return this.geom.gridClientRect();
   }
 
   /** Current zoom factor (1 = 100%) — floating-object math is expressed at 100% and scaled. */
@@ -2076,93 +1875,34 @@ export class CanvasRenderer {
   }
 
   public columnAtPoint(clientX: number): number | null {
-    const rect = this.opts.canvas.getBoundingClientRect();
-    return this.colAtViewportX(clientX - rect.left);
+    return this.geom.columnAtPoint(clientX);
   }
 
   public rowAtPoint(clientY: number): number | null {
-    const rect = this.opts.canvas.getBoundingClientRect();
-    return this.rowAtViewportY(clientY - rect.top);
+    return this.geom.rowAtPoint(clientY);
   }
 
   private autoFilterAtPoint(clientX: number, clientY: number): CellAddress | null {
-    const filter = this.opts.store.getAutoFilter();
-    if (filter === undefined) return null;
-    const cell = this.pointerCell(clientX, clientY);
-    if (cell === null || cell.r !== filter.range.r1) return null;
-    if (cell.c < filter.range.c1 || cell.c > filter.range.c2) return null;
-    const { x } = this.cellVP(cell.r, cell.c);
-    const w = this.scroller.getColWidth(cell.c);
-    const px = clientX - this.opts.canvas.getBoundingClientRect().left;
-    return px >= x + w - AUTO_FILTER_BUTTON_WIDTH - 6 && px <= x + w - 2 ? cell : null;
+    return afAtPoint(this.afChrome, clientX, clientY);
   }
 
   private headerAtPoint(clientX: number, clientY: number): HeaderHit {
-    const rect = this.opts.canvas.getBoundingClientRect();
-    const mx = clientX - rect.left;
-    const my = clientY - rect.top;
-    const inRowHeader = mx >= 0 && mx < ROW_HEADER_WIDTH;
-    const inColHeader = my >= 0 && my < COL_HEADER_HEIGHT;
-    if (inRowHeader && inColHeader) return { type: 'sheet' };
-    if (inColHeader) { const c = this.columnAtPoint(clientX); return c === null ? null : { type: 'column', c }; }
-    if (inRowHeader) { const r = this.rowAtPoint(clientY); return r === null ? null : { type: 'row', r }; }
-    return null;
+    return this.geom.headerAtPoint(clientX, clientY);
   }
-  /** Freeze-aware viewport position of a cell. Frozen rows/cols keep their
-   * unscrolled position; scrollable content slides underneath the frozen strips
-   * and is clipped at the freeze line (Excel quadrant model). */
+  /** Freeze-aware viewport position of a cell — see GridGeometry.cellVP (Excel quadrant model). */
   private cellVP(r: number, c: number): { x: number; y: number } {
-    const p = this.scroller.cellToPixel(r, c);
-    const fc = this.freeze.getFrozenCols();
-    const fr = this.freeze.getFrozenRows();
-    const fw = this.frozenW();
-    const fh = this.frozenH();
-    // Excel quadrants: frozen bands stay pinned; the unfrozen pane is positioned so that
-    // content (fw, fh) sits at the freeze corner when scroll is 0, then slides under on scroll.
-    const x = c < fc
-      ? ROW_HEADER_WIDTH + p.x
-      : ROW_HEADER_WIDTH + fw + (p.x - fw - this.scroller.scrollLeft);
-    const y = r < fr
-      ? COL_HEADER_HEIGHT + p.y
-      : COL_HEADER_HEIGHT + fh + (p.y - fh - this.scroller.scrollTop);
-    return { x, y };
+    return this.geom.cellVP(r, c);
   }
   /** Pixel width of the frozen column strip (prefix sum of frozen col widths). */
-  private frozenW(): number { const fc = this.freeze.getFrozenCols(); return fc === 0 ? 0 : this.scroller.cellToPixel(0, fc).x; }
+  private frozenW(): number { return this.geom.frozenW(); }
   /** Pixel height of the frozen row strip. */
-  private frozenH(): number { const fr = this.freeze.getFrozenRows(); return fr === 0 ? 0 : this.scroller.cellToPixel(fr, 0).y; }
+  private frozenH(): number { return this.geom.frozenH(); }
   /** Intersect a dirty rect with the canvas CSS box (avoids huge clip rects from invalidateAll). */
   private clampToViewport(region: Rect): Rect {
-    const x = Math.max(0, region.x);
-    const y = Math.max(0, region.y);
-    const w = Math.min(region.x + region.w, this.vpW()) - x;
-    const h = Math.min(region.y + region.h, this.vpH()) - y;
-    return { x, y, w: Math.max(0, w), h: Math.max(0, h) };
-  }
-  /** Viewport x -> column index, or null left of the grid. Points inside the frozen
-   * strip map without scroll; scrollable points add the scroll offset. */
-  private colAtViewportX(px: number): number | null {
-    const gx = px - ROW_HEADER_WIDTH;
-    if (gx < 0) return null;
-    const fw = this.frozenW();
-    // Frozen strip: un-scrolled columns 0..fc-1
-    if (gx < fw) return this.scroller.colAtPixel(gx);
-    // Scrollable pane: Excel origin is the freeze edge; content x = fw + scrollLeft + local
-    const content = fw + this.scroller.scrollLeft + (gx - fw);
-    return content >= this.scroller.totalWidth() ? TOTAL_COLS - 1 : this.scroller.colAtPixel(content);
-  }
-  /** Viewport y -> row index, or null above the grid. Points inside the frozen
-   * strip map without scroll; scrollable points add the scroll offset. */
-  private rowAtViewportY(py: number): number | null {
-    const gy = py - COL_HEADER_HEIGHT;
-    if (gy < 0) return null;
-    const fh = this.frozenH();
-    if (gy < fh) return this.scroller.rowAtPixel(gy);
-    const content = fh + this.scroller.scrollTop + (gy - fh);
-    return content >= this.scroller.totalHeight() ? TOTAL_ROWS - 1 : this.scroller.rowAtPixel(content);
+    return this.geom.clampToViewport(region);
   }
   private rectsIntersect(x: number, y: number, w: number, h: number, clip: Rect): boolean {
-    return x < clip.x + clip.w && x + w > clip.x && y < clip.y + clip.h && y + h > clip.y;
+    return this.geom.rectsIntersect(x, y, w, h, clip);
   }
   private cellStyle(r: number, c: number) { const cell = this.opts.store.getCell(r, c); return cell?.styleId === undefined ? undefined : this.opts.store.getStyle(cell.styleId); }
   private zoom(): number { return (this.opts.zoom ?? 100) / 100; }
@@ -2215,13 +1955,6 @@ export class CanvasRenderer {
     }
     this.invalidateAll();
   }
-}
-
-/** Excel column/row header label color (dark gray, not pure black). */
-function cssHeaderText(_theme: CanvasTheme): string {
-  if (typeof document === 'undefined') return '#444444';
-  const v = getComputedStyle(document.documentElement).getPropertyValue('--ss-header-text').trim();
-  return v || '#444444';
 }
 
 /** Translucent accent fill for selected cells (Excel tints the selection instead of a solid color). */

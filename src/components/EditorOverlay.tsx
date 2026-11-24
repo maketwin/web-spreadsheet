@@ -1,6 +1,6 @@
 import { useEffect, useRef, type CSSProperties, type FC, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type RefObject } from 'react';
-import { COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS, type CellAddress, type FormulaRefHighlight } from '../renderer/CanvasRenderer';
-import type { CanvasRenderer } from '../renderer/CanvasRenderer';
+import { COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS, type CellAddress } from '../renderer/coordinate';
+import type { CanvasRenderer, FormulaRefHighlight } from '../renderer/CanvasRenderer';
 import { useFormulaAssist, parseFormulaRefs, REF_HIGHLIGHT_PALETTE } from './formulaAssist';
 import { cycleDollars, endsWithRef, isPointTrigger, refAtCaret, upsertRef } from '../formula/pointMode';
 import { caretOffsetFromLocalPoint } from '../util/caretHit';

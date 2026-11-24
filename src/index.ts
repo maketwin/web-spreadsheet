@@ -33,7 +33,7 @@ export type { EventHandler, WildcardPayload } from './events/EventBus';
 export { PluginAPI } from './plugin/PluginAPI';
 export { PluginManager } from './plugin/PluginManager';
 export type { Plugin } from './plugin/PluginManager';
-export { CsvImportPlugin } from './plugins/CsvImportPlugin';
+export { CsvImportPlugin } from './plugin/CsvImportPlugin';
 export { CanvasRenderer, canvasPointToCell, canvasPointToHeader } from './renderer/CanvasRenderer';
 export type { CanvasRendererOptions, CellAddress } from './renderer/CanvasRenderer';
 export type { RangeAddress } from './selection/Range';

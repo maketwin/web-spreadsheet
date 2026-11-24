@@ -69,4 +69,12 @@ export function headerSelectionColor(theme: CanvasTheme): string {
   return typeof CSS !== 'undefined' && typeof CSS.supports === 'function' && CSS.supports('color', 'color-mix(in srgb, #000 10%, white)') ? `color-mix(in srgb, ${theme.accent} 14%, ${theme.headerBg})` : theme.selected;
 }
 
+/** Excel column/row header label color (dark gray, not pure black). Shared by
+ * header painting and AutoFilter chrome. */
+export function cssHeaderText(_theme: CanvasTheme): string {
+  if (typeof document === 'undefined') return '#444444';
+  const v = getComputedStyle(document.documentElement).getPropertyValue('--ss-header-text').trim();
+  return v || '#444444';
+}
+
 function cssV(s: CSSStyleDeclaration | null, n: string, f: string): string { return s?.getPropertyValue(n).trim() || f; }

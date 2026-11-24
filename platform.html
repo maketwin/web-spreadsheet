@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+  <link rel="stylesheet" href="/src/theme/tokens.css" />
+  <link rel="stylesheet" href="/src/theme/dark.css" />
+  <link rel="stylesheet" href="/demo/app.css" />
+  <title>Mock 接管平台 — Excel 运行时模拟</title>
+  <style>
+    body { margin: 0; font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif; background: var(--ss-bg); overscroll-behavior: none; }
+    .platform-layout { display: flex; width: 100%; height: 100vh; }
+    @supports (height: 100dvh) { .platform-layout { height: 100dvh; } }
+    .platform-sheet { flex: 1 1 auto; min-width: 0; }
+    #platform-panel { flex: 0 0 420px; border-left: 1px solid #32373f; }
+    #platform-panel > * { height: 100%; }
+  </style>
+</head>
+<body>
+  <div id="platform-layout" class="platform-layout">
+    <!-- 左侧：Excel 模拟运行时（demo/platform.ts 动态挂载） -->
+    <aside id="platform-panel"></aside>
+  </div>
+  <script type="module" src="/demo/platform.tsx"></script>
+</body>
+</html>

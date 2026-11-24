@@ -124,6 +124,44 @@ export class FormulaEngine {
     }
   }
 
+  /**
+   * Recalculate every formula cell (mock-platform scenario switch, external
+   * data change). Kahn-topological order over the formula set so precedents
+   * write before dependents read — an insertion-order sweep would leave
+   * dependents computing from stale precedent values.
+   */
+  recalculateAll(): void {
+    const nodes = [...this.formulas.keys()];
+    const nodeSet = new Set(nodes);
+    const indegree = new Map<string, number>(nodes.map((id) => [id, 0]));
+    const dependents = new Map<string, string[]>(nodes.map((id) => [id, []] as const));
+    for (const id of nodes) {
+      for (const dep of this.graph.getDependencies(id)) {
+        if (dep === id || !nodeSet.has(dep)) continue;
+        indegree.set(id, (indegree.get(id) ?? 0) + 1);
+        dependents.get(dep)?.push(id);
+      }
+    }
+    const queue = nodes.filter((id) => indegree.get(id) === 0);
+    const ordered = new Set<string>();
+    while (queue.length > 0) {
+      const id = queue.shift();
+      if (id === undefined) break;
+      ordered.add(id);
+      for (const next of dependents.get(id) ?? []) {
+        const left = (indegree.get(next) ?? 0) - 1;
+        indegree.set(next, left);
+        if (left === 0) queue.push(next);
+      }
+    }
+    // Cycles cannot form (setFormula blocks them), but anything left unordered
+    // still recalculates rather than silently staying stale.
+    for (const id of ordered) this.recalculate(id);
+    for (const id of nodes) {
+      if (!ordered.has(id)) this.recalculate(id);
+    }
+  }
+
   /** Whether installing these deps on cellId would form a circular reference. */
   wouldCreateCycle(cellId: string, dependsOn: string[], sheetId?: string): boolean {
     const scopedId = scopedKey(cellId, sheetId ?? this.store.getActiveSheetId());
