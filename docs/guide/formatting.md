@@ -51,6 +51,10 @@
 已支持 `[Red]`/`[Blue]` 等命名颜色段，以及 `[>100]`/`[<=0]` 条件段。`[$¥-804]` 等 locale 货币选择器仍跳过。格式串无法解析时单元格回退显示原文。
 :::
 
+::: tip 舍入语义
+数字格式按 Excel 对**十进制值**做四舍五入（half away from zero），不沿二进制浮点噪声走：`1.005` 配 `0.00` 显示 `1.01`（朴素的 toFixed 会得 `1.00`）；科学计数按同样语义舍入尾数（`1.005` 配 `0.00E+00` → `1.01E+00`），尾数进位会带动指数（`9.995` → `1.00E+01`）。内置 `number` / `currency` / `percent` / `scientific` 走同一语义。
+:::
+
 ### 工具栏：增加/减少小数位数
 
 工具栏「增加小数位数 / 减少小数位数」按钮（`.0→.00` / `.00→.0`）对齐 Excel 数字组行为，由 `adjustDecimalPlaces`（`src/format/decimalPlaces.ts`）推导新格式串：
@@ -93,15 +97,22 @@ ss.cmdManager.execute(new SetConditionalFormatCommand(
 
 覆盖层（`ConditionalOverlay`：`style` / `dataBar` / `icon`）由 `ConditionalService.computeOverlay(store, r, c)` 实时计算，叠加在单元格原有样式之上；公式求值出错时不产生覆盖层。图标绘制在单元格左缘，xlsx 导出时图标集不写入（已知偏差）。
 
+::: tip 公式规则与数据验证自定义公式的相对引用
+公式规则（`formula`）与数据验证的自定义公式（`custom`）都按 Excel 语义书写：公式相对**规则范围的左上角单元格**，求值时按当前单元格相对左上角的偏移平移（带 `$` 的绝对引用不动）。验证一侧在编辑器提交时带上单元格位置求值（见[API](/api/spreadsheet#数据功能服务)）；粘贴与填充**不跑验证**（与 Excel 一致），只有编辑器输入会校验。
+:::
+
 ## 数据验证
 
-三种规则类型（`ValidationRule`）：
+规则类型（`ValidationRule`）：
 
 | 类型 | 参数 | 校验逻辑 |
 |------|------|----------|
 | `list` | `{ values: string[] }` | 值必须在列表内 |
 | `integer` | `{ min, max }` | 必须是整数且在区间内 |
 | `date` | `{ minDate, maxDate }` | 必须是有效日期且在区间内 |
+| `decimal` | `{ min, max }` | 必须是数字且在区间内 |
+| `textLength` | `{ min, max }` | 文本长度在区间内 |
+| `custom` | `{ formula }` | 自定义公式为真才通过（公式相对规则范围左上角，见上方提示） |
 
 ```ts
 import { SetValidationCommand } from 'web-spreadsheet';

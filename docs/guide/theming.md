@@ -21,7 +21,9 @@ const ss = new Spreadsheet('app', { theme: false });
 
 1. `setTheme(theme)` 在 `<html>` 上设置 `data-spreadsheet-theme="light|dark"` 属性，并写入 localStorage；
 2. 组件样式按 `:root[data-spreadsheet-theme="dark"]` 选择器切换 CSS 变量；
-3. 同时在 `window` 上派发 CustomEvent `ss:theme-changed`，CanvasRenderer 监听后以新变量重绘画布。
+3. 同时在 `window` 上派发 Event `ss:theme-changed`，CanvasRenderer 监听后以新变量重绘画布。
+
+公共的 `setTheme()` / `applyStoredTheme()` 自己派发 `ss:theme-changed`——宿主在运行时调用 `setTheme('dark')` 即可让画布按新主题重绘，无需组件配合。
 
 主题工具函数已从包根导出，可在组件外主动切换：
 
@@ -36,6 +38,10 @@ THEMES;                  // { light: 'light', dark: 'dark' }
 
 `Theme` 类型即 `'light' | 'dark'` 字符串联合。
 
+::: warning 已知边界
+组件自绘的 chrome（画布、表头、工具栏、工作表标签、右键菜单、底部弹层）全部跟随主题；**antd 的弹层/下拉/模态框在暗色下仍是浅色**——应用尚未接入 antd 的暗色主题，是否接入是另一个独立决定。
+:::
+
 ## CSS 变量清单
 
 自定义外观时覆盖这些变量即可（`theme: false` 时尤其有用）：
@@ -45,7 +51,6 @@ THEMES;                  // { light: 'light', dark: 'dark' }
 | `--ss-bg` | `#ffffff` | `#1e1e1e` |
 | `--ss-color` / `--ss-text` | `#000000` | `#f3f3f3` |
 | `--ss-text-light` | `#605e5c` | `#b3b3b3` |
-| `--ss-header-text` | `#444444` | （不覆盖，沿用亮色值） |
 | `--ss-border` | `#bdbdbd` | `#454545` |
 | `--ss-freeze-line` | `#6f6f6f` | `#a6a6a6` |
 | `--ss-grid` | `#e0e0e0` | `#2b2b2b` |
@@ -63,6 +68,16 @@ THEMES;                  // { light: 'light', dark: 'dark' }
 | `--ss-tab-inactive-bg` | `#f3f3f3` | `#2d2d2d` |
 | `--ss-status-bg` | `#217346` | `#185c37` |
 | `--ss-status-text` | `#ffffff` | `#ffffff` |
+| `--ss-header-text` | `#444444` | `#b3b3b3`（暗色值在 `spreadsheet.css` 里覆盖，保证深色表头上的对比度） |
+| `--ss-surface` | `#ffffff` | `#1e1e1e` |
+| `--ss-surface-alt` | `#f8f8f8` | `#252526` |
+| `--ss-surface-border` | `#d0d0d0` | `#454545` |
+| `--ss-toolbar-bg-start` | `#fafafa` | `#2d2d2d` |
+| `--ss-toolbar-bg-end` | `#f0f0f0` | `#2d2d2d` |
+| `--ss-chart-tick` | `#666666` | `#b3b3b3` |
+| `--ss-chart-grid` | `#e5e5e5` | `#2b2b2b` |
+| `--ss-hover-bg` | `#e6e6e6` | `#3a3a3a` |
+| `--ss-tab-hover-bg` | `#eaeaea` | `#3a3a3a` |
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|

@@ -111,7 +111,7 @@ store.setProtection(unprotectSheet());       // 解除保护
 
 ## 冻结窗格
 
-冻结是纯视图状态（`FreezeManager`），由工具栏/视图菜单驱动，不影响数据与序列化：
+冻结现在是**每张工作表的数据**（`SheetData.freeze`，`SheetFreeze { rows, cols }`）：随工作表一起序列化、随 xlsx 导入/导出，通过 `store.getFreeze(sheetId?)` / `store.setFreeze(freeze | undefined, sheetId?)` 读写。视图只显示活动工作表的冻结，组件在两者间双向同步（`src/components/hooks/useSheetFreeze.ts`）——切换活动工作表时视图跟随读取，在视图里切换冻结时写回当前工作表。
 
 - 冻结语义与 Excel 一致：冻结到某格，即冻结其上方所有行和左侧所有列（在 B2 处冻结 = 冻结 1 行 1 列）。
 - 冻结区域在滚动时固定，可见范围计算自动把滚动起点推到冻结区之后。

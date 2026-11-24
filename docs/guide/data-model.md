@@ -130,9 +130,10 @@ UI 层由 `mergeSelection`（`src/components/mergeActions.ts`）统一入口，�
 | `namedRanges` | 命名区域 |
 | `protection` | 工作表保护状态 |
 | `autoFilter` | 自动筛选状态 |
+| `freeze` | 冻结窗格（`SheetFreeze { rows, cols }`，随工作表一起序列化，也随 xlsx 导入/导出） |
 
 ::: tip
-冻结窗格不在 Sheet 数据里——它是纯视图状态（`FreezeManager`），不参与序列化。
+冻结窗格是**每张工作表的数据**（`SheetData.freeze`），不再只是视图状态：随工作表一起序列化、随 xlsx 导入/导出，通过 `store.getFreeze(sheetId?)` / `store.setFreeze(freeze | undefined, sheetId?)` 读写；视图显示活动工作表的冻结，组件在两者间同步（`src/components/hooks/useSheetFreeze.ts`）。
 :::
 
 ## 序列化格式

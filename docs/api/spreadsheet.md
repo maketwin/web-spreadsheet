@@ -248,9 +248,11 @@ new VirtualScroller(opts: VirtualScrollerOptions)
 | 类 | 职责 | 文档 |
 |----|------|------|
 | `FilterService` | 自动筛选条件、下拉项、排序、筛选范围推断（`autoFilterRangeFor`） | [数据功能](/guide/data-features) |
-| `DataValidationService` | 数据验证（`validate(value, rule)`） | [格式化](/guide/formatting) |
+| `DataValidationService` | 数据验证（`validate(value, rule, context?)`） | [格式化](/guide/formatting) |
 | `ConditionalService` | 条件格式覆盖层（`computeOverlay(store, r, c)`） | [格式化](/guide/formatting) |
 | `NamedRangeService` | 命名区域增删查与公式解析 | [数据功能](/guide/data-features) |
+
+`DataValidationService.validate` 的第三个参数 `context`（类型 `ValidationContext`，`{ store, r, c, sheetId? }`）把被验证的单元格放进它所在的表：自定义公式规则会按规则范围左上角平移到被验证单元格处求值，引用读取真实单元格——不传时引用无法解析（退化为只读候选值）；候选值为空时始终通过所有规则（Excel「忽略空值」默认开启）。
 
 `FindReplaceService`（查找替换）暂未从包根导出，由内置 UI（`Ctrl/Cmd+F` / `Ctrl/Cmd+H`）自动接线，见[数据功能](/guide/data-features)。
 
@@ -280,7 +282,7 @@ import { setTheme, getTheme, applyStoredTheme, THEMES } from 'web-spreadsheet';
 
 - **UI 组件**：`Toolbar`、`BottomBar`、`Editor`、`Menu`、`MenuBar`、`SpreadsheetComponent`、`ErrorBoundary`、`FloatingChart`、`Sparkline`（均附 `*Props` 类型）。
 - **命令类（15 个）**：`InsertRowCommand`、`InsertColCommand`、`DeleteRowCommand`、`DeleteColCommand`、`SetCellStyleCommand`、`SetRangeStyleCommand`、`SetRangeBorderCommand` + `edgesForPreset`、`SetConditionalFormatCommand`、`SetValidationCommand`、`CreateChartCommand`、`SetChartAnchorCommand`、`RemoveChartCommand`、`SetRowsHiddenCommand`、`SetColsHiddenCommand`、`SetSparklineCommand`（其余 22 个命令为内部命令，见[命令与撤销](/guide/commands)）。
-- **插件**：`PluginManager`、`PluginAPI`、`CsvImportPlugin`、`Plugin` 类型。
+- **插件**：`PluginManager`、`PluginAPI`、`CsvImportPlugin`、`Plugin`、`PluginHost` 类型。
 - **I/O 与持久化**：`exportCsv` / `exportCsvBlob` / `csvQuote`（CSV 导出，BOM'd UTF-8 显示值）、`loadWorkbook` / `deleteWorkbook` / `DEFAULT_ID`（IndexedDB 手动读取，见[I/O](/guide/io)）。
 - **工具函数**：`parseNameBoxInput`（名称框输入解析）、`skipHiddenCells`（跳过隐藏行的选区步进）、`toggleAutoFilterCommand`、`sparklineValues` / `parseInternalRangeKey`。
-- **类型**：`Cell`、`CellValue`、`Style`、`RowMeta`、`ColMeta`、`StoreEvent`、`Unsubscribe`、`SerializedStore`、`Theme`、`CellInput`、`SpreadsheetOptions`、`StorageOptions`、`SpreadsheetProps`、`CellAddress`、`RangeAddress`、`AstNode`、`CellResolver`、`FormulaValue`、`FunctionSpec`、`ConditionalRule`、`ConditionalOverlay`、`ValidationRule`、`ValidationType`、`ChartSpec`、`ChartType`、`ChartAnchor`、`ChartAnchorEdge`、`SparklineSpec`、`SparklineType`、`NamedRangeDef`、`SheetProtectionState`、`BorderPreset`、`BorderLine` 等（`RichTextRun`、`CellHyperlink`、`CellComment`、`ImageSpec`、`RowGroupDef` 暂未从包根导出）。
+- **类型**：`Cell`、`CellValue`、`Style`、`RowMeta`、`ColMeta`、`StoreEvent`、`Unsubscribe`、`SerializedStore`、`Theme`、`CellInput`、`SpreadsheetOptions`、`StorageOptions`、`SpreadsheetProps`、`CellAddress`、`RangeAddress`、`AstNode`、`CellResolver`、`FormulaValue`、`FunctionSpec`、`ConditionalRule`、`ConditionalOverlay`、`ValidationRule`、`ValidationType`、`ValidationContext`、`SheetFreeze`、`ChartSpec`、`ChartType`、`ChartAnchor`、`ChartAnchorEdge`、`SparklineSpec`、`SparklineType`、`NamedRangeDef`、`SheetProtectionState`、`BorderPreset`、`BorderLine` 等（`RichTextRun`、`CellHyperlink`、`CellComment`、`ImageSpec`、`RowGroupDef` 暂未从包根导出）。

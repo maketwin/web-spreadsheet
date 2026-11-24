@@ -44,6 +44,38 @@
   targets (32–36px buttons, 34px menu items, taller tabs/formula bar),
   `@media (max-width: 768px)` narrow-screen compaction, bottom safe-area
   inset, `overscroll-behavior: none`.
+- **xlsx sheet features round trip** — borders, freeze panes, the autofilter
+  range, conditional formats and data validations now export to xlsx and
+  import back (`styles.xml` border table, `<pane>`, `<autoFilter ref>`,
+  `<conditionalFormatting>` dxfs, `<dataValidations>`); chart titles decode
+  XML entities (named + numeric) on import. Known gaps stay listed in
+  docs/guide/io.md (images/sparklines not exported, autofilter criteria not
+  exported, a few rule/operator types skipped on import).
+- **Per-sheet freeze panes** — freeze moved from pure view state
+  (`FreezeManager`) to `SheetData.freeze` (`SheetFreeze { rows, cols }`),
+  serialized with the sheet and round-tripped through xlsx;
+  `store.getFreeze(sheetId?)` / `store.setFreeze(freeze, sheetId?)`, and the
+  view follows the active sheet (`useSheetFreeze`).
+- **Band-scoped undo for insert/delete row/column** — the undo snapshot
+  covers only the affected half-plane (rows/columns from the insertion point
+  on) instead of the whole sheet; floating images/charts/sparklines shift
+  with the operation and are included.
+- **Relative CF/validation formulas** — conditional-format formula rules and
+  data-validation custom formulas follow Excel semantics: written relative
+  to the rule range's top-left cell, shifted per evaluated cell (`$` refs
+  stay); validation runs with `{ store, r, c, sheetId? }` context from the
+  editor (`ValidationContext`).
+- **Progressive print with images** — `renderWorkbookPrintPagesAsync(store,
+  settings, scope, onProgress?, signal?)` renders page by page (yields to the
+  main thread between pages, cancelable, progress callback); floating
+  data-URL images print, the print area includes floating images/charts, and
+  fit-width never enlarges above 100% (Excel); `planWorkbookPrintPages` gives
+  the dialog a cheap pagination pass.
+- **Dark chrome completion** — sheet-tab context menu, panels, popovers and
+  the remaining chrome surfaces tokenized (`--ss-surface*`, `--ss-hover-bg`,
+  `--ss-tab-hover-bg`, `--ss-chart-*`, toolbar gradient tokens); dark
+  `--ss-header-text` fixed to `#b3b3b3` for contrast. antd popups stay light
+  (separate decision).
 
 ### Fixes
 
@@ -92,6 +124,24 @@
   `visualViewport` sync no longer mixes document and layout-viewport
   coordinates (keyboard reflow + page scroll used to over-scroll the
   editing cell).
+- **Plugin install failure no longer leaks registrations** —
+  `PluginManager.use()` records the `PluginAPI` before `install()`; a plugin
+  that throws mid-install gets its already-registered formula functions and
+  event subscriptions disposed, is not listed, and the error propagates.
+- **Scientific custom formats no longer throw on non-finite cells** —
+  `formatValue(NaN|±Infinity, '0.00E+00')` (and the built-in `scientific`)
+  substituted the plain text instead of raising `TypeError` mid-paint;
+  zero-padded integer formats keep the sign in front (`-5` with `000`
+  prints `-005`, not `0-5`).
+- **Number formats round the decimal value half away from zero** — `1.005`
+  with `0.00` prints `1.01` (binary-noise `1.00` before), including the
+  scientific mantissa (`9.995` → `1.00E+01`).
+- **Fill keeps leading zeros** — a pure-number series takes the anchor
+  cell's zero padding (`001`, `002` → `003`); a lone `0012` copies on drag
+  and increments padded under Ctrl (`0013`, `0014`).
+- **Proxy spy dashboard survives a server restart** — the spy API tags
+  responses with a per-boot `bootId`; the dashboard drops its remembered
+  sequence numbers when the proxy restarts instead of never matching again.
 
 ### Refactoring
 

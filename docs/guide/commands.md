@@ -73,7 +73,7 @@ export interface RangeAddress {
 | `SetRowsHiddenCommand` | `{ r1, r2, hidden }` | 隐藏 / 取消隐藏行（含一键取消全部隐藏） |
 | `SetColsHiddenCommand` | `{ c1, c2, hidden }` | 隐藏 / 取消隐藏列 |
 
-插入/删除行（列）会整体快照受影响区域，公式引用的行号也会相应重映射，保证撤销恢复完整。
+插入/删除行（列）的撤销快照只覆盖**受影响的半平面**（插入点及之后的行/列带，`SheetSnapshotBand`），插入点之前的内容不进快照；带内的公式引用行号随之重映射，浮动图片 / 图表 / 迷你图随操作平移并一并纳入快照，保证撤销恢复完整。
 
 ### 数据功能
 
@@ -102,7 +102,7 @@ export interface RangeAddress {
 
 ## 撤销栈特性
 
-- undo / redo 栈**没有上限**，不做截断。
+- undo / redo 栈有上限（`MAX_HISTORY = 100` 条，与 Excel 一致），超出时丢弃最旧的记录。
 - **无操作命令不进历史**：命令可重写 `isNoOp()`，`execute` 后若未产生任何变化（如对无合并区域「取消合并」、单列「跨越合并」），`CommandManager` 不压栈、不更新 F4 重复源——对齐 Excel「没变化的操作不可撤销」。
 - 撤销通过执行逆命令实现（`cmd.getUndo().execute(store)`），因此「撤销公式」连计算结果也会一起恢复。
 - 初始数据（构造时传入的 `data` / `sheets`、IndexedDB 恢复）在加载后调用 `cmdManager.clear()`，**不计入撤销历史**——用户不能把初始内容「撤销掉」。

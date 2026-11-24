@@ -20,7 +20,11 @@ import { exportXlsx, exportXlsxBuffer } from 'web-spreadsheet';
 | 公式 | ✅ 写入 `f` 字段（缓存值随行，Excel 打开后重算） |
 | 数字格式 | ✅ 写入 xlsx 单元格 `z` 字段；内置格式映射：`number→#,##0.00`、`currency→¥#,##0.00`、`percent→0.00%`、`date→yyyy-mm-dd`、`time→hh:mm:ss`、`scientific→0.00E+00` |
 | 合并单元格 | ✅ 写入 `!merges` |
-| 单元格样式 | ✅ 自写 `styles.xml`（fonts / fills / numFmts / cellXfs）：粗/斜/下划线/删除线、字号与字体名、文字颜色、实底填充色、水平垂直对齐、自动换行、数字格式；**边框暂不导出** |
+| 单元格样式 | ✅ 自写 `styles.xml`（fonts / fills / numFmts / borders / cellXfs）：粗/斜/下划线/删除线、字号与字体名、文字颜色、实底填充色、水平垂直对齐、自动换行、数字格式、四边边框 |
+| 冻结窗格 | ✅ `<pane>`（每张工作表的 `SheetFreeze`，见[数据模型](/guide/data-model)） |
+| 自动筛选 | ⚠️ 只写筛选**范围** `<autoFilter ref>`，筛选条件不导出 |
+| 条件格式 | ✅ 条件格式规则（含公式规则，按范围左上角定位）；禁用的规则不导出 |
+| 数据验证 | ✅ 下拉列表 / 整数 / 小数 / 日期 / 文本长度 / 自定义公式 |
 
 产出标准 xlsx 二进制（MIME `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`），UI 下载为 `workbook.xlsx`。
 
@@ -42,9 +46,14 @@ cmdManager.clear();          // Excel 语义：打开文件不可撤销
 | 合并单元格 | ✅ 读 `!merges` |
 | 单元格样式 | ✅ 粗体/斜体/下划线/字号/字体/文字颜色/实底背景色/水平垂直对齐/自动换行；含「有样式无内容」的空单元格（从原始 sheet XML 的 `s` 属性恢复样式索引，再映射 SheetJS 解析好的 styles.xml 字体/填充/对齐表） |
 | 行高 / 列宽 | ✅ `!rows` / `!cols`（含隐藏标记） |
+| 冻结窗格 | ✅ `<pane>` → 每张工作表的 `SheetFreeze` |
+| 自动筛选 | ✅ `<autoFilter ref>` → 筛选范围（条件不导入） |
+| 条件格式 | ✅ 条件格式规则（dxfs）；`notBetween` / `notEqual` 单元格值规则与 `beginsWith` / `endsWith` / `containsBlanks` / `containsErrors` 类型暂跳过；引用其他单元格的条件以字面文本存储 |
+| 数据验证 | ✅ 下拉列表 / 整数 / 小数 / 日期 / 文本长度 / 自定义公式；`time` 验证与 `notEqual` / `notBetween` 运算符暂跳过 |
 
 - UI 的「导入 xlsx」用 `Store.replaceAll` 热替换整个工作簿并清空撤销历史（Excel 打开文件同样不可撤销）；解析失败弹错误提示。
-- 已知限制：条件格式、数据验证、迷你图、浮动图片、行分组、命名区域、边框与主题色（theme/indexed 非实底填充）不导入。图表、批注、超链接**已导入**（drawing/chart XML、comment XML 与 `hyperlink` 关系）。
+- 已知限制：迷你图、浮动图片、行分组、命名区域与主题色（theme/indexed 非实底填充）不导入。图表、批注、超链接**已导入**（drawing/chart XML、comment XML 与 `hyperlink` 关系）。
+- 导出侧的缺口：迷你图与浮动图片不导出到 xlsx，自动筛选条件不导出，禁用的条件格式规则不导出。
 - 文件选择器接受 `.csv .tsv .xlsx .json`。
 
 ## CSV / TSV / JSON
@@ -99,16 +108,23 @@ ClipboardService.parseHtml(html);          // <table> → Cell[][]
 - **打印设置**：纸张（A4/Letter 等）、方向、页边距预设、缩放（适应页宽 / 自定义百分比 50–200）、是否打印网格线、打印区域（`A1:F20` 语法，仅当前工作表范围有效）。
 - **页眉页脚**：支持 `{page}`、`{pages}`、`{sheet}` 占位符。
 - **范围**：打印预览提供「当前工作表 / 整个工作簿」切换——整簿按标签顺序逐表分页，`{page}`/`{pages}` 用工作簿全局编号（适应页宽缩放仍按表独立计算）；PDF 导出整簿时文件名为 `工作簿.pdf`。
-- **分页语义**：合并单元格感知的分页（不把合并块切断），冻结窗格不影响分页。
+- **分页语义**：合并单元格感知的分页（不把合并块切断），冻结窗格不影响分页；打印范围把浮动图片/图表的锚点算进使用区域（`usedRange`）。
+- **渐进渲染**：`renderWorkbookPrintPagesAsync(store, settings, scope, onProgress?, signal?)` 逐页渲染——每页之间让出主线程，`onProgress` 每完成一页回调一次，`AbortSignal` 可随时取消；整簿打印不再一次卡住主线程。
+- **浮动图片**：data URL 图片会像 Excel 一样被打印（仅支持 data URL，不做网络请求）。
+- **适应页宽**：只缩小、不放大——内容不足一页宽时按 100% 打印（与 Excel 一致）。
 
 程序化接口（`src/print/PrintPipeline.ts` 与 `src/io/pdfExport.ts`，暂未从包根导出，调用形态供参考）：
 
 ```ts
-// renderPrintPages(store, sheetId, settings)        → 单表分页 PrintPagesResult
-// renderWorkbookPrintPages(store, settings, scope)  → 整簿分页，scope: 'active' | 'workbook'
-// printPages(result, settings)                      → 唤起浏览器打印
-// exportPagesToPdf(result, settings)                → Promise<Blob>（PDF）
+// planWorkbookPrintPages(store, settings, scope)     → 便宜的纯分页估算（不绘制），页数/每表布局
+// renderWorkbookPrintPages(store, settings, scope)   → 同步整簿渲染（一次性画完，阻塞主线程）
+// renderWorkbookPrintPagesAsync(store, settings, scope, onProgress?, signal?)
+//                                                    → 渐进渲染，可取消、带进度回调
+// printPages(result, settings)                       → 唤起浏览器打印
+// exportPagesToPdf(result, settings)                 → Promise<Blob>（PDF）
 ```
+
+打印预览对话框先用 `planWorkbookPrintPages` 做分页估算（页数与缩放即时可见），确认后再走异步渲染。
 
 ## IndexedDB 自动保存与恢复
 

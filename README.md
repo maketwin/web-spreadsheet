@@ -66,10 +66,10 @@ import it once (see [Package entries](#package-entries)).
 - Custom number format strings — Excel syntax: `#,##0.00`, `0.00E+00`, `yyyy-mm-dd`, `h:mm AM/PM`, `正;负;零;文本` sections, with xlsx round-trip
 
 **I/O & persistence**
-- Real xlsx import/export (SheetJS) including number formats
+- Real xlsx import/export (SheetJS): number formats, cell styles and borders, freeze panes, the autofilter range, conditional formats and data validations round-trip (charts, comments and hyperlinks import; images/sparklines and filter criteria are not exported)
 - CSV/TSV and JSON import, CSV export (BOM'd UTF-8, displayed values), JSON/xlsx export
 - Auto-save to IndexedDB with startup restore
-- Paginated printing: print preview with paper/orientation/margins/scale settings, merged-cell-aware page breaks, 192-dpi offscreen page rendering, 当前工作表 / 整个工作簿 scope (`Ctrl+P`), PDF export
+- Paginated printing: print preview with paper/orientation/margins/scale settings, merged-cell-aware page breaks, 192-dpi offscreen page rendering with progressive page-by-page rendering (cancelable, floating data-URL images printed), 当前工作表 / 整个工作簿 scope (`Ctrl+P`), PDF export
 
 **Extensibility**
 - Plugin system with a typed `PluginAPI` (see `src/plugins/CsvImportPlugin.ts` for an example)

@@ -74,7 +74,7 @@
 ### 4.3 出参侧：响应能力（✅ static/template/script/capture 全部实现）
 
 1. **static**：body 原样返回——二维数组出参经 `API.DATA` 转为动态数组直接溢出成表。
-2. **template**：body 深遍历渲染 `{{query.x}}` / `{{path.x}}` 占位符——出参随入参动。整串占位符保留原始类型（数字还是数字）。
+2. **template**：body 深遍历渲染 <span v-pre>`{{query.x}}`</span> / <span v-pre>`{{path.x}}`</span> 占位符——出参随入参动。整串占位符保留原始类型（数字还是数字）。
 3. **script（✅）**：body 是一段 JS，签名 `(req) => body`（req = `{ query, path }`），返回值即出参——覆盖签名、分页、关联计算等动态逻辑。隔离级别（M2 有意取舍）：`new Function` + strict，异常捕获转 `#API!` 并记违规；仍在主线程，团队部署前须换 Web Worker / QuickJS 真隔离（依赖 M3 异步求值）。
 4. **capture（✅）**：返回该接口最近一次真实捕获的快照（见 §M1.5 真实上游直通）。
 
@@ -175,7 +175,7 @@ project/
 |---|---|---|
 | 运行时 + UI | 现有 web-spreadsheet（React 19 + antd 6 + canvas） | 引擎、编辑器、e2e 全现成 |
 | 规则引擎 | 纯 TS（`src/platform/RuleEngine.ts`，无 DOM 依赖） | 三条通道（浏览器/Worker/Node 网关）复用 |
-| 匹配 / 模板 | 自研（query 精确/通配 + `{{query.x}}`/`{{path.x}}`） | 够用，避免重依赖；JSONPath/正则匹配器后续按需加 |
+| 匹配 / 模板 | 自研（query 精确/通配 + <span v-pre>`{{query.x}}`</span>/<span v-pre>`{{path.x}}`</span>） | 够用，避免重依赖；JSONPath/正则匹配器后续按需加 |
 | 脚本沙箱（规划） | 浏览器端 Web Worker + Proxy 限权；服务端 QuickJS-WASM / isolated-vm | 防恶意规则脚本 |
 | 持久化 | M1 内存；一期文件目录；二期 sqlite | git 友好，先跑通闭环 |
 

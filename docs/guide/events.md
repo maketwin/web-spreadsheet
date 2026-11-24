@@ -15,9 +15,11 @@ off(); // 退订
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `on` | `<T>(event: string, fn: (payload: T) => void): () => void` | 订阅，返回退订函数 |
-| `off` | `<T>(event: string, fn): void` | 按函数引用退订 |
+| `on` | `<T>(event: string, fn: (payload: T) => void): () => void` | 订阅，返回退订函数，**只退役这一条订阅**——同一函数订阅两次得到两个独立退订，各删各的 |
+| `off` | `<T>(event: string, fn): void` | 按函数引用退订**最早**的一个匹配订阅（同一函数订阅多次时一次 `off` 只移除最早的那个）；要精确退订请用 `on` 返回的退订函数 |
 | `emit` | `<T>(event: string, payload?: T): void` | 发布；先通知具名监听，再通知 `'*'` 通配监听 |
+
+监听器抛异常不会中断发布方或其他监听器：每个监听器单独执行，出错只打日志（`console.error`），分发继续——包括通配监听那一遍。
 
 通配订阅收到的是包装对象：
 
@@ -41,7 +43,7 @@ bus.on('*', ({ event, payload }) => {
 实例上直接可用：`ss.events.on(...)`。插件则通过 `PluginAPI.on(event, handler)` 订阅（见[插件开发](/plugins/creating-plugins)）。
 
 ::: tip
-主题切换事件 `ss:theme-changed` 是 **window 上的 CustomEvent**，不走 EventBus；主题系统内部用，无需关心。见[主题](/guide/theming)。
+主题切换事件 `ss:theme-changed` 是 **window 上的 Event**，不走 EventBus；公共的 `setTheme()` / `applyStoredTheme()` 自己会派发它，画布据此重绘。见[主题](/guide/theming)。
 :::
 
 ## Store 订阅（数据变更）
