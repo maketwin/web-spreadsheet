@@ -1,7 +1,7 @@
 import { PrinterOutlined, FilePdfOutlined } from '@ant-design/icons';
 import { Button, Input, InputNumber, Modal, Radio, Select, Switch, Tooltip } from 'antd';
-import { useEffect, useMemo, useState, type FC } from 'react';
-import { printPages, renderWorkbookPrintPages, type PrintScope } from '../print/PrintPipeline';
+import { useEffect, useMemo, useRef, useState, type FC } from 'react';
+import { planWorkbookPrintPages, printPages, renderWorkbookPrintPagesAsync, type WorkbookPrintPage, type PrintScope } from '../print/PrintPipeline';
 import { DEFAULT_PRINT_SETTINGS, PAPER_MM, type MarginPreset, type Orientation, type PaperSize, type PrintSettings, type ScaleMode } from '../print/types';
 import { exportPagesToPdf } from '../io/pdfExport';
 import type { Store } from '../store/Store';
@@ -24,40 +24,84 @@ const MARGIN_OPTIONS: Array<{ readonly value: MarginPreset; readonly label: stri
   { value: 'wide', label: '宽' },
 ];
 
-/** Print preview: settings on the left, paginated page thumbnails on the right. */
+/** Print preview: settings on the left, paginated page thumbnails on the right.
+ * Pages render progressively (one paint + PNG encode per frame, cancelable) so
+ * a big workbook never blocks the dialog on the main thread. */
 export const PrintPreview: FC<PrintPreviewProps> = ({ open, onCancel, store }) => {
   const [settings, setSettings] = useState<PrintSettings>(DEFAULT_PRINT_SETTINGS);
   const [scope, setScope] = useState<PrintScope>('active');
-  // Repainting every page synchronously per settings change (e.g. each digit
-  // typed into the scale input) stalls the dialog on large sheets — debounce.
+  // Repainting every page per settings change (e.g. each digit typed into the
+  // scale input) stalls the dialog on large sheets — debounce.
   const [renderSettings, setRenderSettings] = useState(settings);
   useEffect(() => {
     const timer = window.setTimeout(() => setRenderSettings(settings), 150);
     return () => window.clearTimeout(timer);
   }, [settings]);
-  const result = useMemo(
-    () => (open ? renderWorkbookPrintPages(store, renderSettings, scope) : null),
+  // Cheap pagination pass: totals/scale/sheet-count are known before painting.
+  const plan = useMemo(
+    () => (open ? planWorkbookPrintPages(store, renderSettings, scope) : null),
     [open, store, renderSettings, scope],
   );
+  // Pages painted so far (thumbnails appear one by one as rendering progresses).
+  const [pages, setPages] = useState<readonly WorkbookPrintPage[]>([]);
+  // Incrementing token: results from superseded renders (settings changed,
+  // dialog closed) are dropped instead of clobbering the current run.
+  const renderTokenRef = useRef(0);
+  useEffect(() => {
+    if (!open) {
+      setPages([]);
+      return undefined;
+    }
+    const token = renderTokenRef.current + 1;
+    renderTokenRef.current = token;
+    const controller = new AbortController();
+    setPages([]);
+    void renderWorkbookPrintPagesAsync(
+      store,
+      renderSettings,
+      scope,
+      (p) => {
+        if (renderTokenRef.current !== token) return;
+        setPages((current) => [...current, { canvas: p.canvas, dataUrl: p.dataUrl }]);
+      },
+      controller.signal,
+    )
+      .then((result) => {
+        if (renderTokenRef.current !== token) return;
+        setPages(result.pages);
+      })
+      .catch(() => {
+        // Aborted (settings changed / dialog closed): the newer run owns state.
+        if (renderTokenRef.current !== token) return;
+        setPages([]);
+      });
+    return () => controller.abort();
+  }, [open, store, renderSettings, scope]);
   const update = <K extends keyof PrintSettings>(key: K, value: PrintSettings[K]): void => {
     setSettings((current) => ({ ...current, [key]: value }));
   };
-  const totalPages = result?.totalPages ?? 0;
+  const totalPages = plan?.totalPages ?? 0;
+  const renderedCount = pages.length;
+  // Print/export only once every page exists (canvas + pre-encoded dataUrl).
+  const ready = totalPages > 0 && renderedCount >= totalPages;
+  const progressText = totalPages > 0 && renderedCount < totalPages
+    ? `正在渲染第 ${renderedCount + 1} / ${totalPages} 页`
+    : null;
   const workbookScope = scope === 'workbook';
   const paperMm = PAPER_MM[settings.paper];
 
   const handlePrint = (): void => {
-    if (result === null) return;
-    printPages(result, settings);
+    if (!ready) return;
+    printPages({ canvases: pages.map((p) => p.canvas), pages }, settings);
     onCancel();
   };
 
   const [pdfBusy, setPdfBusy] = useState(false);
   const handleExportPdf = async (): Promise<void> => {
-    if (result === null || pdfBusy) return;
+    if (!ready || pdfBusy) return;
     setPdfBusy(true);
     try {
-      const blob = await exportPagesToPdf(result, settings);
+      const blob = await exportPagesToPdf({ canvases: pages.map((p) => p.canvas) }, settings);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -80,8 +124,8 @@ export const PrintPreview: FC<PrintPreviewProps> = ({ open, onCancel, store }) =
     destroyOnHidden
     footer={[
       <Button key="cancel" onClick={onCancel}>取消</Button>,
-      <Button key="pdf" icon={<FilePdfOutlined />} loading={pdfBusy} disabled={totalPages === 0} onClick={() => { void handleExportPdf(); }}>导出 PDF</Button>,
-      <Button key="print" type="primary" icon={<PrinterOutlined />} disabled={totalPages === 0} onClick={handlePrint}>打印</Button>,
+      <Button key="pdf" icon={<FilePdfOutlined />} loading={pdfBusy} disabled={!ready} onClick={() => { void handleExportPdf(); }}>导出 PDF</Button>,
+      <Button key="print" type="primary" icon={<PrinterOutlined />} disabled={!ready} onClick={handlePrint}>打印</Button>,
     ]}
   >
     <div style={{ display: 'flex', gap: 16, minHeight: 420 }}>
@@ -141,15 +185,16 @@ export const PrintPreview: FC<PrintPreviewProps> = ({ open, onCancel, store }) =
         </div>
         <div style={{ marginTop: 16, color: 'var(--ss-text-light)', fontSize: 12, lineHeight: '20px' }}>
           共 {totalPages} 页{workbookScope
-            ? ` · ${result?.parts.length ?? 0} 个工作表`
-            : <> · 打印比例 {Math.round((result?.parts[0]?.geometry.scale ?? 1) * 100)}%</>}<br />
+            ? ` · ${plan?.parts.length ?? 0} 个工作表`
+            : <> · 打印比例 {Math.round((plan?.parts[0]?.geometry.scale ?? 1) * 100)}%</>}<br />
           {settings.paper} {settings.orientation === 'portrait' ? `${paperMm.w}×${paperMm.h}` : `${paperMm.h}×${paperMm.w}`} mm · {workbookScope ? '全部工作簿按标签顺序' : '仅当前工作表'}
+          {progressText !== null && <div aria-live="polite">{progressText}</div>}
         </div>
       </div>
       <div className="ss-print-pages" aria-label="打印页面预览">
-        {result?.canvases.map((canvas, index) => (
+        {pages.map((page, index) => (
           <figure key={index} className="ss-print-thumb">
-            <div ref={(el) => { if (el !== null && el.firstElementChild !== canvas) el.replaceChildren(canvas); }} />
+            <div ref={(el) => { if (el !== null && el.firstElementChild !== page.canvas) el.replaceChildren(page.canvas); }} />
             <figcaption>第 {index + 1} 页，共 {totalPages} 页</figcaption>
           </figure>
         ))}

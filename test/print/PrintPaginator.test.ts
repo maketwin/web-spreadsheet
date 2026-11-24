@@ -40,6 +40,37 @@ describe('usedRange', () => {
     store.addMerge('B2:C9');
     expect(usedRange(store)).toEqual({ r1: 0, c1: 0, r2: 8, c2: 2 });
   });
+
+  it('extends over a floating image anchored beyond the last cell', () => {
+    const store = makeStore();
+    store.setCell(0, 0, { text: 'x' });
+    store.addImage({
+      id: 'img1', name: 'logo', src: 'data:image/png;base64,AA',
+      anchor: { from: { r: 10, c: 5, offX: 0, offY: 0 }, to: { r: 14, c: 7, offX: 0, offY: 0 } },
+    });
+    expect(usedRange(store)).toEqual({ r1: 0, c1: 0, r2: 14, c2: 7 });
+  });
+
+  it('extends over a chart anchor too (image plus chart on one sheet)', () => {
+    const store = makeStore();
+    store.setCell(0, 0, { text: 'x' });
+    store.addImage({
+      id: 'img1', name: 'logo', src: 'data:image/png;base64,AA',
+      anchor: { from: { r: 10, c: 5, offX: 0, offY: 0 }, to: { r: 14, c: 7, offX: 0, offY: 0 } },
+    });
+    store.addChart({
+      id: 'chart-1', type: 'bar', range: '0,0:1,1',
+      anchor: { from: { r: 15, c: 0, offX: 0, offY: 0 }, to: { r: 20, c: 3, offX: 0, offY: 0 } },
+    });
+    expect(usedRange(store)).toEqual({ r1: 0, c1: 0, r2: 20, c2: 7 });
+  });
+
+  it('a chart without an anchor does not change the range', () => {
+    const store = makeStore();
+    store.setCell(2, 1, { text: 'x' });
+    store.addChart({ id: 'chart-1', type: 'bar', range: '0,0:1,1' });
+    expect(usedRange(store)).toEqual({ r1: 0, c1: 0, r2: 2, c2: 1 });
+  });
 });
 
 describe('paginate', () => {
@@ -107,6 +138,28 @@ describe('paginate', () => {
     const geo = paginate(store, store.getActiveSheetId(), usedRange(store), settings({ scaleMode: 'fitWidth' }));
     expect(geo.colBands).toHaveLength(1);
     expect(geo.scale).toBeCloseTo(CONTENT.w / (12 * 64), 9);
+  });
+
+  it('fitWidth never enlarges a sheet narrower than the page content width (Excel only shrinks)', () => {
+    const store = makeStore();
+    store.setCell(0, 1, { text: 'x' }); // 2 default columns = 128px ≪ content width
+    const geo = paginate(store, store.getActiveSheetId(), usedRange(store), settings({ scaleMode: 'fitWidth' }));
+    expect(geo.scale).toBe(1);
+  });
+
+  it('fitWidth still shrinks a wide sheet below 100%', () => {
+    const store = makeStore();
+    store.setCell(0, 19, { text: 'x' }); // 20 default columns = 1280px > 745.7px
+    const geo = paginate(store, store.getActiveSheetId(), usedRange(store), settings({ scaleMode: 'fitWidth' }));
+    expect(geo.scale).toBeLessThan(1);
+    expect(geo.scale).toBeCloseTo(CONTENT.w / (20 * 64), 9);
+  });
+
+  it('custom 150% still gives 1.5', () => {
+    const store = makeStore();
+    store.setCell(0, 0, { text: 'x' });
+    const geo = paginate(store, store.getActiveSheetId(), usedRange(store), settings({ scaleMode: 'custom', scalePercent: 150 }));
+    expect(geo.scale).toBe(1.5);
   });
 
   it('custom scale is respected as a percentage', () => {

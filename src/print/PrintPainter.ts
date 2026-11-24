@@ -7,6 +7,7 @@
  * chrome. The pure helpers (BorderPainter, wrapText, TextMetricsCache) are
  * shared with the screen renderer.
  */
+import type { ChartAnchor, ImageSpec } from '../charts/types';
 import { ConditionalService } from '../conditional/ConditionalService';
 import { formatValue } from '../format/NumberFormatter';
 import { collectCellBorderEdges, edgesToPaintSegs, strokeBorderSegs, type LogicalBorderEdge } from '../renderer/BorderPainter';
@@ -34,6 +35,13 @@ interface AxisGeometry {
   readonly total: number;
 }
 
+/** A pre-loaded floating image to draw over the cells (data-URL images only;
+ * loading is async, so the caller resolves them before painting). */
+export interface PrintImageLayer {
+  readonly el: HTMLImageElement;
+  readonly spec: ImageSpec;
+}
+
 export class PrintPainter {
   private readonly conditional = new ConditionalService();
   private readonly textMetrics = new TextMetricsCache();
@@ -41,8 +49,9 @@ export class PrintPainter {
   public constructor(private readonly store: Store, private readonly sheetId: string) {}
 
   /** Render one page: a content-area-sized canvas at PRINT_DPI_SCALE bitmap resolution.
-   * When header/footer text is configured, bands are reserved and the text drawn there. */
-  public paint(page: PageLayout, scale: number, settings: PrintSettings, totalPages = 1): HTMLCanvasElement {
+   * When header/footer text is configured, bands are reserved and the text drawn there.
+   * `images` (optional, pre-loaded) float above the cells, clipped to the page band. */
+  public paint(page: PageLayout, scale: number, settings: PrintSettings, totalPages = 1, images: readonly PrintImageLayer[] = []): HTMLCanvasElement {
     const canvas = document.createElement('canvas');
     const content = contentPx(settings);
     canvas.width = Math.max(1, Math.round(content.w * PRINT_DPI_SCALE));
@@ -69,6 +78,7 @@ export class PrintPainter {
     if (settings.showGrid) this.paintGridLines(ctx, page, cols, rows);
     this.paintBorders(ctx, page, cols, rows, pageW, pageH);
     this.paintTexts(ctx, page, cols, rows, skip);
+    this.paintImages(ctx, page, images, pageW, pageH);
 
     // Header/footer text in the reserved bands (device px, unscaled).
     if (headerBand > 0 || footerBand > 0) {
@@ -275,6 +285,50 @@ export class PrintPainter {
         }
       }
     }
+  }
+
+  /** Floating images above the cells (Excel prints them last), clipped to the
+   * page's content band so pages never pick up a neighbor's half of an image. */
+  private paintImages(ctx: CanvasRenderingContext2D, page: PageLayout, images: readonly PrintImageLayer[], pageW: number, pageH: number): void {
+    if (images.length === 0) return;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, pageW, pageH);
+    ctx.clip();
+    for (const layer of images) {
+      const rect = this.anchorRectOnPage(layer.spec.anchor, page);
+      if (rect.w <= 0 || rect.h <= 0) continue;
+      // objectFit: contain, matching the on-screen FloatingImage element.
+      const nw = layer.el.naturalWidth || layer.el.width;
+      const nh = layer.el.naturalHeight || layer.el.height;
+      if (nw > 0 && nh > 0) {
+        const fit = Math.min(rect.w / nw, rect.h / nh);
+        const dw = nw * fit;
+        const dh = nh * fit;
+        ctx.drawImage(layer.el, rect.x + (rect.w - dw) / 2, rect.y + (rect.h - dh) / 2, dw, dh);
+      } else {
+        ctx.drawImage(layer.el, rect.x, rect.y, rect.w, rect.h);
+      }
+    }
+    ctx.restore();
+  }
+
+  /** Two-cell anchor → page-band-relative grid px (origin = band's top-left cell). */
+  private anchorRectOnPage(anchor: ChartAnchor, page: PageLayout): { x: number; y: number; w: number; h: number } {
+    const bandX = this.axisSizeSum(0, page.colStart, (c) => this.colWidth(c));
+    const bandY = this.axisSizeSum(0, page.rowStart, (r) => this.rowHeight(r));
+    const x1 = this.axisSizeSum(0, anchor.from.c, (c) => this.colWidth(c)) + anchor.from.offX - bandX;
+    const y1 = this.axisSizeSum(0, anchor.from.r, (r) => this.rowHeight(r)) + anchor.from.offY - bandY;
+    const x2 = this.axisSizeSum(0, anchor.to.c, (c) => this.colWidth(c)) + anchor.to.offX - bandX;
+    const y2 = this.axisSizeSum(0, anchor.to.r, (r) => this.rowHeight(r)) + anchor.to.offY - bandY;
+    return { x: Math.min(x1, x2), y: Math.min(y1, y2), w: Math.abs(x2 - x1), h: Math.abs(y2 - y1) };
+  }
+
+  /** Sum of axis sizes over [from, to) — absolute offsets for anchor edges. */
+  private axisSizeSum(from: number, to: number, sizeAt: (i: number) => number): number {
+    let sum = 0;
+    for (let i = from; i < to; i += 1) sum += Math.max(0, sizeAt(i));
+    return sum;
   }
 
   private paintStyle(r: number, c: number): Style | undefined {

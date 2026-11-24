@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { paginate, usedRange } from '../../src/print/PrintPaginator';
 import { PrintPainter } from '../../src/print/PrintPainter';
 import { PRINT_DPI_SCALE, contentPx, DEFAULT_PRINT_SETTINGS } from '../../src/print/types';
 import { Store } from '../../src/store/Store';
@@ -9,6 +10,7 @@ function installCanvasContext(): { ctx: Record<string, unknown>; fillStyles: str
   const ctx: Record<string, unknown> = {
     beginPath: vi.fn(),
     clip: vi.fn(),
+    drawImage: vi.fn(),
     fillRect: vi.fn(),
     fillText: vi.fn(),
     lineTo: vi.fn(),
@@ -112,5 +114,28 @@ describe('PrintPainter', () => {
     const store = new Store();
     const painter = new PrintPainter(store, store.getActiveSheetId());
     expect(() => painter.paint({ index: 0, colStart: 0, colEnd: 0, rowStart: 0, rowEnd: 0 }, 1, DEFAULT_PRINT_SETTINGS)).not.toThrow();
+  });
+
+  it('draws the image layer when the image is the only object far from the data', () => {
+    const { ctx } = installCanvasContext();
+    const store = new Store();
+    store.setCell(0, 0, { text: 'x' });
+    store.addImage({
+      id: 'img1', name: '远图', src: 'data:image/png;base64,AA',
+      anchor: { from: { r: 10, c: 5, offX: 0, offY: 0 }, to: { r: 14, c: 7, offX: 0, offY: 0 } },
+    });
+    // The image extends the used range, so the planned page band reaches it.
+    const geo = paginate(store, store.getActiveSheetId(), usedRange(store), DEFAULT_PRINT_SETTINGS);
+    expect(geo.pages).toHaveLength(1);
+    expect(geo.pages[0]!.colEnd).toBe(7);
+    expect(geo.pages[0]!.rowEnd).toBe(14);
+    const spec = store.getImages(store.getActiveSheetId())[0]!;
+    const painter = new PrintPainter(store, store.getActiveSheetId());
+    const layer = { el: { naturalWidth: 8, naturalHeight: 4 } as HTMLImageElement, spec };
+    painter.paint(geo.pages[0]!, geo.scale, DEFAULT_PRINT_SETTINGS, 1, [layer]);
+    expect(ctx.drawImage).toHaveBeenCalledTimes(1);
+    const [dw, dh] = (ctx.drawImage as ReturnType<typeof vi.fn>).mock.calls[0]!.slice(3) as [number, number];
+    expect(dw).toBeGreaterThan(0);
+    expect(dh).toBeGreaterThan(0);
   });
 });

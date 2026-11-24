@@ -1,3 +1,4 @@
+import { yieldToMainThread } from '../print/PrintPipeline';
 import { paperPx, type PrintSettings } from '../print/types';
 
 /**
@@ -10,11 +11,17 @@ const PT_PER_PX = 0.75; // 96dpi CSS px → 72dpi PDF pt
 
 export async function exportPagesToPdf(result: { readonly canvases: readonly HTMLCanvasElement[] }, settings: PrintSettings): Promise<Blob> {
   const jpegs: Uint8Array[] = [];
-  for (const canvas of result.canvases) {
+  for (let i = 0; i < result.canvases.length; i += 1) {
+    const canvas = result.canvases[i]!;
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
     if (blob === null) throw new Error('canvas.toBlob unavailable');
     jpegs.push(new Uint8Array(await blob.arrayBuffer()));
+    // Chunked like the preview render: toBlob encodes off the main thread, but
+    // arrayBuffer() copying and the final PDF assembly below do not — give the
+    // page a frame between pages and before building the document bytes.
+    if (i < result.canvases.length - 1) await yieldToMainThread();
   }
+  if (jpegs.length > 0) await yieldToMainThread();
   const paper = paperPx(settings);
   const pageW = paper.w * PT_PER_PX;
   const pageH = paper.h * PT_PER_PX;

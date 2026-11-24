@@ -10,7 +10,7 @@
 import type { Store } from '../store/Store';
 import { parseRange } from '../util/cell';
 import { paginate, usedRange, type PrintGeometry, type UsedRange } from './PrintPaginator';
-import { PrintPainter } from './PrintPainter';
+import { PrintPainter, type PrintImageLayer } from './PrintPainter';
 import { contentPx, marginPx, paperPx, type PaperSize, type PrintSettings } from './types';
 
 export interface PrintPagesResult {
@@ -67,33 +67,193 @@ export interface WorkbookPrintResult {
   readonly totalPages: number;
 }
 
-/** Paginate + paint the active sheet or the whole workbook.
- * Page numbers in header/footer text ({page}/{pages}) are workbook-global. */
-export function renderWorkbookPrintPages(store: Store, settings: PrintSettings, scope: PrintScope = 'active'): WorkbookPrintResult {
+export interface SheetPrintPlan {
+  readonly sheetId: string;
+  readonly sheetName: string;
+  readonly geometry: PrintGeometry;
+}
+
+export interface WorkbookPrintPlan {
+  readonly parts: readonly SheetPrintPlan[];
+  readonly totalPages: number;
+}
+
+/** Cheap pagination pass (no painting): per-sheet page layout plus the global
+ * page count. UI can show totals and scale before any canvas exists. */
+export function planWorkbookPrintPages(store: Store, settings: PrintSettings, scope: PrintScope = 'active'): WorkbookPrintPlan {
   const sheets = scope === 'workbook' ? store.getSheets() : store.getSheets().filter((s) => s.id === store.getActiveSheetId());
-  // First pass paginates every sheet so {pages} can carry the global total.
-  const paginated = sheets.map((sheet) => {
+  // Paginate every sheet up front so {pages} can carry the global total.
+  const parts = sheets.map((sheet) => {
     const used = resolvePrintArea(store, sheet.id, settings);
-    return { sheet, geometry: paginate(store, sheet.id, used, settings) };
+    return { sheetId: sheet.id, sheetName: sheet.name, geometry: paginate(store, sheet.id, used, settings) };
   });
-  const totalPages = paginated.reduce((sum, part) => sum + part.geometry.pages.length, 0);
+  const totalPages = parts.reduce((sum, part) => sum + part.geometry.pages.length, 0);
+  return { parts, totalPages };
+}
+
+/** Paginate + paint the active sheet or the whole workbook.
+ * Page numbers in header/footer text ({page}/{pages}) are workbook-global.
+ * Synchronous — painting every page in one go blocks the main thread; the
+ * async variant (renderWorkbookPrintPagesAsync) chunks the same output. */
+export function renderWorkbookPrintPages(store: Store, settings: PrintSettings, scope: PrintScope = 'active'): WorkbookPrintResult {
+  const plan = planWorkbookPrintPages(store, settings, scope);
   const parts: SheetPrintPart[] = [];
   const canvases: HTMLCanvasElement[] = [];
-  let pageIndex = 0;
-  for (const { sheet, geometry } of paginated) {
-    const painter = new PrintPainter(store, sheet.id);
-    const sheetCanvases = geometry.pages.map((page) => {
+  let painted = 0;
+  for (const partPlan of plan.parts) {
+    const painter = new PrintPainter(store, partPlan.sheetId);
+    const sheetCanvases = partPlan.geometry.pages.map((page) => {
       // The painter reads page.index for {page} — renumber against the
       // workbook-global running count (single-sheet scope: unchanged).
-      const global = page.index + pageIndex;
+      const global = page.index + painted;
       const numbered = global === page.index ? page : { ...page, index: global };
-      return painter.paint(numbered, geometry.scale, settings, totalPages);
+      return painter.paint(numbered, partPlan.geometry.scale, settings, plan.totalPages);
     });
-    parts.push({ sheetId: sheet.id, sheetName: sheet.name, geometry, canvases: sheetCanvases });
+    parts.push({ sheetId: partPlan.sheetId, sheetName: partPlan.sheetName, geometry: partPlan.geometry, canvases: sheetCanvases });
     canvases.push(...sheetCanvases);
-    pageIndex += geometry.pages.length;
+    painted += partPlan.geometry.pages.length;
   }
-  return { parts, canvases, totalPages };
+  return { parts, canvases, totalPages: plan.totalPages };
+}
+
+/** One rendered page plus its pre-encoded PNG data URL. */
+export interface WorkbookPrintPage {
+  readonly canvas: HTMLCanvasElement;
+  readonly dataUrl: string;
+}
+
+/** Progress payload: fires once per finished page, in print order. */
+export interface WorkbookRenderProgress {
+  /** 1-based count of finished pages (increments to `total`). */
+  readonly done: number;
+  readonly total: number;
+  /** Workbook-global 0-based index of the page just finished. */
+  readonly pageIndex: number;
+  readonly canvas: HTMLCanvasElement;
+  readonly dataUrl: string;
+}
+
+export interface AsyncWorkbookPrintResult extends WorkbookPrintResult {
+  /** Pages with pre-encoded PNG data URLs, in print order — lets printPages skip toDataURL. */
+  readonly pages: readonly WorkbookPrintPage[];
+}
+
+/** Give the main thread a real frame between pages: rAF followed by a
+ * macrotask (rAF alone can run before the browser has painted, so a following
+ * setTimeout guarantees the frame; setTimeout(0) alone when rAF is missing).
+ * scheduler.yield() is deliberately not used: in Chrome its continuation runs
+ * ahead of already-queued same-priority tasks, so a yield loop starves timers
+ * and MessageChannel tasks (React's render scheduling) until the loop ends. */
+export async function yieldToMainThread(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    if (typeof window.requestAnimationFrame === 'function') {
+      window.requestAnimationFrame(() => { window.setTimeout(resolve, 0); });
+    } else {
+      window.setTimeout(resolve, 0);
+    }
+  });
+}
+
+function abortError(): DOMException {
+  return new DOMException('print rendering aborted', 'AbortError');
+}
+
+/** Load one data-URL image; null on failure (a broken image must not block printing). */
+function loadPrintImage(src: string): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    const el = new Image();
+    const finish = (ok: boolean): void => {
+      el.onload = null;
+      el.onerror = null;
+      resolve(ok ? el : null);
+    };
+    el.onload = () => finish(true);
+    el.onerror = () => finish(false);
+    el.src = src;
+  });
+}
+
+/** Excel prints floating images. Only data-URL images are supported (no
+ * network fetches here); each is loaded once per sheet before its pages paint. */
+async function loadPrintImageLayers(store: Store, sheetId: string): Promise<readonly PrintImageLayer[]> {
+  const specs = store.getImages(sheetId).filter((spec) => spec.src.startsWith('data:'));
+  const layers: PrintImageLayer[] = [];
+  for (const spec of specs) {
+    const el = await loadPrintImage(spec.src);
+    if (el !== null) layers.push({ el, spec });
+  }
+  return layers;
+}
+
+/** Progressive twin of renderWorkbookPrintPages: pagination runs synchronously
+ * (cheap), then pages paint one at a time. After each page the PNG is encoded
+ * immediately (amortizing toDataURL into the chunks), `onProgress` fires, and
+ * the main thread is yielded so the preview UI can repaint. `signal` cancels —
+ * rejects with an AbortError named DOMException once the signal is set; no
+ * further pages paint and onProgress stops firing.
+ *
+ * Signature: renderWorkbookPrintPagesAsync(
+ *   store, settings, scope = 'active',
+ *   onProgress?: (p: WorkbookRenderProgress) => void,
+ *   signal?: AbortSignal,
+ * ): Promise<AsyncWorkbookPrintResult>
+ */
+export async function renderWorkbookPrintPagesAsync(
+  store: Store,
+  settings: PrintSettings,
+  scope: PrintScope = 'active',
+  onProgress?: ((progress: WorkbookRenderProgress) => void) | undefined,
+  signal?: AbortSignal | undefined,
+): Promise<AsyncWorkbookPrintResult> {
+  if (signal?.aborted === true) throw abortError();
+  const plan = planWorkbookPrintPages(store, settings, scope);
+  const partCanvases: HTMLCanvasElement[][] = plan.parts.map(() => []);
+  const pages: WorkbookPrintPage[] = [];
+  const canvases: HTMLCanvasElement[] = [];
+  const throwIfAborted = (): void => {
+    if (signal?.aborted === true) throw abortError();
+  };
+  let done = 0;
+  // Workbook-global running count for {page} (per sheet: down-then-across) —
+  // the base accumulates per part, exactly like the sync version.
+  let plannedBefore = 0;
+  for (let partIdx = 0; partIdx < plan.parts.length; partIdx += 1) {
+    const partPlan = plan.parts[partIdx]!;
+    const painter = new PrintPainter(store, partPlan.sheetId);
+    // Only await image loading when there is something to load — an empty
+    // sheet keeps the whole first page on the synchronous effect path.
+    let images: readonly PrintImageLayer[] = [];
+    if (partPlan.geometry.pages.length > 0 && store.getImages(partPlan.sheetId).some((spec) => spec.src.startsWith('data:'))) {
+      images = await loadPrintImageLayers(store, partPlan.sheetId);
+      throwIfAborted();
+    }
+    for (const page of partPlan.geometry.pages) {
+      throwIfAborted();
+      const global = page.index + plannedBefore;
+      const numbered = global === page.index ? page : { ...page, index: global };
+      const canvas = painter.paint(numbered, partPlan.geometry.scale, settings, plan.totalPages, images);
+      const dataUrl = canvas.toDataURL('image/png');
+      partCanvases[partIdx]!.push(canvas);
+      pages.push({ canvas, dataUrl });
+      canvases.push(canvas);
+      done += 1;
+      onProgress?.({ done, total: plan.totalPages, pageIndex: global, canvas, dataUrl });
+      // Yield after every page except the last — the caller's .then completes
+      // the render without an extra frame of latency.
+      if (done < plan.totalPages) {
+        throwIfAborted();
+        await yieldToMainThread();
+      }
+    }
+    plannedBefore += partPlan.geometry.pages.length;
+  }
+  const parts: SheetPrintPart[] = plan.parts.map((partPlan, i) => ({
+    sheetId: partPlan.sheetId,
+    sheetName: partPlan.sheetName,
+    geometry: partPlan.geometry,
+    canvases: partCanvases[i] ?? [],
+  }));
+  return { parts, canvases, totalPages: plan.totalPages, pages };
 }
 
 const PRINT_ROOT_ID = 'ss-print-root';
@@ -101,7 +261,10 @@ const PRINT_STYLE_ID = 'ss-print-style';
 /** Fallback cleanup delay when afterprint never fires (some embedded WebViews). */
 const CLEANUP_FALLBACK_MS = 60_000;
 
-export function printPages(result: { readonly canvases: readonly HTMLCanvasElement[] }, settings: PrintSettings): void {
+export function printPages(
+  result: { readonly canvases: readonly HTMLCanvasElement[]; readonly pages?: readonly { readonly dataUrl: string }[] },
+  settings: PrintSettings,
+): void {
   cleanupPrintDocument();
   const paper = paperPx(settings);
   const content = contentPx(settings);
@@ -109,7 +272,7 @@ export function printPages(result: { readonly canvases: readonly HTMLCanvasEleme
 
   const root = document.createElement('div');
   root.id = PRINT_ROOT_ID;
-  result.canvases.forEach((canvas) => {
+  result.canvases.forEach((canvas, index) => {
     const pageDiv = document.createElement('div');
     pageDiv.className = 'ss-print-page';
     // The page img is absolutely positioned at the margin offset — without a
@@ -121,7 +284,9 @@ export function printPages(result: { readonly canvases: readonly HTMLCanvasEleme
     pageDiv.style.height = `${paper.h}px`;
     const img = document.createElement('img');
     img.alt = '';
-    img.src = canvas.toDataURL('image/png');
+    // Prefer the pre-encoded PNG from an async render; the sync path still
+    // encodes here (only once per canvas either way).
+    img.src = result.pages?.[index]?.dataUrl ?? canvas.toDataURL('image/png');
     img.style.position = 'absolute';
     img.style.left = `${margin}px`;
     img.style.top = `${margin}px`;

@@ -37,7 +37,9 @@ const MAX_SCALE = 3;
 /** Tolerance so a band whose scaled width lands within half a px still fits. */
 const FIT_EPSILON = 0.5;
 
-/** Bottom-right of the sheet's used range (cells, styles, merges). Empty sheet → A1. */
+/** Bottom-right of the sheet's used range (cells, styles, merges, and the
+ * `to` edge of floating images and chart anchors — Excel prints floating
+ * objects that lie outside the data area). Empty sheet → A1. */
 export function usedRange(store: Store, sheetId = store.getActiveSheetId()): UsedRange {
   let maxR = 0;
   let maxC = 0;
@@ -53,6 +55,15 @@ export function usedRange(store: Store, sheetId = store.getActiveSheetId()): Use
     const { r2, c2 } = parseRange(merge);
     if (r2 > maxR) maxR = r2;
     if (c2 > maxC) maxC = c2;
+  }
+  const extendTo = (r: number, c: number): void => {
+    if (r > maxR) maxR = r;
+    if (c > maxC) maxC = c;
+  };
+  for (const image of store.getImages(sheetId)) extendTo(image.anchor.to.r, image.anchor.to.c);
+  for (const chart of store.getCharts(sheetId)) {
+    const to = chart.anchor?.to;
+    if (to !== undefined) extendTo(to.r, to.c);
   }
   return { r1: 0, c1: 0, r2: maxR, c2: maxC };
 }
@@ -73,8 +84,11 @@ export function paginate(store: Store, sheetId: string, used: UsedRange, setting
 
   let totalW = 0;
   for (let c = used.c1; c <= used.c2; c += 1) totalW += colWidth(c);
+  // Excel's "fit to N pages wide" only shrinks: a sheet narrower than the
+  // page content prints at 100%, never enlarged (still floored at MIN_SCALE).
+  // Custom scaling keeps its own MIN/MAX clamp.
   const scale = settings.scaleMode === 'fitWidth'
-    ? clampScale(totalW <= 0 ? 1 : content.w / totalW)
+    ? totalW <= 0 ? 1 : Math.max(MIN_SCALE, Math.min(1, content.w / totalW))
     : clampScale(settings.scalePercent / 100);
 
   const colBands = axisBands(
