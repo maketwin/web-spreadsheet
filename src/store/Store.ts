@@ -162,6 +162,14 @@ export class Store {
     for (const [sid, n] of nextNames) this.sheetNames.set(sid, n);
     for (const [sid, c] of nextColors) this.sheetColors.set(sid, c);
     this.activeSheetId = id;
+    // Spill shadows in the copy still name the SOURCE sheet's anchor; re-key
+    // them, or the copy's own anchor sees its shadows as blockers (#SPILL!).
+    const sourcePrefix = `${sheetId}:`;
+    for (const [key, cell] of this.getCells(id)) {
+      if (cell.spillOf === undefined || !cell.spillOf.startsWith(sourcePrefix)) continue;
+      const sep = key.indexOf(',');
+      this.setCell(Number(key.slice(0, sep)), Number(key.slice(sep + 1)), { ...cell, spillOf: `${id}:${cell.spillOf.slice(sourcePrefix.length)}` }, id);
+    }
     this.replayFormulaCells(id);
     this.notify({ type: 'sheet', action: 'add', sheetId: id, name });
     return id;
@@ -491,6 +499,11 @@ export class Store {
       const ids = new Set(this.sheets.keys());
       this.activeSheetId = ids.has(data.activeSheetId) ? data.activeSheetId : (this.sheets.keys().next().value as string);
       this.nextSheetNumber = this.sheets.size + 1;
+      // Announced first: subscribers holding per-cell state (the formula
+      // engine's registrations) rebuild from the final state instead of
+      // patching it — cells the new workbook lacks never emit an event, so
+      // patching would leave their old registrations behind as ghosts.
+      this.notify({ type: 'workbook', action: 'replace' });
       oldIds.forEach((sheetId) => { if (!ids.has(sheetId)) this.notify({ type: 'sheet', action: 'delete', sheetId }); });
       next.forEach((sheet) => { this.notify({ type: 'sheet', action: 'add', sheetId: sheet.id, name: sheet.name }); });
       this.notify({ type: 'sheet', action: 'activate', sheetId: this.activeSheetId });
@@ -610,7 +623,7 @@ function eventWithSheet<T extends StoreEvent>(event: T, sheetId: string): T {
 
 /** Coalescing key for deferred batch events; undefined events always fire in order. */
 function eventKey(e: StoreEvent): string | undefined {
-  const sheet = e.sheetId ?? 'sheet-1';
+  const sheet = 'sheetId' in e ? (e.sheetId ?? 'sheet-1') : 'sheet-1';
   switch (e.type) {
     case 'cell': return `cell:${sheet}:${e.r},${e.c}`;
     case 'row': return `row:${sheet}:${e.r}`;

@@ -108,7 +108,9 @@ export type StoreEvent =
   | { type: 'style'; id: string; style: Style | undefined; sheetId?: string }
   | { type: 'merge'; range: string; sheetId?: string }
   | { type: 'sheet'; action: 'activate' | 'add' | 'rename' | 'delete'; sheetId: string; name?: string }
-  | { type: 'autofilter'; sheetId: string };
+  | { type: 'autofilter'; sheetId: string }
+  /** The whole workbook was swapped (open / new / restore): cached registrations are void. */
+  | { type: 'workbook'; action: 'replace' };
 
 export type Unsubscribe = () => void;
 

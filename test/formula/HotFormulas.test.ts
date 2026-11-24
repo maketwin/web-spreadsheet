@@ -64,9 +64,10 @@ describe('hot formulas (tier 1)', () => {
   });
 
   it('DATE / TIME construct normalized values', () => {
-    expect(run('=DATE(2026,9,22)')).toBe('2026-09-22');
-    // month overflow rolls over (Excel calendar arithmetic)
-    expect(run('=DATE(2026,13,1)')).toBe('2027-01-01');
+    // DATE() is the day's Excel serial number — the value an xlsx import stores for 2026-09-22.
+    expect(run('=DATE(2026,9,22)')).toBe(46287);
+    // month overflow rolls over (Excel calendar arithmetic): DATE(2026,13,1) is 2027-01-01
+    expect(run('=DATE(2026,13,1)')).toBe(46388);
     expect(run('=YEAR(DATE(2026,9,22))')).toBe(2026);
     expect(run('=TIME(13,30,5)')).toBe('13:30:05');
     expect(run('=TIME(25,0,0)')).toBe('01:00:00');

@@ -92,7 +92,64 @@ export function displayTextOf(cell: Cell | undefined, style: Style | undefined):
   return cell.text;
 }
 
-const REF_OR_RANGE_TOKEN = /\$?[A-Za-z]{1,3}\$?[1-9]\d*(?::\$?[A-Za-z]{1,3}\$?[1-9]\d*)?(?![\w(])/g;
+/** One A1 reference or range (`B2`, `$A$1:C3`), anchored at the start of the text being tried. */
+const REF_OR_RANGE_TOKEN = /^\$?[A-Za-z]{1,3}\$?[1-9]\d*(?::\$?[A-Za-z]{1,3}\$?[1-9]\d*)?/;
+
+/**
+ * Rewrite every reference token of a formula. Quoted spans — `"…"` string
+ * literals and `'…'` sheet names — are copied verbatim, so the `A1` in
+ * `"Item A1"` or in a sheet called `Q1` is never taken for a cell; a token
+ * followed by `!` is a sheet name as well. `offset` is the token's position
+ * in `formula`, for callers that look at the `!` scope before it.
+ */
+export function replaceRefTokens(formula: string, rewrite: (token: string, offset: number) => string): string {
+  let out = '';
+  let i = 0;
+  while (i < formula.length) {
+    const ch = formula.charAt(i);
+    if (ch === '"' || ch === "'") {
+      const end = quotedEnd(formula, i);
+      out += formula.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (ch === '$' || (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z')) {
+      const token = formula.slice(i).match(REF_OR_RANGE_TOKEN)?.[0];
+      if (token !== undefined && isRefToken(formula, i, token)) {
+        out += rewrite(token, i);
+        i += token.length;
+        continue;
+      }
+    }
+    out += ch;
+    i += 1;
+  }
+  return out;
+}
+
+/** Index just past the closing quote of the quoted span opening at `start` (a doubled quote is an escape). */
+function quotedEnd(formula: string, start: number): number {
+  const quote = formula[start];
+  for (let i = start + 1; i < formula.length; i += 1) {
+    if (formula[i] !== quote) continue;
+    if (formula[i + 1] === quote) { i += 1; continue; }
+    return i + 1;
+  }
+  return formula.length;
+}
+
+/**
+ * A reference token in its own right: not glued to an identifier, number or
+ * `.` (function names, scientific literals), not a call (`LOG10(`), and not
+ * a sheet name (`Q1!B2`).
+ */
+function isRefToken(formula: string, offset: number, token: string): boolean {
+  const prev = formula[offset - 1];
+  if (prev !== undefined && /[\w$.]/.test(prev)) return false;
+  const next = formula[offset + token.length];
+  if (next !== undefined && /[\w(!]/.test(next)) return false;
+  return true;
+}
 
 /**
  * Rewrite same-sheet A1 references pointing inside the sorted range through
@@ -113,7 +170,7 @@ export interface RemapScope {
 }
 
 export function remapFormulaRows(formula: string, rows: ReadonlyMap<number, number>, c1: number, c2: number, scope?: RemapScope): string {
-  return formula.replace(REF_OR_RANGE_TOKEN, (token, offset: number) => {
+  return replaceRefTokens(formula, (token, offset) => {
     // A token glued to a preceding identifier, number, or '.' is part of a
     // function name or scientific literal. A '!' prefix marks a sheet scope:
     // remap only when it names the sorted sheet.
@@ -186,7 +243,7 @@ export interface ShiftScope {
  * (with scopedOnly) unscoped tokens in other sheets' formulas stay put.
  */
 export function shiftFormulaRows(formula: string, start: number, count: number, scope?: ShiftScope): string {
-  return formula.replace(REF_OR_RANGE_TOKEN, (token, offset: number) => {
+  return replaceRefTokens(formula, (token, offset) => {
     if (!tokenInShiftScope(formula, offset, scope)) return token;
     const clamp = (i: number): number => Math.min(i, TOTAL_ROWS - 1); // fixed grid: Excel clamps refs at the edge
     const parts = token.split(':');
@@ -208,7 +265,7 @@ export function shiftFormulaRows(formula: string, start: number, count: number, 
 
 /** Column counterpart of {@link shiftFormulaRows}. */
 export function shiftFormulaCols(formula: string, start: number, count: number, scope?: ShiftScope): string {
-  return formula.replace(REF_OR_RANGE_TOKEN, (token, offset: number) => {
+  return replaceRefTokens(formula, (token, offset) => {
     if (!tokenInShiftScope(formula, offset, scope)) return token;
     const clamp = (i: number): number => Math.min(i, TOTAL_COLS - 1); // fixed grid: Excel clamps refs at the edge
     const parts = token.split(':');
@@ -321,6 +378,11 @@ export interface NamedDepArea {
 export function formulaDependencies(formula: string, expandName?: (name: string) => NamedDepArea | undefined): string[] {
   const ast = new FormulaParser().parse(formula);
   if (ast === null) return [];
+  return dependenciesOfAst(ast, expandName);
+}
+
+/** Precedent cell ids of an already parsed formula — {@link formulaDependencies} without the parse. */
+export function dependenciesOfAst(ast: AstNode, expandName?: (name: string) => NamedDepArea | undefined): string[] {
   const deps = new Set<string>();
   collectDeps(ast, deps, expandName);
   return [...deps];
@@ -350,9 +412,13 @@ function collectDeps(node: AstNode, deps: Set<string>, expandName: ((name: strin
       }
       return;
     }
-    case 'func':
+    case 'func': {
+      // INDIRECT("B2") names its target only at run time; a literal argument
+      // is still a known precedent, so the formula recalculates when it changes.
+      if (node.name.toUpperCase() === 'INDIRECT') addIndirectLiteralDeps(node.args[0], deps);
       node.args.forEach((arg) => collectDeps(arg, deps, expandName));
       return;
+    }
     case 'binary':
       collectDeps(node.left, deps, expandName);
       collectDeps(node.right, deps, expandName);
@@ -368,6 +434,24 @@ function collectDeps(node: AstNode, deps: Set<string>, expandName: ((name: strin
 function addDep(deps: Set<string>, r: number, c: number, sheetName: string | undefined): void {
   const id = cellId(r, c);
   deps.add(sheetName !== undefined ? `${sheetName}:${id}` : id);
+}
+
+/** `A1`, `A1:B2`, each optionally `Sheet!`-scoped: the reference text INDIRECT accepts. */
+const INDIRECT_TARGET = /^\s*(?:(?:'((?:[^']|'')+)'|([^!]+))!)?\s*(\$?[A-Za-z]{1,3}\$?[1-9]\d*)(?:\s*:\s*(\$?[A-Za-z]{1,3}\$?[1-9]\d*))?\s*$/;
+
+function addIndirectLiteralDeps(arg: AstNode | undefined, deps: Set<string>): void {
+  if (arg === undefined || arg.type !== 'string') return;
+  const match = arg.value.match(INDIRECT_TARGET);
+  const start = match?.[3];
+  if (start === undefined) return;
+  const end = match?.[4] ?? start;
+  const sheetName = match?.[1]?.replaceAll("''", "'") ?? match?.[2];
+  const bare = (token: string): string => token.replaceAll('$', '');
+  const from = exprToCoords(bare(start));
+  const to = exprToCoords(bare(end));
+  for (let r = Math.min(from.r, to.r); r <= Math.max(from.r, to.r); r += 1) {
+    for (let c = Math.min(from.c, to.c); c <= Math.max(from.c, to.c); c += 1) addDep(deps, r, c, sheetName);
+  }
 }
 
 export function parseRange(rangeStr: string): { r1: number; c1: number; r2: number; c2: number } {

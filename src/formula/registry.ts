@@ -1,5 +1,6 @@
 import type { FormulaArgument, FormulaValue } from './types';
-import { matrix } from './types';
+import { isExcelError, isMatrix, matrix } from './types';
+import { formatCustom } from '../format/CustomFormat';
 
 export interface FunctionSpec {
   minArgs: number;
@@ -89,21 +90,28 @@ registry.register('SQRT', { minArgs: 1, maxArgs: 1, evaluate: ([n]) => {
 registry.register('PI', { minArgs: 0, maxArgs: 0, evaluate: () => Math.PI });
 registry.register('TRUE', { minArgs: 0, maxArgs: 0, evaluate: () => true });
 registry.register('FALSE', { minArgs: 0, maxArgs: 0, evaluate: () => false });
+registry.register('NA', { minArgs: 0, maxArgs: 0, evaluate: () => '#N/A' });
 registry.register('ISBLANK', { minArgs: 1, maxArgs: 1, evaluate: ([v]) => first(v) === null || first(v) === undefined || first(v) === '' });
 registry.register('ISNUMBER', { minArgs: 1, maxArgs: 1, evaluate: ([v]) => typeof first(v) === 'number' && Number.isFinite(first(v) as number) });
 registry.register('ISTEXT', { minArgs: 1, maxArgs: 1, evaluate: ([v]) => typeof first(v) === 'string' && !isExcelError(first(v)) });
 registry.register('ISERROR', { minArgs: 1, maxArgs: 1, evaluate: ([v]) => isExcelError(first(v)) });
+// Excel: ISERR is every error except #N/A.
+registry.register('ISERR', { minArgs: 1, maxArgs: 1, evaluate: ([v]) => { const e = first(v); return isExcelError(e) && e !== '#N/A'; } });
 registry.register('ISNA', { minArgs: 1, maxArgs: 1, evaluate: ([v]) => first(v) === '#N/A' });
 
-registry.register('NOW', { minArgs: 0, maxArgs: 0, evaluate: () => new Date() });
-registry.register('TODAY', { minArgs: 0, maxArgs: 0, evaluate: () => new Date().toISOString().slice(0, 10) });
+// Dates are Excel serial numbers (1900 date system: serial 1 = 1899-12-31), the
+// same value an xlsx import leaves in a date cell — so they add and subtract.
+registry.register('NOW', { minArgs: 0, maxArgs: 0, evaluate: () => nowSerial(new Date()) });
+registry.register('TODAY', { minArgs: 0, maxArgs: 0, evaluate: () => todaySerial(new Date()) });
 registry.register('DATE', { minArgs: 3, maxArgs: 3, evaluate: ([y, m, d]) => dateOf(first(y), first(m), first(d)) });
 registry.register('TIME', { minArgs: 3, maxArgs: 3, evaluate: ([h, m, s]) => timeOf(first(h), first(m), first(s)) });
 registry.register('DATEDIF', { minArgs: 3, maxArgs: 3, evaluate: ([a, b, unit]) => dateDif(first(a), first(b), text(first(unit))) });
-registry.register('YEAR', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => toDate(first(d)).getUTCFullYear() });
-registry.register('MONTH', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => toDate(first(d)).getUTCMonth() + 1 });
-registry.register('DAY', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => toDate(first(d)).getUTCDate() });
-registry.register('HOUR', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => toDate(first(d)).getUTCHours() });
+registry.register('YEAR', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => dateParts(first(d)).year });
+registry.register('MONTH', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => dateParts(first(d)).month });
+registry.register('DAY', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => dateParts(first(d)).day });
+registry.register('HOUR', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => dateParts(first(d)).hours });
+registry.register('MINUTE', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => dateParts(first(d)).minutes });
+registry.register('SECOND', { minArgs: 1, maxArgs: 1, evaluate: ([d]) => dateParts(first(d)).seconds });
 
 // ——— Text positions / replacement ———
 registry.register('FIND', { minArgs: 2, maxArgs: 3, evaluate: ([needle, hay, start]) => findText(text(first(needle)), text(first(hay)), first(start), false) });
@@ -193,9 +201,11 @@ function isFormulaList(value: FormulaArgument): value is readonly FormulaValue[]
   return Array.isArray(value);
 }
 
+/** Excel rounds halves away from zero (ROUND(-2.5) is -3); Math.round alone would give -2. */
 function round(n: FormulaValue | undefined, d: FormulaValue | undefined): number {
   const factor = Math.pow(10, d !== undefined ? Number(d) : 0);
-  return Math.round(Number(n) * factor) / factor;
+  const scaled = Number(n) * factor;
+  return (Math.sign(scaled) * Math.round(Math.abs(scaled))) / factor;
 }
 
 function right(s: FormulaValue | undefined, n: FormulaValue | undefined): string {
@@ -310,33 +320,54 @@ function textJoin(args: FormulaArgument[]): string {
   return parts.join(delim);
 }
 
-/** Excel-ish criteria: ">5", ">=10", "<>a", exact / case-insensitive text. */
+type CriteriaOp = '>' | '<' | '>=' | '<=' | '<>' | '=';
+
+const CRITERIA_OPS: readonly CriteriaOp[] = ['>=', '<=', '<>', '>', '<', '='];
+
+/**
+ * Excel criteria (COUNTIF / SUMIF family): a number, a comparison (`">5"`,
+ * `"<>a"`) or text — case-insensitive, `*` / `?` wildcards with `~` as the
+ * escape. A blank cell (or an empty string) satisfies only `""` / `"="`; it
+ * never matches a comparison, so `"<5"` over an empty range counts nothing.
+ */
 function matchesCriteria(value: FormulaValue | undefined, criteria: FormulaValue | undefined): boolean {
-  if (criteria === undefined || criteria === null) return value === null || value === undefined || value === '';
-  const crit = String(criteria);
-  const ops = ['>=', '<=', '<>', '>', '<', '='] as const;
-  for (const op of ops) {
-    if (crit.startsWith(op)) return compareCriteria(value, crit.slice(op.length), op);
+  const blank = value === null || value === undefined || value === '';
+  if (criteria === undefined || criteria === null) return blank;
+  const crit = text(criteria);
+  for (const op of CRITERIA_OPS) {
+    if (crit.startsWith(op)) return applyCriteria(value, blank, crit.slice(op.length), op);
   }
-  return compareCriteria(value, crit, '=');
+  return applyCriteria(value, blank, crit, '=');
 }
 
-function compareCriteria(value: FormulaValue | undefined, rhsRaw: string, op: string): boolean {
-  const rhsNum = Number(rhsRaw);
-  const lhsNum = typeof value === 'number' ? value : Number(value);
-  const bothNum = Number.isFinite(rhsNum) && Number.isFinite(lhsNum) && String(value ?? '').trim() !== '';
-  if (bothNum) {
-    switch (op) {
-      case '>': return lhsNum > rhsNum;
-      case '<': return lhsNum < rhsNum;
-      case '>=': return lhsNum >= rhsNum;
-      case '<=': return lhsNum <= rhsNum;
-      case '<>': return lhsNum !== rhsNum;
-      default: return lhsNum === rhsNum;
-    }
+function applyCriteria(value: FormulaValue | undefined, blank: boolean, rhs: string, op: CriteriaOp): boolean {
+  if (op === '<>') return !blank && !equalCriteria(value, rhs);
+  if (blank) return rhs === '';
+  if (rhs === '') return false;
+  const rhsNum = numericOf(rhs);
+  if (rhsNum !== undefined) {
+    // A numeric criterion only ever compares numbers (numeric text coerces), like Excel's COUNTIF.
+    const lhsNum = numericOf(value);
+    return lhsNum !== undefined && compareNumbers(lhsNum, rhsNum, op);
   }
-  const lhs = String(value ?? '').toLowerCase();
-  const rhs = rhsRaw.toLowerCase();
+  // Text ordering compares text with text; numbers are left out.
+  if (op !== '=') return typeof value === 'string' && orderText(value.toLowerCase(), rhs.toLowerCase(), op);
+  return equalCriteria(value, rhs);
+}
+
+/** Numeric when both sides read as numbers, otherwise Excel text matching (case-insensitive, wildcards). */
+function equalCriteria(value: FormulaValue | undefined, rhs: string): boolean {
+  const rhsNum = numericOf(rhs);
+  if (rhsNum !== undefined) {
+    const lhsNum = numericOf(value);
+    return lhsNum !== undefined && lhsNum === rhsNum;
+  }
+  const pattern = rhs.toLowerCase();
+  if (!/[*?~]/.test(pattern)) return text(value).toLowerCase() === pattern;
+  return typeof value === 'string' && new RegExp(`^${wildcardToRegExp(pattern, '').source}$`).test(value.toLowerCase());
+}
+
+function compareNumbers(lhs: number, rhs: number, op: CriteriaOp): boolean {
   switch (op) {
     case '>': return lhs > rhs;
     case '<': return lhs < rhs;
@@ -347,8 +378,13 @@ function compareCriteria(value: FormulaValue | undefined, rhsRaw: string, op: st
   }
 }
 
-function isExcelError(v: FormulaValue | undefined): boolean {
-  return typeof v === 'string' && ['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A'].includes(v);
+function orderText(lhs: string, rhs: string, op: CriteriaOp): boolean {
+  switch (op) {
+    case '>': return lhs > rhs;
+    case '<': return lhs < rhs;
+    case '>=': return lhs >= rhs;
+    default: return lhs <= rhs;
+  }
 }
 
 function valueFn(v: FormulaValue | undefined): FormulaArgument {
@@ -374,9 +410,26 @@ function finitePower(b: FormulaValue | undefined, e: FormulaValue | undefined): 
   return r;
 }
 
-/** Minimal TEXT: 0 / 0.00 / #,##0 / General. */
+/** True for a format built from date/time tokens (outside quotes and [brackets]) rather than digit placeholders. */
+function isDateTimeFormat(pattern: string): boolean {
+  return /[ymdhs]/i.test(pattern.replace(/\[[^\]]*\]/g, '').replace(/"[^"]*"/g, ''));
+}
+
+/**
+ * Minimal TEXT: 0 / 0.00 / #,##0 / General, and the date/time formats
+ * (yyyy-mm-dd, yyyy/m/d, mm/dd/yyyy, d-mmm-yyyy, hh:mm …) — the cell
+ * formatter applied to the serial of a number, a date/time text or a Date.
+ * Anything that is not a date comes back as text.
+ */
+function dateTimeText(v: FormulaValue | undefined, pattern: string): string {
+  const ms = wallClockMs(v);
+  const formatted = Number.isNaN(ms) ? undefined : formatCustom((ms - EXCEL_EPOCH_MS) / DAY_MS, pattern);
+  return formatted === undefined ? text(v) : formatted.text;
+}
+
 function textFormat(v: FormulaValue | undefined, fmt: FormulaValue | undefined): string {
   const pattern = String(fmt ?? 'General');
+  if (isDateTimeFormat(pattern)) return dateTimeText(v, pattern);
   const n = typeof v === 'number' ? v : Number(v);
   if (!Number.isFinite(n)) return String(v ?? '');
   if (pattern === '0') return String(Math.round(n));
@@ -391,11 +444,17 @@ function textFormat(v: FormulaValue | undefined, fmt: FormulaValue | undefined):
 }
 
 
-/** Excel serial 1 = 1900-01-01, with the 1900 leap-year bug. Same epoch as NumberFormatter.serialToDate. */
+/**
+ * Excel serial 1 = 1899-12-31: the epoch sits two days before 1900, which
+ * absorbs Excel's phantom 1900-02-29 for every date from 1900-03-01 on. The
+ * same epoch as NumberFormatter.serialToDate and the xlsx import, so a serial
+ * from DATE() is exactly what an imported date cell holds.
+ */
 const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
+const DAY_MS = 86_400_000;
 
 function serialToDate(serial: number): Date {
-  return new Date(EXCEL_EPOCH_MS + Math.round(serial * 86_400_000));
+  return new Date(EXCEL_EPOCH_MS + Math.round(serial * DAY_MS));
 }
 
 function toDate(value: FormulaValue | undefined): Date {
@@ -405,7 +464,7 @@ function toDate(value: FormulaValue | undefined): Date {
     const trimmed = value.trim();
     // Bare time strings ("13:30") don't parse in every engine — anchor them at UTC.
     if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(trimmed)) return new Date(`1970-01-01T${trimmed.length === 5 ? `${trimmed}:00` : trimmed}Z`);
-    // DATE() returns YYYY-MM-DD. Parse as a calendar day, not a local instant.
+    // A YYYY-MM-DD text is a calendar day, not a local instant.
     if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return new Date(`${trimmed}T00:00:00Z`);
     if (/^-?\d+(\.\d+)?$/.test(trimmed)) return serialToDate(Number(trimmed));
     return new Date(trimmed);
@@ -413,7 +472,60 @@ function toDate(value: FormulaValue | undefined): Date {
   return new Date('');
 }
 
-/** DATE(y, m, d): Excel normalizes month/day overflow via calendar arithmetic. */
+/**
+ * A date/time argument as the wall-clock instant it stands for (ms; read it
+ * back with the UTC getters). A serial number is a wall-clock date with no
+ * time zone, so it is decoded straight from the 1900 epoch and comes out as
+ * the calendar it was built from — DATE / TODAY / NOW and an xlsx import all
+ * write local dates, so HOUR(NOW()) is the hour on the wall clock in any
+ * zone. A JS Date handed in by the host is a real instant and is read in the
+ * local zone. Text is read as the wall-clock it spells out. NaN when the
+ * value is not a date at all.
+ */
+function wallClockMs(value: FormulaValue | undefined): number {
+  if (value instanceof Date) {
+    return Date.UTC(value.getFullYear(), value.getMonth(), value.getDate(), value.getHours(), value.getMinutes(), value.getSeconds(), value.getMilliseconds());
+  }
+  if (typeof value === 'number') return EXCEL_EPOCH_MS + Math.round(value * DAY_MS);
+  if (typeof value === 'string') return parseWallClock(value.trim());
+  return Number.NaN;
+}
+
+/** Wall-clock ms for the date/time spellings read from text: "13:30[:05]", "2024-01-31[ 13:30[:05]]" (also with "/"), a serial number. NaN for anything else. */
+function parseWallClock(text: string): number {
+  const time = text.match(/^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$/);
+  if (time !== null) {
+    const seconds = Number(time[1] ?? 0) * 3600 + Number(time[2] ?? 0) * 60 + Number(time[3] ?? 0);
+    return EXCEL_EPOCH_MS + seconds * 1000;
+  }
+  const full = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?)?$/);
+  if (full !== null) {
+    return Date.UTC(Number(full[1]), Number(full[2]) - 1, Number(full[3]), Number(full[4] ?? 0), Number(full[5] ?? 0), Number(full[6] ?? 0));
+  }
+  if (/^-?\d+(\.\d+)?$/.test(text)) return EXCEL_EPOCH_MS + Math.round(Number(text) * DAY_MS);
+  // Anything else goes through the engine's own parser; without a zone in the text that is local time.
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? Number.NaN : wallClockMs(parsed);
+}
+
+/** Calendar fields of a date/time argument (NaN each when it is not a date, which becomes #VALUE!). */
+function dateParts(value: FormulaValue | undefined): { readonly year: number; readonly month: number; readonly day: number; readonly hours: number; readonly minutes: number; readonly seconds: number } {
+  const d = new Date(wallClockMs(value));
+  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1, day: d.getUTCDate(), hours: d.getUTCHours(), minutes: d.getUTCMinutes(), seconds: d.getUTCSeconds() };
+}
+
+/** Today's date as its serial number — the local calendar day, built from its own fields so DST cannot shift it. */
+function todaySerial(now: Date): number {
+  return (Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) - EXCEL_EPOCH_MS) / DAY_MS;
+}
+
+/** Now as a serial number: today plus the local clock's fraction of a day. */
+function nowSerial(now: Date): number {
+  const ms = ((now.getHours() * 60 + now.getMinutes()) * 60 + now.getSeconds()) * 1000 + now.getMilliseconds();
+  return todaySerial(now) + ms / DAY_MS;
+}
+
+/** DATE(y, m, d): Excel normalizes month/day overflow via calendar arithmetic; the result is the day's serial number. */
 function dateOf(y: FormulaValue | undefined, m: FormulaValue | undefined, d: FormulaValue | undefined): FormulaArgument {
   const year = Number(y);
   const month = Number(m);
@@ -421,7 +533,7 @@ function dateOf(y: FormulaValue | undefined, m: FormulaValue | undefined, d: For
   if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return '#VALUE!';
   const dt = new Date(Date.UTC(year, month - 1, day));
   if (dt.getUTCFullYear() < 0 || dt.getUTCFullYear() > 9999) return '#NUM!';
-  return dt.toISOString().slice(0, 10);
+  return (dt.getTime() - EXCEL_EPOCH_MS) / DAY_MS;
 }
 
 /** TIME(h, m, s): normalized "HH:mm:ss" (values wrap around midnight, Excel-style). */
@@ -607,14 +719,19 @@ function maxMinIfs(args: FormulaArgument[], which: 'max' | 'min'): FormulaArgume
 }
 
 // --- Dynamic-array functions (FILTER / UNIQUE / SORT / SEQUENCE) ---
-// These return arrays for nesting inside aggregates (SUM(UNIQUE(…)), …);
-// top-level spill-into-neighbours is not modelled in this build.
+// They return a matrix: nested inside an aggregate it flattens to its
+// row-major list; as a cell's own result the engine spills it over that
+// extent. The evaluator hands a range reference to UNIQUE / SORT / FILTER
+// with its row/column extent; any other list arrives as one column.
 
-function flat1(value: FormulaArgument | undefined): FormulaValue[] {
-  if (value === undefined) return [];
-  if (Array.isArray(value)) return [...value];
-  if (typeof value === 'object' && value !== null && (value as { __matrix?: boolean }).__matrix === true) return [...(value as { data: readonly FormulaValue[] }).data];
-  return [value as FormulaValue];
+/** An argument as a row-major table: a matrix keeps its extent, a plain list is one column, a scalar one cell. */
+interface Table { readonly rows: number; readonly cols: number; readonly data: readonly FormulaValue[] }
+
+function tableOf(value: FormulaArgument | undefined): Table {
+  if (value === undefined) return { rows: 0, cols: 0, data: [] };
+  if (isMatrix(value)) return value;
+  if (isFormulaList(value)) return { rows: value.length, cols: 1, data: value };
+  return { rows: 1, cols: 1, data: [value] };
 }
 
 function includeTruthy(v: FormulaValue): boolean {
@@ -630,47 +747,108 @@ function uniqueKey(v: FormulaValue): string {
   return `t:${String(v)}`;
 }
 
-function uniqueOf(values: FormulaValue[]): FormulaValue[] {
+/**
+ * UNIQUE(array): the distinct rows of a table, shape kept. A single row is
+ * deduplicated along itself and comes back as a row.
+ */
+function uniqueOf(value: FormulaArgument | undefined): FormulaArgument {
+  const t = tableOf(value);
+  if (t.rows === 0) return '#CALC!';
+  const alongRow = t.rows === 1;
+  const width = alongRow ? 1 : t.cols;
+  const count = alongRow ? t.cols : t.rows;
   const seen = new Set<string>();
-  const out: FormulaValue[] = [];
-  for (const v of values) {
-    const key = uniqueKey(v);
-    if (!seen.has(key)) {
-      seen.add(key);
-      out.push(v);
-    }
+  const kept: FormulaValue[][] = [];
+  for (let i = 0; i < count; i += 1) {
+    const from = alongRow ? i : i * t.cols;
+    const item = t.data.slice(from, from + width);
+    const key = item.map(uniqueKey).join('\u0000');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    kept.push(item);
   }
-  return out;
+  return alongRow ? matrix(1, kept.length, kept.flat()) : matrix(kept.length, t.cols, kept.flat());
 }
 
-function sortOf(values: FormulaValue[], order: FormulaArgument | undefined): FormulaArgument {
-  const direction = order === undefined ? 1 : Number(Array.isArray(order) ? order[0] : order);
-  if (direction !== 1 && direction !== -1) return '#VALUE!';
+/** Excel sort order: numbers, text, booleans, blanks; numbers numerically, text case-insensitively. */
+function compareSortKeys(a: FormulaValue, b: FormulaValue): number {
   const rank = (v: FormulaValue): number => {
     if (typeof v === 'number') return 0;
     if (typeof v === 'string') return 1;
     if (typeof v === 'boolean') return 2;
     return 3;
   };
-  const sorted = [...values].sort((a, b) => {
-    const ra = rank(a);
-    const rb = rank(b);
-    if (ra !== rb) return ra - rb;
-    if (typeof a === 'number' && typeof b === 'number') return a - b;
-    const ta = a === null ? '' : String(a);
-    const tb = b === null ? '' : String(b);
-    return ta.localeCompare(tb, 'zh-Hans-CN', { sensitivity: 'base' });
-  });
-  return direction === -1 ? sorted.reverse() : sorted;
+  const ra = rank(a);
+  const rb = rank(b);
+  if (ra !== rb) return ra - rb;
+  if (typeof a === 'number' && typeof b === 'number') return a - b;
+  const ta = a === null ? '' : String(a);
+  const tb = b === null ? '' : String(b);
+  return ta.localeCompare(tb, 'zh-Hans-CN', { sensitivity: 'base' });
 }
 
+/**
+ * SORT(array, [sort_index], [sort_order], [by_col]): rows reordered by the
+ * sort_index-th column (1-based), or columns by the sort_index-th row when
+ * by_col is TRUE; the shape is kept and equal keys keep their order. A lone
+ * negative second argument is the former `order` flag, so SORT(range, -1)
+ * still sorts descending.
+ */
+function sortOf(args: readonly FormulaArgument[]): FormulaArgument {
+  const t = tableOf(args[0]);
+  if (t.rows === 0) return '#CALC!';
+  const indexValue = args[1] === undefined ? 1 : Number(first(args[1]));
+  const legacyDescend = args[2] === undefined && indexValue === -1;
+  const orderValue = legacyDescend ? -1 : (args[2] === undefined ? 1 : Number(first(args[2])));
+  const byCol = args[3] !== undefined && Boolean(first(args[3]));
+  const sortIndex = legacyDescend ? 1 : indexValue;
+  if (!Number.isInteger(sortIndex) || sortIndex < 1 || sortIndex > (byCol ? t.rows : t.cols)) return '#VALUE!';
+  if (orderValue !== 1 && orderValue !== -1) return '#VALUE!';
+  const lines = byCol ? t.cols : t.rows;
+  const keyOf = (line: number): FormulaValue => (byCol
+    ? t.data[(sortIndex - 1) * t.cols + line]
+    : t.data[line * t.cols + sortIndex - 1]) ?? null;
+  const sign = orderValue === -1 ? -1 : 1;
+  const order = Array.from({ length: lines }, (_, i) => i).sort((a, b) => sign * compareSortKeys(keyOf(a), keyOf(b)));
+  const out: FormulaValue[] = new Array(t.rows * t.cols);
+  for (let y = 0; y < t.rows; y += 1) {
+    for (let x = 0; x < t.cols; x += 1) {
+      out[y * t.cols + x] = t.data[(byCol ? y : order[y] ?? 0) * t.cols + (byCol ? order[x] ?? 0 : x)] ?? null;
+    }
+  }
+  return matrix(t.rows, t.cols, out);
+}
+
+/**
+ * FILTER(array, include, [if_empty]): a one-column `include` picks rows, a
+ * one-row one picks columns, and the result keeps the array's other extent
+ * (FILTER(A1:B3, C1:C3=1) is n×2).
+ */
 function filterOf(data: FormulaArgument | undefined, mask: FormulaArgument | undefined, ifEmpty: FormulaArgument | undefined): FormulaArgument {
-  const list = flat1(data);
-  const flags = flat1(mask);
-  if (flags.length === 0) return ifEmpty !== undefined ? (Array.isArray(ifEmpty) ? ifEmpty : first(ifEmpty) ?? '') : '#CALC!';
-  const picked = list.filter((_, i) => includeTruthy(flags[i] ?? false));
-  if (picked.length === 0) return ifEmpty !== undefined ? (Array.isArray(ifEmpty) ? ifEmpty : first(ifEmpty) ?? '') : '#CALC!';
-  return picked;
+  const t = tableOf(data);
+  const m = tableOf(mask);
+  const byRow = m.cols === 1 && (m.rows === t.rows || m.rows === 1);
+  const byCol = !byRow && m.rows === 1 && m.cols === t.cols;
+  if (!byRow && !byCol) return '#VALUE!';
+  const truthy = (i: number): boolean => includeTruthy(m.data[byRow ? (m.rows === 1 ? 0 : i) : i] ?? null);
+  const kept: number[] = [];
+  const count = byRow ? t.rows : t.cols;
+  for (let i = 0; i < count; i += 1) if (truthy(i)) kept.push(i);
+  if (kept.length === 0) {
+    if (ifEmpty === undefined) return '#CALC!';
+    return isMatrix(ifEmpty) || Array.isArray(ifEmpty) ? ifEmpty : first(ifEmpty) ?? '';
+  }
+  const width = byRow ? t.cols : t.rows;
+  const out: FormulaValue[] = new Array(kept.length * width);
+  for (let k = 0; k < kept.length; k += 1) {
+    for (let j = 0; j < width; j += 1) {
+      // Row-major either way: a kept row is a result row, a kept column a result column.
+      out[byRow ? k * width + j : j * kept.length + k] = (byRow
+        ? t.data[(kept[k] ?? 0) * t.cols + j]
+        : t.data[j * t.cols + (kept[k] ?? 0)]) ?? null;
+    }
+  }
+  return byRow ? matrix(kept.length, t.cols, out) : matrix(t.rows, kept.length, out);
 }
 
 function sequenceOf(args: FormulaArgument[]): FormulaArgument {
@@ -696,7 +874,7 @@ function sequenceOf(args: FormulaArgument[]): FormulaArgument {
   return matrix(rows, cols, out);
 }
 
-registry.register('UNIQUE', { minArgs: 1, maxArgs: 1, evaluate: (args) => { const out = uniqueOf(flat1(args[0])); return matrix(out.length, 1, out); } });
-registry.register('SORT', { minArgs: 1, maxArgs: 2, evaluate: (args) => { const out = sortOf(flat1(args[0]), args[1]); if (!Array.isArray(out)) return out; return matrix(out.length, 1, out); } });
-registry.register('FILTER', { minArgs: 2, maxArgs: 3, evaluate: (args) => { const out = filterOf(args[0], args[1], args[2]); if (!Array.isArray(out)) return out; return matrix(out.length, 1, out); } });
+registry.register('UNIQUE', { minArgs: 1, maxArgs: 1, evaluate: ([array]) => uniqueOf(array) });
+registry.register('SORT', { minArgs: 1, maxArgs: 4, evaluate: (args) => sortOf(args) });
+registry.register('FILTER', { minArgs: 2, maxArgs: 3, evaluate: ([array, include, ifEmpty]) => filterOf(array, include, ifEmpty) });
 registry.register('SEQUENCE', { minArgs: 1, maxArgs: 4, evaluate: (args) => sequenceOf(args) });

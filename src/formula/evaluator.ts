@@ -1,6 +1,49 @@
-import { isMatrix, matrix, type MatrixValue } from './types';
+import { isExcelError, isMatrix, matrix, type MatrixValue } from './types';
+import { FormulaParser } from './parser';
 import { registry } from './registry';
 import type { AstNode, CellResolver, FormulaArgument, FormulaValue } from './types';
+
+/** The Excel error literals; the table itself lives in types.ts (the single source). */
+export { EXCEL_ERRORS } from './types';
+
+/** How Excel shows a formula result that is a date: the day, or the day with its time. */
+export type DateResult = 'date' | 'datetime';
+
+/**
+ * 'date' / 'datetime' when a formula's own result is a date value, which
+ * Excel displays as one even under the General format: TODAY() and DATE(…)
+ * give the day, NOW() the day with its time, and a number of days added to or
+ * taken from either stays a date (=TODAY()+1). The difference of two dates is
+ * a plain number of days, and so is everything else — a reference to a date
+ * cell included, since that depends on the cell rather than the formula.
+ */
+export function dateResultOf(node: AstNode): DateResult | undefined {
+  switch (node.type) {
+    case 'func':
+      if (node.name === 'TODAY' || node.name === 'DATE') return 'date';
+      return node.name === 'NOW' ? 'datetime' : undefined;
+    case 'unary':
+      return dateResultOf(node.operand);
+    case 'binary': {
+      if (node.op !== '+' && node.op !== '-') return undefined;
+      const left = dateResultOf(node.left);
+      const right = dateResultOf(node.right);
+      return left === undefined ? right : (right === undefined ? left : undefined);
+    }
+    default:
+      return undefined;
+  }
+}
+
+/** A formula that could have a date result at all — spares parsing the others. */
+const HAS_DATE_FUNCTION = /(^|[^A-Za-z0-9_.])(TODAY|NOW|DATE)\s*\(/i;
+
+/** {@link dateResultOf} for a formula's text (`=TODAY()`); undefined when it is no formula. */
+export function dateResultOfFormula(formula: string | undefined): DateResult | undefined {
+  if (formula === undefined || !HAS_DATE_FUNCTION.test(formula)) return undefined;
+  const ast = new FormulaParser().parse(formula);
+  return ast === null ? undefined : dateResultOf(ast);
+}
 
 export type NamedRangeResolver = (name: string) => AstNode | null;
 
@@ -56,6 +99,13 @@ function evaluateFunction(
   resolveName?: NamedRangeResolver,
   ctx?: EvalContext,
 ): FormulaArgument {
+  const spec = registry.get(node.name);
+  const arity = spec === undefined ? LOCAL_ARITY[node.name] : spec;
+  if (arity === undefined) return '#NAME?';
+  // The declared arity is the contract: a call outside it is an error value,
+  // never a silently wrong answer (=SUM() used to read as 0).
+  if (node.args.length < arity.minArgs || node.args.length > arity.maxArgs) return '#VALUE!';
+
   // Lookup / SUBTOTAL need 2-D ranges or row visibility — resolved here.
   if (node.name === 'VLOOKUP') return vlookup(node, resolve, resolveName, ctx);
   if (node.name === 'HLOOKUP') return hlookup(node, resolve, resolveName, ctx);
@@ -79,9 +129,14 @@ function evaluateFunction(
   if (node.name === 'OFFSET') return offset(node, resolve, resolveName, ctx);
   // IFERROR / IFNA must see the error value instead of short-circuit propagation.
   if (node.name === 'IFERROR' || node.name === 'IFNA') return ifErrorLike(node, resolve, resolveName, ctx);
-  const spec = registry.get(node.name);
-  if (!spec) return '#NAME?';
-  const args = node.args.map((arg) => evaluate(arg, resolve, resolveName, ctx));
+  // UNIQUE / SORT / FILTER work on a table: a range reference keeps its
+  // row/column extent for them (it reaches other functions as a flat list).
+  const tabular = TABLE_ARG.has(node.name);
+  const args = node.args.map((arg) => {
+    const value = evaluate(arg, resolve, resolveName, ctx);
+    const shape = tabular ? shapeOfOperand(arg, value, resolveName) : undefined;
+    return shape === undefined || isMatrix(value) ? value : matrix(shape.rows, shape.cols, value as readonly FormulaValue[]);
+  });
   // Excel: most functions propagate error args; IS* inspect them instead.
   if (!ERROR_INSPECTING.has(node.name)) {
     for (const arg of args) {
@@ -89,8 +144,22 @@ function evaluateFunction(
       if (err !== undefined) return err;
     }
   }
-  return guardNumeric(spec.evaluate(args));
+  return spec === undefined ? '#NAME?' : guardNumeric(spec.evaluate(args));
 }
+
+/**
+ * Arity of the functions evaluated in this file instead of through the
+ * registry. IF / INDEX / MATCH also have a registry entry, which wins above.
+ * IFERROR / IFNA keep their fallback optional (blank on error) as before.
+ */
+const LOCAL_ARITY: Readonly<Record<string, { readonly minArgs: number; readonly maxArgs: number }>> = {
+  IFS: { minArgs: 2, maxArgs: 254 }, SWITCH: { minArgs: 3, maxArgs: 254 },
+  IFERROR: { minArgs: 1, maxArgs: 2 }, IFNA: { minArgs: 1, maxArgs: 2 },
+  INDIRECT: { minArgs: 1, maxArgs: 2 }, OFFSET: { minArgs: 3, maxArgs: 5 },
+  ROW: { minArgs: 0, maxArgs: 1 }, COLUMN: { minArgs: 0, maxArgs: 1 }, ROWS: { minArgs: 1, maxArgs: 1 }, COLUMNS: { minArgs: 1, maxArgs: 1 },
+  SUBTOTAL: { minArgs: 2, maxArgs: 254 }, VLOOKUP: { minArgs: 3, maxArgs: 4 }, HLOOKUP: { minArgs: 3, maxArgs: 4 },
+  XLOOKUP: { minArgs: 3, maxArgs: 6 },
+};
 
 /** ROW([ref]) / COLUMN([ref]) / ROWS(ref) / COLUMNS(ref) — ref-aware, so they
  * see the raw range shape instead of the flattened value list. */
@@ -241,7 +310,10 @@ function indirect(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolve
   if (textArg === undefined) return '#REF!';
   const text = scalar(evaluate(textArg, resolve, resolveName, ctx));
   const a1Arg = node.args[1];
-  const a1 = a1Arg === undefined ? true : Boolean(scalar(evaluate(a1Arg, resolve, resolveName, ctx)));
+  const a1Value = a1Arg === undefined ? undefined : scalar(evaluate(a1Arg, resolve, resolveName, ctx));
+  const argErr = errorAmong(text, a1Value);
+  if (argErr !== undefined) return argErr;
+  const a1 = a1Value === undefined ? true : Boolean(a1Value);
   if (typeof text !== 'string' || !a1) return '#REF!';
   const trimmed = text.trim();
   const parsed = parseIndirectRef(trimmed);
@@ -285,11 +357,17 @@ function offset(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver,
   } else {
     return '#VALUE!';
   }
-  const rows = Number(scalar(evaluate(rowsArg, resolve, resolveName, ctx)));
-  const cols = Number(scalar(evaluate(colsArg, resolve, resolveName, ctx)));
+  const rowsValue = scalar(evaluate(rowsArg, resolve, resolveName, ctx));
+  const colsValue = scalar(evaluate(colsArg, resolve, resolveName, ctx));
+  const heightValue = heightArg === undefined ? undefined : scalar(evaluate(heightArg, resolve, resolveName, ctx));
+  const widthValue = widthArg === undefined ? undefined : scalar(evaluate(widthArg, resolve, resolveName, ctx));
+  const argErr = errorAmong(rowsValue, colsValue, heightValue, widthValue);
+  if (argErr !== undefined) return argErr;
+  const rows = Number(rowsValue);
+  const cols = Number(colsValue);
   if (!Number.isFinite(rows) || !Number.isFinite(cols)) return '#VALUE!';
-  if (heightArg !== undefined) height = Number(scalar(evaluate(heightArg, resolve, resolveName, ctx)));
-  if (widthArg !== undefined) width = Number(scalar(evaluate(widthArg, resolve, resolveName, ctx)));
+  if (heightValue !== undefined) height = Number(heightValue);
+  if (widthValue !== undefined) width = Number(widthValue);
   if (!Number.isInteger(height) || !Number.isInteger(width) || height < 1 || width < 1) return '#REF!';
   const x1 = baseX + cols;
   const y1 = baseY + rows;
@@ -343,8 +421,13 @@ function vlookup(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver
   if (table === '#NAME?') return '#NAME?';
   if (table.type !== 'range') return null;
   const lookup = scalar(evaluate(lookupArg, resolve, resolveName, ctx));
-  const colIndex = Number(scalar(evaluate(colArg, resolve, resolveName, ctx)));
-  const approximate = rangeArg === undefined ? true : Boolean(scalar(evaluate(rangeArg, resolve, resolveName, ctx)));
+  const colValue = scalar(evaluate(colArg, resolve, resolveName, ctx));
+  const rangeValue = rangeArg === undefined ? undefined : scalar(evaluate(rangeArg, resolve, resolveName, ctx));
+  // VLOOKUP(#REF!, …) is #REF!, not "no match".
+  const argErr = errorAmong(lookup, colValue, rangeValue);
+  if (argErr !== undefined) return argErr;
+  const colIndex = Number(colValue);
+  const approximate = rangeValue === undefined ? true : Boolean(rangeValue);
   const x1 = Math.min(table.x1, table.x2);
   const x2 = Math.max(table.x1, table.x2);
   const y1 = Math.min(table.y1, table.y2);
@@ -374,8 +457,12 @@ function hlookup(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver
   if (table === '#NAME?') return '#NAME?';
   if (table.type !== 'range') return null;
   const lookup = scalar(evaluate(lookupArg, resolve, resolveName, ctx));
-  const rowIndex = Number(scalar(evaluate(rowArg, resolve, resolveName, ctx)));
-  const approximate = rangeArg === undefined ? true : Boolean(scalar(evaluate(rangeArg, resolve, resolveName, ctx)));
+  const rowValue = scalar(evaluate(rowArg, resolve, resolveName, ctx));
+  const rangeValue = rangeArg === undefined ? undefined : scalar(evaluate(rangeArg, resolve, resolveName, ctx));
+  const argErr = errorAmong(lookup, rowValue, rangeValue);
+  if (argErr !== undefined) return argErr;
+  const rowIndex = Number(rowValue);
+  const approximate = rangeValue === undefined ? true : Boolean(rangeValue);
   const x1 = Math.min(table.x1, table.x2);
   const x2 = Math.max(table.x1, table.x2);
   const y1 = Math.min(table.y1, table.y2);
@@ -407,8 +494,12 @@ function xlookup(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver
   if (lookupArr === '#NAME?' || returnArr === '#NAME?') return '#NAME?';
   if (lookupArr.type !== 'range' || returnArr.type !== 'range') return '#VALUE!';
   const lookup = scalar(evaluate(lookupArg, resolve, resolveName, ctx));
-  const matchMode = matchModeArg === undefined ? 0 : Number(scalar(evaluate(matchModeArg, resolve, resolveName, ctx)));
-  const searchMode = searchModeArg === undefined ? 1 : Number(scalar(evaluate(searchModeArg, resolve, resolveName, ctx)));
+  const matchModeValue = matchModeArg === undefined ? 0 : scalar(evaluate(matchModeArg, resolve, resolveName, ctx));
+  const searchModeValue = searchModeArg === undefined ? 1 : scalar(evaluate(searchModeArg, resolve, resolveName, ctx));
+  const argErr = errorAmong(lookup, matchModeValue, searchModeValue);
+  if (argErr !== undefined) return argErr;
+  const matchMode = Number(matchModeValue);
+  const searchMode = Number(searchModeValue);
   if (matchMode !== 0 && matchMode !== 2) return '#N/A'; // approximate modes not in this build
   if (searchMode !== 1 && searchMode !== -1) return '#N/A';
 
@@ -472,8 +563,12 @@ function indexFn(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver
   if (arrArg === undefined || rowArg === undefined) return '#VALUE!';
   const ref = unwrapRef(arrArg, resolveName);
   if (ref === '#NAME?') return '#NAME?';
-  const rowNum = Number(scalar(evaluate(rowArg, resolve, resolveName, ctx)));
-  const colNum = colArg === undefined ? undefined : Number(scalar(evaluate(colArg, resolve, resolveName, ctx)));
+  const rowValue = scalar(evaluate(rowArg, resolve, resolveName, ctx));
+  const colValue = colArg === undefined ? undefined : scalar(evaluate(colArg, resolve, resolveName, ctx));
+  const argErr = errorAmong(rowValue, colValue);
+  if (argErr !== undefined) return argErr;
+  const rowNum = Number(rowValue);
+  const colNum = colValue === undefined ? undefined : Number(colValue);
   if (!Number.isFinite(rowNum) || (colNum !== undefined && !Number.isFinite(colNum))) return '#VALUE!';
   if (ref.type === 'cell') {
     if (rowNum === 1 && (colNum === undefined || colNum === 1)) return resolve(ref.x, ref.y, ref.sheetName);
@@ -500,7 +595,10 @@ function matchFn(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver
   const search = scalar(evaluate(searchArg, resolve, resolveName, ctx));
   const searchErr = errorValueOf(search);
   if (searchErr !== undefined) return searchErr;
-  const matchType = typeArg === undefined ? 1 : Number(scalar(evaluate(typeArg, resolve, resolveName, ctx)));
+  const matchTypeValue = typeArg === undefined ? undefined : scalar(evaluate(typeArg, resolve, resolveName, ctx));
+  const typeErr = errorValueOf(matchTypeValue);
+  if (typeErr !== undefined) return typeErr;
+  const matchType = matchTypeValue === undefined ? 1 : Number(matchTypeValue);
   if (matchType !== 1 && matchType !== 0 && matchType !== -1) return '#VALUE!';
   const values = refValues(arrArg, resolve, resolveName, ctx);
   if (typeof values === 'string') return values;
@@ -536,6 +634,8 @@ function refValues(node: AstNode, resolve: CellResolver, resolveName: NamedRange
     return values;
   }
   const evaluated = evaluate(ref, resolve, resolveName, ctx);
+  // A matrix (a sorted / filtered / computed array) is a whole lookup column too.
+  if (isMatrix(evaluated)) return [...evaluated.data];
   return isFormulaList(evaluated) ? [...evaluated] : [scalar(evaluated)];
 }
 
@@ -555,7 +655,10 @@ function wildcardEquals(value: FormulaValue, pattern: FormulaValue): boolean {
 function subtotal(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver, resolveName?: NamedRangeResolver, ctx?: EvalContext): FormulaValue {
   const [fnArg, ...rest] = node.args;
   if (fnArg === undefined || rest.length === 0) return null;
-  const rawFn = Number(scalar(evaluate(fnArg, resolve, resolveName, ctx)));
+  const fnValue = scalar(evaluate(fnArg, resolve, resolveName, ctx));
+  const fnErr = errorValueOf(fnValue);
+  if (fnErr !== undefined) return fnErr;
+  const rawFn = Number(fnValue);
   if (!Number.isFinite(rawFn)) return '#VALUE!';
   const fn = Math.trunc(rawFn);
   const base = fn >= 101 ? fn - 100 : fn;
@@ -578,6 +681,12 @@ function subtotal(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolve
       else if (isFormulaList(v)) values.push(...v);
       else values.push(v);
     }
+  }
+
+  // Like SUM and friends, an error in a counted row propagates (hidden rows were skipped above).
+  for (const v of values) {
+    const err = errorValueOf(v);
+    if (err !== undefined) return err;
   }
 
   const nums = values.flatMap((v) => (typeof v === 'number' && Number.isFinite(v) ? [v] : []));
@@ -608,34 +717,54 @@ function subtotal(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolve
   }
 }
 
-function evaluateBinary(node: Extract<AstNode, { type: 'binary' }>, resolve: CellResolver, resolveName?: NamedRangeResolver, ctx?: EvalContext): FormulaArgument {
-  const rawLeft = evaluate(node.left, resolve, resolveName, ctx);
-  const rawRight = evaluate(node.right, resolve, resolveName, ctx);
-  // Matrix operands flatten to their row-major list first (the types.ts
-  // "inside expressions a matrix flattens" contract) — binaryScalar cannot
-  // consume a MatrixValue, and list×matrix math would come out #VALUE!.
-  const left: FormulaArgument = isMatrix(rawLeft) ? rawLeft.data : rawLeft;
-  const right: FormulaArgument = isMatrix(rawRight) ? rawRight.data : rawRight;
+interface Shape { readonly rows: number; readonly cols: number }
 
-  // Excel array math: when either operand is a range/array, the operator maps
-  // element-wise (SUMPRODUCT((B1:B3="a")*(A1:A3)) and friends). A scalar side
-  // broadcasts to every element; two lists of different lengths run to the
-  // longer one with blanks (null) filling the shorter side.
-  const l = isFormulaList(left);
-  const r = isFormulaList(right);
-  if (l || r) {
-    const lList = l ? left : ([] as unknown as readonly FormulaValue[]);
-    const rList = r ? right : ([] as unknown as readonly FormulaValue[]);
-    const len = Math.max(l ? left.length : 1, r ? right.length : 1);
-    const out: FormulaValue[] = new Array(len);
-    for (let i = 0; i < len; i += 1) {
-      const lv = (l ? lList[i] ?? null : left) as FormulaValue;
-      const rv = (r ? rList[i] ?? null : right) as FormulaValue;
-      out[i] = binaryScalar(node.op, lv, rv);
-    }
-    return out;
+/**
+ * Row/column extent of an operand that is an array. A matrix carries it; a
+ * range reference (or a name standing for one) is read from its corners; any
+ * other list (INDIRECT / OFFSET output) is taken for a column vector. A
+ * scalar has none.
+ */
+function shapeOfOperand(node: AstNode, value: FormulaArgument, resolveName: NamedRangeResolver | undefined): Shape | undefined {
+  if (isMatrix(value)) return value;
+  if (!isFormulaList(value)) return undefined;
+  const ref = node.type === 'name' ? unwrapRef(node, resolveName) : node;
+  if (ref !== '#NAME?' && ref.type === 'range') return { rows: Math.abs(ref.y2 - ref.y1) + 1, cols: Math.abs(ref.x2 - ref.x1) + 1 };
+  return { rows: value.length, cols: 1 };
+}
+
+/** Element of an array operand at (y, x); a scalar or a one-row / one-column operand repeats itself. */
+function elementOf(value: FormulaArgument, shape: Shape | undefined, y: number, x: number): FormulaValue {
+  if (shape === undefined) return value as FormulaValue;
+  const data = isMatrix(value) ? value.data : (value as readonly FormulaValue[]);
+  return data[(shape.rows === 1 ? 0 : y) * shape.cols + (shape.cols === 1 ? 0 : x)] ?? null;
+}
+
+function evaluateBinary(node: Extract<AstNode, { type: 'binary' }>, resolve: CellResolver, resolveName?: NamedRangeResolver, ctx?: EvalContext): FormulaArgument {
+  const left = evaluate(node.left, resolve, resolveName, ctx);
+  const right = evaluate(node.right, resolve, resolveName, ctx);
+  const leftShape = shapeOfOperand(node.left, left, resolveName);
+  const rightShape = shapeOfOperand(node.right, right, resolveName);
+  if (leftShape === undefined && rightShape === undefined) {
+    return binaryScalar(node.op, left as FormulaValue, right as FormulaValue);
   }
-  return binaryScalar(node.op, left as FormulaValue, right as FormulaValue);
+  // Excel array math (SUMPRODUCT((B1:B3="a")*(A1:A3)) and friends): the
+  // operator maps element-wise and the result keeps the array's shape as a
+  // matrix, so =SEQUENCE(3)*2 spills 2;4;6. A scalar — or a one-row /
+  // one-column array — broadcasts against the other operand; the result is as
+  // tall and as wide as the larger side on each axis. Arrays that cannot be
+  // lined up that way are '#N/A', like Excel.
+  const rows = Math.max(leftShape?.rows ?? 1, rightShape?.rows ?? 1);
+  const cols = Math.max(leftShape?.cols ?? 1, rightShape?.cols ?? 1);
+  const fits = (s: Shape | undefined): boolean => s === undefined || ((s.rows === rows || s.rows === 1) && (s.cols === cols || s.cols === 1));
+  if (rows < 1 || cols < 1 || !fits(leftShape) || !fits(rightShape)) return '#N/A';
+  const out: FormulaValue[] = new Array(rows * cols);
+  for (let y = 0; y < rows; y += 1) {
+    for (let x = 0; x < cols; x += 1) {
+      out[y * cols + x] = binaryScalar(node.op, elementOf(left, leftShape, y, x), elementOf(right, rightShape, y, x));
+    }
+  }
+  return rows === 1 && cols === 1 ? out[0] ?? null : matrix(rows, cols, out);
 }
 
 function binaryScalar(op: string, left: FormulaValue, right: FormulaValue): FormulaValue {
@@ -690,12 +819,21 @@ const ERROR_INSPECTING: ReadonlySet<string> = new Set([
   'ISERROR', 'ISERR', 'ISNA', 'ISBLANK', 'ISNUMBER', 'ISTEXT', 'ISLOGICAL', 'ISNONTEXT',
 ]);
 
-/** Excel error literals; plain text like "#tag" must NOT be treated as an error. #SPILL!/#CALC! are the dynamic-array errors (Excel 365 set). */
-export const EXCEL_ERRORS: ReadonlySet<string> = new Set(['#NULL!', '#DIV/0!', '#VALUE!', '#REF!', '#NAME?', '#NUM!', '#N/A', '#SPILL!', '#CALC!']);
+/** Functions whose range arguments keep their two-dimensional extent. */
+const TABLE_ARG: ReadonlySet<string> = new Set(['UNIQUE', 'SORT', 'FILTER']);
 
-/** A cell/formula value that is itself an Excel error literal ('#DIV/0!', '#N/A', …). */
-function errorValueOf(v: FormulaValue): string | undefined {
-  return typeof v === 'string' && EXCEL_ERRORS.has(v) ? v : undefined;
+/** A cell/formula value that is itself an Excel error literal ('#DIV/0!', '#N/A', '#API!', …). */
+function errorValueOf(v: FormulaValue | undefined): string | undefined {
+  return isExcelError(v) ? v : undefined;
+}
+
+/** First error literal among values a function consumed from its arguments — Excel propagates it. */
+function errorAmong(...values: readonly (FormulaValue | undefined)[]): string | undefined {
+  for (const v of values) {
+    const err = errorValueOf(v);
+    if (err !== undefined) return err;
+  }
+  return undefined;
 }
 
 /** Map JS arithmetic accidents to Excel error values: NaN → #VALUE!, ±Infinity → #NUM!. */
@@ -726,11 +864,24 @@ function textOf(v: FormulaValue): string {
   return String(v);
 }
 
-function evaluateUnary(node: Extract<AstNode, { type: 'unary' }>, resolve: CellResolver, resolveName?: NamedRangeResolver, ctx?: EvalContext): FormulaValue {
-  const value = scalar(evaluate(node.operand, resolve, resolveName, ctx));
+function evaluateUnary(node: Extract<AstNode, { type: 'unary' }>, resolve: CellResolver, resolveName?: NamedRangeResolver, ctx?: EvalContext): FormulaArgument {
+  const value = evaluate(node.operand, resolve, resolveName, ctx);
+  const shape = shapeOfOperand(node.operand, value, resolveName);
+  if (shape === undefined) return unaryScalar(node.op, value as FormulaValue);
+  // An array operand maps element-wise and keeps its shape, like the binary operators.
+  const { rows, cols } = shape;
+  if (rows < 1 || cols < 1) return '#VALUE!';
+  const out: FormulaValue[] = new Array(rows * cols);
+  for (let y = 0; y < rows; y += 1) {
+    for (let x = 0; x < cols; x += 1) out[y * cols + x] = unaryScalar(node.op, elementOf(value, shape, y, x));
+  }
+  return rows === 1 && cols === 1 ? out[0] ?? null : matrix(rows, cols, out);
+}
+
+function unaryScalar(op: string, value: FormulaValue): FormulaValue {
   const err = errorValueOf(value);
   if (err !== undefined) return err;
-  return finiteOrError(node.op === '-' ? -Number(value) : Number(value));
+  return finiteOrError(op === '-' ? -Number(value) : Number(value));
 }
 
 function evaluateName(node: Extract<AstNode, { type: 'name' }>, resolve: CellResolver, resolveName?: NamedRangeResolver, ctx?: EvalContext): FormulaArgument {

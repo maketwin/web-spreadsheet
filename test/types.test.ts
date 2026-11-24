@@ -37,6 +37,7 @@ describe('domain types', () => {
       | { type: 'merge'; range: string }
       | { type: 'sheet'; action: 'activate' | 'add' | 'rename' | 'delete'; sheetId: string; name?: string }
       | { type: 'autofilter'; sheetId: string }
+      | { type: 'workbook'; action: 'replace' }
     >();
   });
 
