@@ -46,7 +46,7 @@ describe('useClipboardSession', () => {
     const session = hook.result.current.clipboardSession.current;
     expect(session?.type).toBe('copy');
     expect(session?.range).toEqual(A1);
-    expect(session?.cells[0][0]?.text).toBe('hello');
+    expect(session?.cells[0]?.[0]?.text).toBe('hello');
     expect(renderer.setClipboardRange).toHaveBeenCalledWith(A1);
     expect(store.getCell(0, 0)?.text).toBe('hello');
   });
@@ -115,11 +115,11 @@ describe('useClipboardSession', () => {
     await act(async () => { await hook.result.current.runClipboard('copy', A1); });
     const session = hook.result.current.clipboardSession.current;
     expect(session?.range).toEqual({ r1: 0, c1: 0, r2: 0, c2: 2 });
-    expect(session?.cells[0][0]?.text).toBe('a');
+    expect(session?.cells[0]?.[0]?.text).toBe('a');
   });
 
   it('multi-area copy with misaligned ranges is refused with a warning and no session', async () => {
-    const warn = vi.spyOn(message, 'warning').mockImplementation(() => undefined);
+    const warn = vi.spyOn(message, 'warning').mockImplementation(() => ({}) as ReturnType<typeof message.warning>);
     const { store, cmdManager } = setupStore([[0, 0, 'a'], [5, 5, 'b']]);
     // Two single cells in different rows AND columns cannot line up.
     const extras: RangeAddress[] = [{ r1: 5, c1: 5, r2: 5, c2: 5 }];
@@ -164,5 +164,69 @@ describe('useClipboardSession', () => {
     await act(async () => { await hook.result.current.runClipboard('cut', A1); });
     await act(async () => { await hook.result.current.applyPasteSpecial({ ...DEFAULT_PASTE_SPECIAL, mode: 'formats' }); });
     expect(store.getCell(0, 0)?.text).toBe('keep'); // source survives
+  });
+
+  // Style ids are sheet-local, and a session outlives a sheet switch: a paste
+  // on another sheet used to carry the source sheet's ids over, and a cut
+  // cleared its source coordinates on the *target* sheet.
+  describe('across sheets', () => {
+    const source = 'sheet-1';
+
+    it('a pasted style is registered on the target sheet, whatever that sheet has under the same id', async () => {
+      const { store, cmdManager } = setupStore();
+      store.setStyle('shared-id', { bold: true });
+      store.setCell(0, 0, { text: 'styled', styleId: 'shared-id' });
+      const other = store.addSheet('Other');
+      store.setStyle('shared-id', { italic: true }, other);
+      store.activateSheet(source); // addSheet activates the new sheet; the copy happens on the first one
+      const { hook } = setupHook(store, cmdManager, cellSelection(0, 0));
+      await act(async () => { await hook.result.current.runClipboard('copy', A1); });
+      store.activateSheet(other);
+      await act(async () => { await hook.result.current.runClipboard('paste', A1); });
+
+      const pasted = store.getCell(0, 0, other)!;
+      expect(pasted.text).toBe('styled');
+      expect(pasted.styleId).not.toBe('shared-id');
+      expect(store.getStyle(pasted.styleId!, other)).toEqual({ bold: true });
+      expect(store.getStyle('shared-id', other)).toEqual({ italic: true });
+      // The same source style is not registered twice.
+      await act(async () => { await hook.result.current.runClipboard('paste', { r1: 1, c1: 0, r2: 1, c2: 0 }); });
+      expect(store.getCell(1, 0, other)?.styleId).toBe(pasted.styleId);
+    });
+
+    it('cut on one sheet, paste on another: the source is cleared where it was cut, the target sheet keeps its own cells', async () => {
+      const { store, cmdManager } = setupStore();
+      store.setCell(0, 0, { text: 'move' });
+      store.addMerge('A1:B1');
+      const cut: RangeAddress = { r1: 0, c1: 0, r2: 0, c2: 1 };
+      const other = store.addSheet('Other');
+      store.setCell(0, 0, { text: 'keep me' }, other); // same coordinates as the cut source
+      store.activateSheet(source);
+      const { hook } = setupHook(store, cmdManager, cellSelection(0, 0));
+      await act(async () => { await hook.result.current.runClipboard('cut', cut); });
+      store.activateSheet(other);
+      await act(async () => { await hook.result.current.runClipboard('paste', { r1: 2, c1: 0, r2: 2, c2: 1 }); });
+
+      expect(store.getCell(2, 0, other)?.text).toBe('move');
+      expect(store.getCell(0, 0, other)?.text).toBe('keep me');
+      expect(store.getCell(0, 0, source)?.text ?? '').toBe('');
+      expect(store.getMerges(source)).toEqual([]);
+      expect(store.getMerges(other)).toEqual(['A3:B3']);
+    });
+
+    it('cut on one sheet, paste special on another: same rule', async () => {
+      const { store, cmdManager } = setupStore();
+      store.setCell(0, 0, { text: 'mv' });
+      const other = store.addSheet('Other');
+      store.setCell(0, 0, { text: 'stay' }, other);
+      store.activateSheet(source);
+      const { hook } = setupHook(store, cmdManager, cellSelection(0, 1));
+      await act(async () => { await hook.result.current.runClipboard('cut', A1); });
+      store.activateSheet(other);
+      await act(async () => { await hook.result.current.applyPasteSpecial(DEFAULT_PASTE_SPECIAL); });
+      expect(store.getCell(0, 1, other)?.text).toBe('mv');
+      expect(store.getCell(0, 0, other)?.text).toBe('stay');
+      expect(store.getCell(0, 0, source)?.text ?? '').toBe('');
+    });
   });
 });

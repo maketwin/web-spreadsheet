@@ -2,7 +2,7 @@ import { useCallback, useRef, useState, type MutableRefObject, type RefObject } 
 import { message } from 'antd';
 import { ClipboardService } from '../../clipboard/ClipboardService';
 import { buildPasteSpecialMatrix, type PasteSpecialOptions } from '../../clipboard/pasteSpecial';
-import { buildSessionPasteValues, combineMultiRanges, mergePasteErrorMessage, pasteFromClipboard, planMergePaste, snapshotCells, snapshotMerges, type ClipboardSessionState } from '../../clipboard/session';
+import { buildSessionPasteValues, combineMultiRanges, mergePasteErrorMessage, pasteFromClipboard, planMergePaste, retargetPasteStyles, snapshotCells, snapshotMerges, type ClipboardSessionState } from '../../clipboard/session';
 import { CompositeCommand, clearRange, clearRangeCmd } from '../../util/rangeValues';
 import { SetRangeValues } from '../../commands/impl/SetRangeValues';
 import { ApplyMergeChanges } from '../../commands/impl/SetMerge';
@@ -46,10 +46,13 @@ export function useClipboardSession(store: Store, cmdManager: CommandManager | u
       ? session
       : { type: 'copy' as const, range: { r1: 0, c1: 0, r2: 0, c2: 0 }, cells: await ClipboardService.read() };
     if (source.cells.length === 0) return;
-    const values = buildPasteSpecialMatrix(store, source, target.r1, target.c1, target, opts);
+    // A paste on another sheet: styles are sheet-local, and a cut clears its source where it was cut.
+    const elsewhere = session !== null && session.sheetId !== undefined && session.sheetId !== store.getActiveSheetId() ? session.sheetId : undefined;
+    const built = buildPasteSpecialMatrix(store, source, target.r1, target.c1, target, opts);
+    const values = elsewhere === undefined ? built : retargetPasteStyles(store, built, elsewhere, store.getActiveSheetId());
     // Excel: paste-special (and the source clear of a cut) is one undo step.
     const pasteCmd = new SetRangeValues({ r1: target.r1, c1: target.c1, r2: target.r1 + values.length - 1, c2: target.c1 + (values[0]?.length ?? 1) - 1, values });
-    const clearCmd = session !== null && session.type === 'cut' && opts.mode !== 'formats' && opts.operation === 'none' && !opts.transpose ? clearRangeCmd(session.range) : undefined;
+    const clearCmd = session !== null && session.type === 'cut' && opts.mode !== 'formats' && opts.operation === 'none' && !opts.transpose ? clearRangeCmd(session.range, session.sheetId) : undefined;
     const op = clearCmd === undefined ? pasteCmd : new CompositeCommand([pasteCmd, clearCmd]);
     if (cmdManager === undefined) op.execute(store); else cmdManager.execute(op);
     // Excel: a cut session ends on the first paste; the source clears when content moved.
@@ -67,15 +70,19 @@ export function useClipboardSession(store: Store, cmdManager: CommandManager | u
         // plan.rect is the merge-validated paste rectangle (anchor-only when a
         // single plain cell lands inside a merged cell).
         const values = buildSessionPasteValues(session, plan.rect.r1, plan.rect.c1, plan.rect);
+        // A paste on another sheet: styles are sheet-local, and a cut clears its source where it was cut.
+        const sourceSheet = session.sheetId;
+        const elsewhere = sourceSheet !== undefined && sourceSheet !== store.getActiveSheetId();
+        const styled = elsewhere && sourceSheet !== undefined ? retargetPasteStyles(store, values, sourceSheet, store.getActiveSheetId()) : values;
         const parts: Array<InstanceType<typeof SetRangeValues> | InstanceType<typeof ApplyMergeChanges> | ReturnType<typeof clearRangeCmd>> = [
-          new SetRangeValues({ r1: plan.rect.r1, c1: plan.rect.c1, r2: plan.rect.r2, c2: plan.rect.c2, values }),
+          new SetRangeValues({ r1: plan.rect.r1, c1: plan.rect.c1, r2: plan.rect.r2, c2: plan.rect.c2, values: styled }),
           new ApplyMergeChanges({ add: plan.add, remove: [] }),
         ];
         if (session.type === 'cut') {
           // Cut = move (Excel): the source block and its merges move to the target.
-          parts.push(clearRangeCmd(session.range));
+          parts.push(clearRangeCmd(session.range, sourceSheet));
           const moved = new Set(plan.add);
-          parts.push(new ApplyMergeChanges({ add: [], remove: (session.merges ?? []).map(mergeToString).filter((m) => !moved.has(m)) }));
+          parts.push(new ApplyMergeChanges({ add: [], remove: (session.merges ?? []).map(mergeToString).filter((m) => !moved.has(m)), ...(sourceSheet !== undefined ? { sheetId: sourceSheet } : {}) }));
         }
         const op = new CompositeCommand(parts);
         if (cmdManager === undefined) op.execute(store); else cmdManager.execute(op);
@@ -92,14 +99,14 @@ export function useClipboardSession(store: Store, cmdManager: CommandManager | u
       const combined = combineMultiRanges(store, [range, ...extras]);
       if (combined === null) { message.warning('不能对多重选定区域使用此命令'); return; }
       await ClipboardService.copy(store, combined.range);
-      clipboardSession.current = { type, range: combined.range, text: combined.text, cells: combined.cells };
+      clipboardSession.current = { type, sheetId: store.getActiveSheetId(), range: combined.range, text: combined.text, cells: combined.cells };
       rendererRef.current?.setClipboardRange(combined.range);
       return;
     }
     const payload = ClipboardService.createPayload(store, range);
     if (payload === null) return;
     await ClipboardService.copy(store, range);
-    clipboardSession.current = { type, range, text: payload.text, cells: snapshotCells(store, range), merges: snapshotMerges(store, range) };
+    clipboardSession.current = { type, sheetId: store.getActiveSheetId(), range, text: payload.text, cells: snapshotCells(store, range), merges: snapshotMerges(store, range) };
     rendererRef.current?.setClipboardRange(range);
   }, [store, cmdManager, rendererRef, multiRef, clearClipboardSession]);
   const runCtxClipboard = useCallback((type: 'cut' | 'copy' | 'paste' | 'clear') => {

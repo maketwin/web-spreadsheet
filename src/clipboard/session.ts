@@ -9,7 +9,33 @@ import { applyMatrix } from '../util/rangeValues';
 import { isSpillShadow } from '../util/spillShadow';
 import type { CommandManager } from '../commands/CommandManager';
 
-export interface ClipboardSessionState { readonly type: 'cut' | 'copy'; readonly range: RangeAddress; readonly text: string; readonly cells: ReadonlyArray<ReadonlyArray<Cell | undefined>>; readonly merges?: readonly RangeAddress[] }
+/** `sheetId` is the sheet the block was copied from: a paste that lands on another sheet re-registers its styles there and, for a cut, clears the source there. */
+export interface ClipboardSessionState { readonly type: 'cut' | 'copy'; readonly sheetId?: string; readonly range: RangeAddress; readonly text: string; readonly cells: ReadonlyArray<ReadonlyArray<Cell | undefined>>; readonly merges?: readonly RangeAddress[] }
+
+/**
+ * Style ids are sheet-local: the same id means different styles on two
+ * sheets, or nothing at all. A paste landing on another sheet therefore
+ * registers each source style on the target sheet (once per source id, and
+ * reused across pastes when the content is identical).
+ */
+export function retargetPasteStyles(store: Store, patches: readonly (readonly (CellPatch | undefined)[])[], fromSheetId: string, toSheetId: string): (CellPatch | undefined)[][] {
+  const mapped = new Map<string, string>();
+  const intern = (sourceId: string): string => {
+    const known = mapped.get(sourceId);
+    if (known !== undefined) return known;
+    const style = store.getStyle(sourceId, fromSheetId);
+    let next = sourceId;
+    if (style !== undefined) {
+      const base = `xp-${sourceId}`;
+      next = base;
+      for (let n = 2; store.getStyle(next, toSheetId) !== undefined && JSON.stringify(store.getStyle(next, toSheetId)) !== JSON.stringify(style); n += 1) next = `${base}-${n}`;
+      store.setStyle(next, style, toSheetId);
+    }
+    mapped.set(sourceId, next);
+    return next;
+  };
+  return patches.map((row) => row.map((patch) => patch === undefined || patch.styleId === undefined ? patch : { ...patch, styleId: intern(patch.styleId) }));
+}
 
 /** Merges fully inside the copied range ride along on paste (Excel replicates the merge structure). */
 export function snapshotMerges(store: Store, range: RangeAddress): readonly RangeAddress[] {

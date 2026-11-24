@@ -145,7 +145,7 @@ export function handleCanvasKeyDown(event: ReactKeyboardEvent<HTMLCanvasElement>
   else if (action.type === 'clear') {
     const extras = ctx.multiRanges?.() ?? [];
     if (extras.length === 0) clearRange(store, cmdManager, range);
-    else ctx.execCmd(new CompositeCommand([clearRangeCmd(range), ...extras.map(clearRangeCmd)]));
+    else ctx.execCmd(new CompositeCommand([clearRangeCmd(range), ...extras.map((extra) => clearRangeCmd(extra))]));
   }
   // Excel: Esc cancels the clipboard session but never changes the selection.
   else if (action.type === 'cancel') ctx.clearClipboardSession();
