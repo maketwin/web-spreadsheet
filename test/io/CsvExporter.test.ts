@@ -13,6 +13,28 @@ describe('csvQuote', () => {
     expect(csvQuote('say "hi"')).toBe('"say ""hi"""');
     expect(csvQuote('line1\nline2')).toBe('"line1\nline2"');
   });
+
+  it('guards text that Excel would read as a formula', () => {
+    expect(csvQuote('=cmd|\' /C calc\'!A0')).toBe('\'=cmd|\' /C calc\'!A0');
+    expect(csvQuote('@SUM(1)')).toBe('\'@SUM(1)');
+    expect(csvQuote('+1+1')).toBe('\'+1+1');
+    expect(csvQuote('-1+2')).toBe('\'-1+2');
+    expect(csvQuote('-A1')).toBe('\'-A1');
+  });
+
+  it('does not guard negative numbers, however they are displayed', () => {
+    // A text cell holding a negative number: not a formula either way.
+    expect(csvQuote('-1234.50')).toBe('-1234.50');
+    expect(csvQuote('-1,234.50')).toBe('"-1,234.50"');
+    expect(csvQuote('-12.50%')).toBe('-12.50%');
+    expect(csvQuote('-$1,234.50')).toBe('"-$1,234.50"');
+    // A number cell displayed with a format: the apostrophe used to turn it into text in Excel.
+    expect(csvQuote('-1,234.50', -1234.5)).toBe('"-1,234.50"');
+    expect(csvQuote('-12.50%', -0.125)).toBe('-12.50%');
+    expect(csvQuote('(1,234.50)', -1234.5)).toBe('"(1,234.50)"');
+    // A text result that starts with "=" is still a formula to Excel.
+    expect(csvQuote('=-1+2', '=-1+2')).toBe('\'=-1+2');
+  });
 });
 
 describe('exportCsv', () => {
@@ -34,6 +56,17 @@ describe('exportCsv', () => {
     store.setCell(0, 1, { text: '1234.5', value: 1234.5, styleId: 'money' });
 
     expect(exportCsv(store)).toBe('50.00%,"1,234.50"');
+  });
+
+  it('exports negative formatted numbers without the formula guard', () => {
+    const store = new Store();
+    store.setStyle('money', { numberFormat: '#,##0.00' });
+    store.setStyle('pct', { numberFormat: 'percent' });
+    store.setCell(0, 0, { text: '-1234.5', value: -1234.5, styleId: 'money' });
+    store.setCell(0, 1, { text: '-0.125', value: -0.125, styleId: 'pct' });
+    store.setCell(0, 2, { formula: '=-A1', text: '1234.50', value: 1234.5, styleId: 'money' });
+
+    expect(exportCsv(store)).toBe('"-1,234.50",-12.50%,"1,234.50"');
   });
 
   it('writes booleans as TRUE/FALSE and empty cells as empty fields', () => {

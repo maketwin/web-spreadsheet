@@ -1,5 +1,5 @@
 import type { Store } from '../store/Store';
-import type { AutoFilterCriteria, AutoFilterState, FilterCondition } from '../types';
+import type { AutoFilterCriteria, AutoFilterState, CellValue, FilterCondition } from '../types';
 import { displayTextOf } from '../util/cell';
 import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
 import { compareExcelValues, sortRowsInPlace } from './sortRows';
@@ -139,7 +139,8 @@ export class FilterService {
       for (let r = filter.range.r1 + 1; r <= filter.range.r2; r += 1) {
         let visible = true;
         for (const [rawColumn, criteria] of Object.entries(filter.criteria)) {
-          if (!FilterService.matchesCriteria(this.textAt(r, Number(rawColumn)), criteria)) { visible = false; break; }
+          const column = Number(rawColumn);
+          if (!FilterService.matchesCriteria(this.textAt(r, column), criteria, this.store.getCell(r, column)?.value)) { visible = false; break; }
         }
         const meta = this.store.getRow(r);
         this.store.setRow(r, { ...meta, hide: !visible });
@@ -151,11 +152,13 @@ export class FilterService {
    * Excel visibility rule for one cell under a column criterion. Custom
    * conditions win over the value checklist; blanks only survive a
    * checklist with `includeBlanks`. Like Excel, matching is case-insensitive.
+   * `value` is what the cell holds: custom numeric conditions compare it,
+   * not the displayed text ("1,020.00" is 1020, "12.5%" is 0.125).
    */
-  public static matchesCriteria(text: string, criteria: AutoFilterCriteria): boolean {
+  public static matchesCriteria(text: string, criteria: AutoFilterCriteria, value: CellValue | undefined = undefined): boolean {
     if (criteria.conditions !== undefined && criteria.conditions.length > 0) {
       if (text === '') return false;
-      const results = criteria.conditions.map((condition) => matchCondition(text, condition));
+      const results = criteria.conditions.map((condition) => matchCondition(text, condition, value));
       return criteria.conditionsOp === 'or' ? results.some(Boolean) : results.every(Boolean);
     }
     if (text === '') return criteria.includeBlanks;
@@ -307,11 +310,11 @@ export class FilterService {
 const NUMERIC_OPERATORS = new Set(['eq', 'neq', 'gt', 'gte', 'lt', 'lte', 'between']);
 
 /** Match one Excel custom-filter condition; numeric ops compare as numbers when both sides parse. */
-function matchCondition(text: string, condition: FilterCondition): boolean {
-  const { operator, value } = condition;
+function matchCondition(text: string, condition: FilterCondition, value: CellValue | undefined): boolean {
+  const { operator, value: conditionValue } = condition;
   if (!NUMERIC_OPERATORS.has(operator)) {
     const haystack = text.toLowerCase();
-    const needle = value.toLowerCase();
+    const needle = conditionValue.toLowerCase();
     switch (operator) {
       case 'contains': return haystack.includes(needle);
       case 'notContains': return !haystack.includes(needle);
@@ -320,22 +323,35 @@ function matchCondition(text: string, condition: FilterCondition): boolean {
       default: return true;
     }
   }
-  const textNumber = Number(text);
-  const valueNumber = Number(value);
-  const bothNumeric = value !== '' && Number.isFinite(textNumber) && Number.isFinite(valueNumber);
+  const textNumber = typeof value === 'number' ? value : displayedNumber(text);
+  const valueNumber = Number(conditionValue);
+  const bothNumeric = conditionValue !== '' && Number.isFinite(textNumber) && Number.isFinite(valueNumber);
   const compare = (other: string): number => {
     const otherNumber = Number(other);
     if (bothNumeric && Number.isFinite(otherNumber)) return textNumber - otherNumber;
     return text.toLowerCase().localeCompare(other.toLowerCase());
   };
   switch (operator) {
-    case 'eq': return compare(value) === 0;
-    case 'neq': return compare(value) !== 0;
-    case 'gt': return compare(value) > 0;
-    case 'gte': return compare(value) >= 0;
-    case 'lt': return compare(value) < 0;
-    case 'lte': return compare(value) <= 0;
-    case 'between': return compare(value) >= 0 && compare(condition.value2 ?? '') <= 0;
+    case 'eq': return compare(conditionValue) === 0;
+    case 'neq': return compare(conditionValue) !== 0;
+    case 'gt': return compare(conditionValue) > 0;
+    case 'gte': return compare(conditionValue) >= 0;
+    case 'lt': return compare(conditionValue) < 0;
+    case 'lte': return compare(conditionValue) <= 0;
+    case 'between': return compare(conditionValue) >= 0 && compare(condition.value2 ?? '') <= 0;
     default: return true;
   }
+}
+
+/**
+ * The number a displayed text stands for when the cell's own value is not
+ * at hand: "1,020.00", "$1,020", "1 020" — thousands separators and currency
+ * signs are display, not data. NaN when it is not a number.
+ */
+function displayedNumber(text: string): number {
+  const match = text.match(/^\s*\p{Sc}?\s*(-?[\d\s,]+(?:\.\d+)?)\s*$/u);
+  if (match === null) return Number.NaN;
+  const digits = match[1]!.replace(/[\s,]/g, '');
+  const parsed = Number(digits);
+  return digits !== '' && Number.isFinite(parsed) ? parsed : Number.NaN;
 }

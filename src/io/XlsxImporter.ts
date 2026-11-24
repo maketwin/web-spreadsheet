@@ -58,7 +58,11 @@ const ALIGN_MAP: Readonly<Record<string, NonNullable<Style['align']>>> = { left:
 const VALIGN_MAP: Readonly<Record<string, NonNullable<Style['valign']>>> = { top: 'top', center: 'middle', bottom: 'bottom' };
 
 /** Empty worksheets still occupy a slot in SheetNames. */
-export function importXlsx(buffer: ArrayBuffer): SerializedStore {  const wb = XLSX.read(buffer, {
+export function importXlsx(buffer: ArrayBuffer, onWarn?: (message: string) => void): SerializedStore {
+  // Unpack under the zip limits first: the SheetJS reader inflates the whole
+  // package on its own, so a package bomb has to be stopped before it runs.
+  const files = readZipEntries(buffer);
+  const wb = XLSX.read(buffer, {
     type: 'array',
     cellNF: true,
     cellStyles: true,
@@ -67,16 +71,16 @@ export function importXlsx(buffer: ArrayBuffer): SerializedStore {  const wb = X
     cellDates: false,
   });
   const tables = readStyleTables(wb);
-  const files = readZipEntries(buffer);
   const sheetPaths = resolveSheetPaths(files);
   const sst = parseSharedStrings(files.get('xl/sharedStrings.xml') ?? '');
+  const skipped = { cells: 0, merges: 0 };
 
   const sheets = wb.SheetNames.map((name, index) => {
     const ws = wb.Sheets[name];
     const sheetXml = files.get(sheetPaths.get(name) ?? '') ?? '';
     const data = ws === undefined
       ? emptySheetData()
-      : convertSheet(ws, tables, sheetStyleIndexes(sheetXml), sheetStringCells(sheetXml), sst);
+      : convertSheet(ws, tables, sheetStyleIndexes(sheetXml), sheetStringCells(sheetXml), sst, skipped);
     // Floating chart objects: geometry from the drawing part, type/range/title from the chart part.
     const sheetPath = sheetPaths.get(name);
     if (sheetPath !== undefined) {
@@ -88,6 +92,13 @@ export function importXlsx(buffer: ArrayBuffer): SerializedStore {  const wb = X
     return { id: `sheet-${index + 1}`, name, data };
   });
   if (sheets.length === 0) sheets.push({ id: 'sheet-1', name: 'Sheet1', data: emptySheetData() });
+  // The grid is fixed-size: say what was left out instead of failing silently.
+  if (skipped.cells > 0) {
+    const note = `xlsx import: skipped ${skipped.cells} cells outside the ${TOTAL_ROWS}×${TOTAL_COLS} grid`;
+    console.warn(note);
+    onWarn?.(`有 ${skipped.cells} 个单元格超出 ${TOTAL_ROWS} 行 × ${TOTAL_COLS} 列的网格，未导入`);
+  }
+  if (skipped.merges > 0) onWarn?.(`有 ${skipped.merges} 个合并区域超出网格，已忽略`);
   return { activeSheetId: sheets[0]!.id, sheets };
 }
 
@@ -111,7 +122,9 @@ function readStyleTables(wb: XLSX.WorkBook): StyleTables {
  * which also makes styled-but-empty cell xml visible to sheetStyleIndexes.
  */
 function readZipEntries(buffer: ArrayBuffer): Map<string, string> {
-  const entries = safeUnzip(new Uint8Array(buffer));
+  // Strict: an entry dropped for size would leave a half-read workbook, so
+  // an oversized package is refused outright instead.
+  const entries = safeUnzip(new Uint8Array(buffer), { oversized: 'throw' });
   const decoder = new TextDecoder();
   const out = new Map<string, string>();
   for (const [path, data] of Object.entries(entries)) {
@@ -173,7 +186,7 @@ function decodeXmlEntities(s: string): string {
   return s.replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&quot;', '"').replaceAll('&apos;', "'").replaceAll('&amp;', '&');
 }
 
-function convertSheet(ws: XLSX.WorkSheet, tables: StyleTables, styleIdx: Map<string, number>, stringCells: Map<string, { shared?: number; runs?: readonly RichTextRun[] }>, sst: readonly SharedStringEntry[]): SerializedSheetData {
+function convertSheet(ws: XLSX.WorkSheet, tables: StyleTables, styleIdx: Map<string, number>, stringCells: Map<string, { shared?: number; runs?: readonly RichTextRun[] }>, sst: readonly SharedStringEntry[], skipped: { cells: number; merges: number }): SerializedSheetData {
   const data = emptySheetData();
   const cells = data.cells as Array<[string, Cell]>;
   const styles = data.styles as Array<[string, Style]>;
@@ -181,11 +194,11 @@ function convertSheet(ws: XLSX.WorkSheet, tables: StyleTables, styleIdx: Map<str
   const rows = data.rows as Array<[number, { height?: number; hide?: boolean }]>;
   const cols = data.cols as Array<[number, { width?: number; hide?: boolean }]>;
   // The grid is fixed-size: coordinates beyond it are dropped, never silently
-  // invisible. A crafted far-away cell cannot inflate the workbook either.
-  let skippedOutOfGrid = 0;
+  // invisible — importXlsx reports the count. A crafted far-away cell cannot
+  // inflate the workbook either.
   const inGrid = (r: number, c: number): boolean => {
     if (r >= 0 && r < TOTAL_ROWS && c >= 0 && c < TOTAL_COLS) return true;
-    skippedOutOfGrid += 1;
+    skipped.cells += 1;
     return false;
   };
   // Identical styles share one id (content-hash dedup) instead of one id per
@@ -261,9 +274,10 @@ function convertSheet(ws: XLSX.WorkSheet, tables: StyleTables, styleIdx: Map<str
     if (cell.text !== '') cell.value = cell.text;
     cells.push([`${r},${c}`, cell]);
   }
-  if (skippedOutOfGrid > 0) console.warn(`xlsx import: skipped ${skippedOutOfGrid} cells outside the ${TOTAL_ROWS}×${TOTAL_COLS} grid`);
 
   for (const m of (ws as { '!merges'?: XLSX.Range[] })['!merges'] ?? []) {
+    // A merge reaching past the grid would cover cells that do not exist: drop it whole.
+    if (m.s.r < 0 || m.s.c < 0 || m.e.r >= TOTAL_ROWS || m.e.c >= TOTAL_COLS) { skipped.merges += 1; continue; }
     merges.push(`${XLSX.utils.encode_cell(m.s)}:${XLSX.utils.encode_cell(m.e)}`);
   }
   ((ws as { '!rows'?: Array<{ hpx?: number; hpt?: number; hidden?: boolean } | undefined> })['!rows'] ?? []).forEach((meta, r) => {

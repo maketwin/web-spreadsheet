@@ -1,20 +1,32 @@
 import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
 import type { Store } from '../store/Store';
-import type { Cell } from '../types';
+import type { Cell, CellValue } from '../types';
 import { displayTextOf } from '../util/cell';
 
-/** RFC 4180: quote a field containing the separator, a quote, CR or LF; double embedded quotes. */
-export function csvQuote(value: string): string {
+/**
+ * RFC 4180: quote a field containing the separator, a quote, CR or LF;
+ * double embedded quotes. `typed` is the value the cell holds (its text is
+ * only how it is displayed), which decides the formula-injection guard.
+ */
+export function csvQuote(value: string, typed: CellValue | undefined = undefined): string {
   // Excel treats a leading = + - @ as a formula when it opens a CSV.
-  const guarded = formulaInjectionPrefix(value) + value;
+  const guarded = formulaInjectionPrefix(value, typed) + value;
   return /[",\r\n]/.test(guarded) ? `"${guarded.replaceAll('"', '""')}"` : guarded;
 }
 
-function formulaInjectionPrefix(value: string): string {
+/** `-1,234.50`, `- 1,234.50`, `-$1,234.50`, `-12.5%`, `-1.2E+05`: digits with display decoration only — no operator, no reference. */
+const NEGATIVE_NUMBER = /^-\s*\p{Sc}?\s*\d{1,3}(,\d{3})*(\.\d+)?%?$/u;
+const NEGATIVE_PLAIN_NUMBER = /^-\s*\p{Sc}?\s*\d+(\.\d+)?([eE][+-]?\d+)?%?$/u;
+
+function formulaInjectionPrefix(value: string, typed: CellValue | undefined): string {
   if (value.length === 0) return '';
+  // A cell that holds a number or a boolean only *displays* those leading
+  // characters ("-1,234.50", "-12.50%"): Excel reads the field back as that
+  // number, and a `'` would turn it into text.
+  if (typeof typed === 'number' || typeof typed === 'boolean' || typed instanceof Date) return '';
   const head = value[0];
   if (head === '=' || head === '+' || head === '@' || head === '\t' || head === '\r') return "'";
-  if (head === '-' && !/^-?\d+(\.\d+)?([eE][+-]?\d+)?$/.test(value)) return "'";
+  if (head === '-' && !NEGATIVE_NUMBER.test(value) && !NEGATIVE_PLAIN_NUMBER.test(value)) return "'";
   return '';
 }
 
@@ -55,7 +67,10 @@ export function exportCsv(store: Store): string {
   const rows: string[] = [];
   for (let r = 0; r <= maxR; r += 1) {
     const fields: string[] = [];
-    for (let c = 0; c <= maxC; c += 1) fields.push(csvQuote(cellText(store, cellMap.get(`${r},${c}`))));
+    for (let c = 0; c <= maxC; c += 1) {
+      const cell = cellMap.get(`${r},${c}`);
+      fields.push(csvQuote(cellText(store, cell), cell?.value));
+    }
     rows.push(fields.join(','));
   }
   return rows.join('\r\n');

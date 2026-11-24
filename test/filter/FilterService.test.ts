@@ -247,6 +247,27 @@ describe('FilterService custom conditions', () => {
     expect(hiddenRows(store)).toEqual([3, 5]); // blanks hidden under conditions
   });
 
+  it('numeric conditions compare the value behind a formatted display', () => {
+    // "1,020.00" used to be compared as the text "1,020.00" and sorted before "980.00".
+    const store = new Store();
+    store.setCell(0, 0, { text: 'Amount' });
+    store.setStyle('money', { numberFormat: '#,##0.00' });
+    store.setStyle('pct', { numberFormat: 'percent' });
+    store.setCell(1, 0, { text: '980', value: 980 });
+    store.setCell(2, 0, { text: '1020', value: 1020, styleId: 'money' });
+    store.setCell(3, 0, { text: '2000', value: 2000, styleId: 'money' });
+    store.setCell(4, 0, { text: '0.12', value: 0.12, styleId: 'pct' });
+    const svc = new FilterService(store);
+    svc.setAutoFilter({ r1: 0, c1: 0, r2: 4, c2: 0 });
+    svc.setColumnFilter(0, { selected: [], includeBlanks: false, conditions: [{ operator: 'gt', value: '1000' }] });
+    expect(hiddenRows(store)).toEqual([1, 4]);
+    // Without the cell value at hand, a displayed number is still read as one.
+    const criteria = { selected: [], includeBlanks: false, conditions: [{ operator: 'gt' as const, value: '1000' }] };
+    expect(FilterService.matchesCriteria('1,020.00', criteria)).toBe(true);
+    expect(FilterService.matchesCriteria('$2,000', criteria)).toBe(true);
+    expect(FilterService.matchesCriteria('980.00', criteria)).toBe(false);
+  });
+
   it('contains is case-insensitive and hides blanks', () => {
     const store = setupStore();
     const svc = new FilterService(store);
