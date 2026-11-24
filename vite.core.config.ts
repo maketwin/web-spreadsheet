@@ -18,10 +18,14 @@ export default defineConfig({
   plugins: [
     dts({
       entryRoot: 'src',
-      // Per-file emit (no rollupTypes): the second build's rolled-up output
-      // would collide with the main index.d.ts; a tree of per-module .d.ts
-      // files under dist/ plus the inserted core.d.ts entry resolves cleanly
-      // through package.json exports "./core". types.
+      // Per-file emit. The declaration plugin always rolls up towards the
+      // package's top-level `types` file (the main build's bundled
+      // index.d.ts), so a second rolled-up entry cannot be produced this way;
+      // a tree of per-module declarations plus core.d.ts resolves through
+      // package.json exports "./core". types. The main entry is left out on
+      // purpose — emitting it here used to overwrite the bundled index.d.ts
+      // with its unrolled form.
+      exclude: ['src/index.ts'],
       insertTypesEntry: true,
       tsconfigPath: './tsconfig.json',
     }),

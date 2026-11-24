@@ -24,13 +24,28 @@ export default defineConfig(({ command }) => ({
       insertTypesEntry: true,
       rollupTypes: true,
       tsconfigPath: './tsconfig.json',
+      // The tsconfig also lists tests, e2e and config files so `tsc` checks
+      // them; only src is published, so only src is rolled up.
+      include: ['src/**/*.{ts,tsx}'],
     }),
   ],
+  // The xlsx worker (src/io/xlsxWorker.ts) is a separate chunk, loaded only
+  // when a workbook is first opened or saved. A fixed name keeps it next to
+  // the entry files it is resolved against.
+  worker: {
+    rollupOptions: {
+      output: { entryFileNames: 'web-spreadsheet-xlsx-worker.js' },
+    },
+  },
   build: {
     lib: {
       entry: resolve(dirname, 'src/index.ts'),
       name: 'WebSpreadsheet',
-      fileName: (format) => `web-spreadsheet.${format}.js`,
+      // The package is `"type": "module"`, so Node parses a `.js` file as ESM:
+      // `require()` then returns an empty ES-module namespace instead of the
+      // exports the UMD wrapper wrote. The `.cjs` extension makes Node load the
+      // UMD bundle through the CommonJS loader, which hands back those exports.
+      fileName: (format) => (format === 'umd' ? 'web-spreadsheet.umd.cjs' : `web-spreadsheet.${format}.js`),
       formats: ['es', 'umd'],
     },
     rollupOptions: {

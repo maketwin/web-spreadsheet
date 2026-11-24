@@ -29,6 +29,7 @@ pnpm dev
 
 ```ts
 import { Spreadsheet } from 'web-spreadsheet';
+import 'web-spreadsheet/styles.css';
 
 const ss = new Spreadsheet('app', {
   data: [
@@ -39,7 +40,31 @@ const ss = new Spreadsheet('app', {
 ss.mount();
 ```
 
-`new Spreadsheet(root, options?)` 的第一个参数可以是元素引用，也可以是元素 id 字符串（内部用 `document.getElementById` 查找，找不到会抛出 `Error('Spreadsheet root element not found: ...')`）。
+`new Spreadsheet(root, options?)` 的第一个参数可以是：
+
+- 元素引用：`document.querySelector('#app')`；
+- 元素 id：`'app'`；
+- 任意 CSS 选择器：`'#app'`、`'.sheet-host'`、`'main .sheet'`。
+
+字符串先按元素 id 查找，找不到再按 CSS 选择器查找（取第一个匹配）。两者都没有命中时抛出 `Error`，例如：
+
+```
+Spreadsheet 挂载根元素未找到：文档中既没有 id 为 "#app" 的元素，也没有匹配选择器 "#app" 的元素。请传入已存在于文档中的 HTMLElement、元素 id（如 "app"）或 CSS 选择器（如 "#app"、".container"）。
+```
+
+字符串不是合法的 CSS 选择器（也不是存在的元素 id）时同样会抛出说明原因的 `Error`。
+
+## 引入样式
+
+组件自身的样式（主题变量 + 布局与外观规则）随包发布，入口是 `web-spreadsheet/styles.css`，在应用里引入一次即可：
+
+```ts
+import 'web-spreadsheet/styles.css';
+```
+
+::: tip 样式表要单独引入
+这份 CSS 不在 JS 入口里：库构建把它产成一个独立文件，不会给 JS 产物加 import，所以打包器不会自动带上它，必须像上面这样显式引入。表格会撑满挂载容器，容器自己需要有确定的宽高（上面的 `width:100%;height:100vh`）。无头入口 `web-spreadsheet/core` 不包含任何样式。
+:::
 
 ## 多 Sheet
 

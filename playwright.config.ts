@@ -15,14 +15,16 @@ export default defineConfig({
     viewport: { width: 1280, height: 720 },
     trace: 'retain-on-failure',
   },
-  webServer: process.env.E2E_NO_SERVER
-    ? undefined
+  ...(process.env.E2E_NO_SERVER
+    ? {}
     : {
-        command: './node_modules/.bin/vite --port 5199 --strictPort',
-        url: 'http://localhost:5199',
-        reuseExistingServer: true,
-        timeout: 30_000,
-      },
+        webServer: {
+          command: './node_modules/.bin/vite --port 5199 --strictPort',
+          url: 'http://localhost:5199',
+          reuseExistingServer: true,
+          timeout: 30_000,
+        },
+      }),
   projects: [
     { name: 'chromium', use: { browserName: 'chromium' }, testIgnore: /mobile\.spec\.ts/ },
     {

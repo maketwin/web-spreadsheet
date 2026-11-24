@@ -3,19 +3,20 @@
   "version": "2.1.0",
   "description": "A modern TypeScript spreadsheet SDK with 4-layer architecture",
   "type": "module",
-  "main": "./dist/web-spreadsheet.umd.js",
+  "main": "./dist/web-spreadsheet.umd.cjs",
   "module": "./dist/web-spreadsheet.es.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/web-spreadsheet.es.js",
-      "require": "./dist/web-spreadsheet.umd.js"
+      "require": "./dist/web-spreadsheet.umd.cjs"
     },
     "./core": {
       "types": "./dist/core.d.ts",
       "import": "./dist/web-spreadsheet-core.es.js"
-    }
+    },
+    "./styles.css": "./dist/web-spreadsheet.css"
   },
   "files": [
     "dist",
@@ -25,6 +26,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build && vite build --config vite.core.config.ts",
+    "check:dist": "node scripts/check-dist.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",

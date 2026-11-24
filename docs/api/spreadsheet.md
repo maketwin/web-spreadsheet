@@ -7,6 +7,14 @@ import { Spreadsheet, Store, FormulaEngine } from 'web-spreadsheet';
 import type { CellInput, Style, RangeAddress } from 'web-spreadsheet';
 ```
 
+包一共有三个入口：
+
+| 入口 | 内容 | 加载方式 |
+|------|------|----------|
+| `web-spreadsheet` | 完整 SDK（含 React UI） | `import` 与 `require` 均可 |
+| `web-spreadsheet/core` | 无头入口：`Store`、`FormulaEngine`、`CommandManager`、`EventBus`、`CanvasRenderer` 及各服务，不含 antd / chart.js / xlsx / dexie | 仅 `import` |
+| `web-spreadsheet/styles.css` | 组件样式（主题变量 + 布局与外观规则） | `import 'web-spreadsheet/styles.css'`，JS 入口不会自动带上，见[快速开始](/guide/getting-started#引入样式) |
+
 ---
 
 ## Spreadsheet
@@ -19,7 +27,7 @@ new Spreadsheet(root: HTMLElement | string, options?: SpreadsheetOptions)
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `root` | `HTMLElement \| string` | 挂载的 DOM 元素或元素 id；id 查不到会抛 `Error` |
+| `root` | `HTMLElement \| string` | 挂载的 DOM 元素、元素 id（`'app'`）或 CSS 选择器（`'#app'`、`'.host'`）；字符串先按 id、再按选择器查找，都没有命中时抛出中文 `Error` |
 | `options` | `SpreadsheetOptions` | 配置选项 |
 
 ### SpreadsheetOptions
@@ -29,6 +37,12 @@ interface SpreadsheetOptions {
   data?: readonly (readonly CellInput[])[];  // 单 Sheet 初始数据
   sheets?: readonly SheetInput[];            // 多 Sheet 初始数据（优先于 data）
   theme?: 'light' | 'dark' | false;          // 缺省跟随系统；false 表示不接管
+  storage?: StorageOptions | false;          // 自动保存与恢复；缺省开启，存入共享的 default 槽位
+}
+
+interface StorageOptions {
+  enabled?: boolean;   // 每次修改后自动保存到 IndexedDB；缺省 true
+  key?: string;        // 存档记录名；同一页面嵌入多个实例时各给一个，缺省 'default'
 }
 
 interface SheetInput {
@@ -39,7 +53,7 @@ interface SheetInput {
 ```
 
 - `data` / `sheets` 在 `mount()` 时通过一个 `SetRangeValues` 命令写入并清空撤销历史——初始数据不可撤销。
-- 两者都缺省时，`mount()` 会尝试从 IndexedDB 恢复上次会话（见[I/O 与持久化](/guide/io)）。
+- 两者都缺省时，`mount()` 会尝试从 IndexedDB 恢复上次会话（见[I/O 与持久化](/guide/io)）；`storage: false` 时不保存也不恢复，`storage.key` 决定保存到、恢复自哪一份存档。嵌入到别的应用里又不想自动保存时，用 `storage: false`。
 
 ### 实例属性
 
@@ -173,6 +187,8 @@ constructor(store: Store)
 constructor(store: Store, events?: EventBus)
 ```
 
+挂载后的实例通过 `ss.cmdManager` 取得；不挂载内置 UI 的无头场景可以从 `web-spreadsheet/core` 导入后自行创建：`new CommandManager(store, events?)`。
+
 | 方法 | 说明 |
 |------|------|
 | `execute(cmd): void` | 执行命令，发布 `command:executed` |
@@ -267,4 +283,4 @@ import { setTheme, getTheme, applyStoredTheme, THEMES } from 'web-spreadsheet';
 - **插件**：`PluginManager`、`PluginAPI`、`CsvImportPlugin`、`Plugin` 类型。
 - **I/O 与持久化**：`exportCsv` / `exportCsvBlob` / `csvQuote`（CSV 导出，BOM'd UTF-8 显示值）、`loadWorkbook` / `deleteWorkbook` / `DEFAULT_ID`（IndexedDB 手动读取，见[I/O](/guide/io)）。
 - **工具函数**：`parseNameBoxInput`（名称框输入解析）、`skipHiddenCells`（跳过隐藏行的选区步进）、`toggleAutoFilterCommand`、`sparklineValues` / `parseInternalRangeKey`。
-- **类型**：`Cell`、`CellValue`、`Style`、`RowMeta`、`ColMeta`、`StoreEvent`、`Unsubscribe`、`SerializedStore`、`Theme`、`CellInput`、`SpreadsheetOptions`、`SpreadsheetProps`、`CellAddress`、`RangeAddress`、`AstNode`、`CellResolver`、`FormulaValue`、`FunctionSpec`、`ConditionalRule`、`ConditionalOverlay`、`ValidationRule`、`ValidationType`、`ChartSpec`、`ChartType`、`ChartAnchor`、`ChartAnchorEdge`、`SparklineSpec`、`SparklineType`、`NamedRangeDef`、`SheetProtectionState`、`BorderPreset`、`BorderLine` 等（`RichTextRun`、`CellHyperlink`、`CellComment`、`ImageSpec`、`RowGroupDef` 暂未从包根导出）。
+- **类型**：`Cell`、`CellValue`、`Style`、`RowMeta`、`ColMeta`、`StoreEvent`、`Unsubscribe`、`SerializedStore`、`Theme`、`CellInput`、`SpreadsheetOptions`、`StorageOptions`、`SpreadsheetProps`、`CellAddress`、`RangeAddress`、`AstNode`、`CellResolver`、`FormulaValue`、`FunctionSpec`、`ConditionalRule`、`ConditionalOverlay`、`ValidationRule`、`ValidationType`、`ChartSpec`、`ChartType`、`ChartAnchor`、`ChartAnchorEdge`、`SparklineSpec`、`SparklineType`、`NamedRangeDef`、`SheetProtectionState`、`BorderPreset`、`BorderLine` 等（`RichTextRun`、`CellHyperlink`、`CellComment`、`ImageSpec`、`RowGroupDef` 暂未从包根导出）。

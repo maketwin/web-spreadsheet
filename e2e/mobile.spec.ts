@@ -15,7 +15,7 @@ async function cleanSlate(page: Page): Promise<void> {
     const store = window.__ss.store;
     for (const [id] of [...store.getCells()]) {
       const [r, c] = id.split(',').map(Number);
-      store.setCell(r, c, undefined);
+      store.setCell(r!, c!, undefined);
     }
     for (let r = 0; r < 3; r += 1) for (let c = 0; c < 3; c += 1) store.setCell(r, c, { text: `v${r}${c}` });
     // 0-59 行的第 0 列全部有文本：平移落点在任意行都能断言"不是种子块"。

@@ -34,8 +34,12 @@ export { registry } from './formula/registry';
 export type { FunctionSpec } from './formula/registry';
 export type { AstNode, CellResolver, FormulaValue } from './formula/types';
 export { DependencyGraph } from './formula/dependency';
+/** Keeps the engine in step with store events — attach once, before the first edit. */
+export { createFormulaSync } from './formula/formulaSync';
 
 // ── Commands (all writes, undo/redo) ────────────────────────────────────────
+export { CommandManager } from './commands/CommandManager';
+export type { HistoryEntry } from './commands/CommandManager';
 export { InsertRowCommand } from './commands/impl/InsertRow';
 export { InsertColCommand } from './commands/impl/InsertCol';
 export { DeleteRowCommand } from './commands/impl/DeleteRow';

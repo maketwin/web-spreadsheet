@@ -17,7 +17,7 @@ async function cleanSlate(page: Page): Promise<void> {
     const cells = [...store.getCells()];
     for (const [id] of cells) {
       const [r, c] = id.split(',').map(Number);
-      store.setCell(r, c, undefined);
+      store.setCell(r!, c!, undefined);
     }
     for (let r = 0; r < 3; r += 1) for (let c = 0; c < 3; c += 1) store.setCell(r, c, { text: `v${r}${c}` });
   });
@@ -29,7 +29,7 @@ function cellPoint(col: number, row: number): { x: number; y: number } {
 }
 
 async function storeText(page: Page, r: number, c: number): Promise<string> {
-  return page.evaluate(([rr, cc]) => window.__ss.store.getCell(rr, cc)?.text ?? '', [r, c]);
+  return page.evaluate(([rr, cc]) => window.__ss.store.getCell(rr, cc)?.text ?? '', [r, c] as const);
 }
 
 test.beforeEach(async ({ page }) => { await cleanSlate(page); });

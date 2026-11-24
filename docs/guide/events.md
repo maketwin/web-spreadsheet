@@ -34,6 +34,8 @@ bus.on('*', ({ event, payload }) => {
 | `command:executed` | `{ cmd: Command }` | 命令执行成功 |
 | `command:undone` | `{ cmd: Command }` | 撤销成功 |
 | `command:redone` | `{ cmd: Command }` | 重做成功 |
+| `command:rejected` | `{ reason: 'protected' }` | 命令被工作表保护拦下，没有执行 |
+| `command:failed` | `{ cmd, phase: 'execute' \| 'undo' \| 'redo', error }` | 命令抛出异常：没有进入历史；撤销失败的条目会被丢弃并继续撤销上一条。对应的 `…ed` 事件不会再发 |
 | `csv:import` | 原始 CSV 字符串 | 由使用方 emit，`CsvImportPlugin` 消费 |
 
 实例上直接可用：`ss.events.on(...)`。插件则通过 `PluginAPI.on(event, handler)` 订阅（见[插件开发](/plugins/creating-plugins)）。
@@ -67,6 +69,7 @@ const off = ss.store.subscribe((e) => {
 | `merge` | `range, sheetId?` | 合并 / 取消合并 |
 | `sheet` | `action: 'activate' \| 'add' \| 'rename' \| 'delete', sheetId, name?` | Sheet 增删改名切换 |
 | `autofilter` | `sheetId` | 自动筛选状态变化 |
+| `workbook` | `action: 'replace'` | 整个工作簿被替换（新建 / 打开 / 恢复），先于随后的单元格事件投递 |
 
 ### 批量通知
 

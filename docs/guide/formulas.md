@@ -164,9 +164,13 @@ Excel 365 风格：结果为多值时**溢出**到右侧/下方相邻空格，�
 ## 依赖图与重算
 
 - 每个公式的依赖（`A1`、`Sheet2!B2` 等）注册进 `DependencyGraph`；键为 `sheetId:单元格` 的 scoped key。
-- 某格变更时，`getAffected()` 用 BFS 收集全部下游公式，**只重算受影响的格子**。
+- 重算按 Excel 的规则调度：值可能过期的公式带「脏」标记，求值时只顺着脏的前驱拉取——同一次重算里每个公式最多求值一次；并且**只有值真的变了的单元格**才会让读它的公式变脏。
+- 引擎写结果时内容没变就不写、不发事件；同步层（`createFormulaSync`）也不会把引擎自己的写入当成编辑再回流一遍。
+- 一次操作里的多处改动（整行插入、批量粘贴、排序）经 `engine.coalesce()` 合并成一遍：先登记，再按依赖序统一求值。
 - 跨 sheet 依赖自动按 `SheetName:cellId` 键补查。
-- 循环引用有显式检测：`DependencyGraph.wouldCreateCycle` 在写边时拒绝成环，求值栈兜底；环上单元格按 Excel 习惯显示 `0`，不会死循环（BFS 亦有 visited 集合）。
+- 循环引用有显式检测：`DependencyGraph.wouldCreateCycle` 只在登记公式（依赖边变化）时执行，环上单元格按 Excel 习惯显示 `0`，求值栈兜底，不会死循环。
+- `recalculateAll()` 按依赖序把所有公式各求值一次（`NOW` 这类易变函数随之刷新）。
+- 整个工作簿被替换（新建 / 打开 / 恢复）时 Store 先发 `workbook` 事件，同步层调用 `engine.reloadFromStore()` 从最终状态重建全部登记，新工作簿里没有的单元格不会留下旧公式。
 - 重算过程中的异常会被捕获并 `console.error`，不会导致 UI 崩溃。
 
 ## 已知限制

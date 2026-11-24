@@ -63,6 +63,7 @@ hero:
 
 ```ts
 import { Spreadsheet } from 'web-spreadsheet';
+import 'web-spreadsheet/styles.css';
 
 const ss = new Spreadsheet('#root', {
   data: [

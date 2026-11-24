@@ -1,3 +1,8 @@
+// Component styles (layout rules + theme variable tokens). The library build
+// extracts this into dist/web-spreadsheet.css; package consumers import the
+// published file: `import 'web-spreadsheet/styles.css'`. The headless `./core`
+// entry has no CSS.
+import './styles/spreadsheet.css';
 import { Spreadsheet as SpreadsheetImpl, type SpreadsheetOptions } from './components/Spreadsheet';
 
 export { Toolbar } from './components/Toolbar';
@@ -20,7 +25,7 @@ export { SetRangeBorderCommand, edgesForPreset } from './commands/impl/SetRangeB
 export type { BorderPreset, BorderLine } from './commands/impl/SetRangeBorder';
 export { SpreadsheetComponent } from './components/Spreadsheet';
 export { ErrorBoundary } from './components/ErrorBoundary';
-export type { CellInput, SpreadsheetOptions, SpreadsheetProps } from './components/Spreadsheet';
+export type { CellInput, SpreadsheetOptions, SpreadsheetProps, StorageOptions } from './components/Spreadsheet';
 export { DependencyGraph } from './formula/dependency';
 export { evaluate } from './formula/evaluator';
 export { FormulaEngine } from './formula/FormulaEngine';
@@ -91,10 +96,39 @@ export class Spreadsheet extends SpreadsheetImpl {
   }
 }
 
+/**
+ * Resolves the mount target: an element, an element id (`'app'`), or a CSS
+ * selector (`'#app'`, `'.sheet-host'`). A bare id is looked up first so that
+ * pre-selector callers keep resolving to the same element.
+ */
 function resolveRoot(root: HTMLElement | string): HTMLElement {
   if (typeof root !== 'string') return root;
 
-  const element = document.getElementById(root);
-  if (element === null) throw new Error(`Spreadsheet root element not found: ${root}`);
+  const element = document.getElementById(root) ?? querySelector(root);
+  if (element === null) {
+    throw new Error(
+      `Spreadsheet 挂载根元素未找到：文档中既没有 id 为 "${root}" 的元素，也没有匹配选择器 "${root}" 的元素。`
+      + '请传入已存在于文档中的 HTMLElement、元素 id（如 "app"）或 CSS 选择器（如 "#app"、".container"）。',
+    );
+  }
+  if (!(element instanceof HTMLElement)) {
+    throw new Error(
+      `Spreadsheet 挂载根元素必须是 HTMLElement："${root}" 匹配到的是 <${element.tagName.toLowerCase()}> 元素。`,
+    );
+  }
   return element;
+}
+
+/** `document.querySelector`, with an invalid selector reported as a plain-language error. */
+function querySelector(selector: string): Element | null {
+  try {
+    return document.querySelector(selector);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'SyntaxError') {
+      throw new Error(
+        `Spreadsheet 挂载根元素参数无效："${selector}" 不是合法的 CSS 选择器，也不是文档中存在的元素 id。`,
+      );
+    }
+    throw error;
+  }
 }

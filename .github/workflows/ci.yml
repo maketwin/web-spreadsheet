@@ -29,11 +29,27 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Test
-        run: pnpm test
+      - name: Lint
+        run: pnpm lint
+
+      - name: Test (coverage report)
+        run: pnpm test --coverage
 
       - name: Build
         run: pnpm build
+
+      # Loads the built package through its exports map (ESM + CommonJS) and
+      # checks the stylesheet and type entries.
+      - name: Check build artifacts
+        run: pnpm check:dist
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+          if-no-files-found: warn
 
   e2e:
     runs-on: ubuntu-latest

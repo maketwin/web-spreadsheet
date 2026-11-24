@@ -13,6 +13,7 @@ system, wrapped in a clean 4-layer architecture.
 
 ```ts
 import { Spreadsheet } from 'web-spreadsheet';
+import 'web-spreadsheet/styles.css';
 
 const ss = new Spreadsheet('#root', {
   data: [
@@ -22,6 +23,9 @@ const ss = new Spreadsheet('#root', {
 });
 ss.mount();
 ```
+
+The stylesheet is a separate entry — the JS entry does not pull it in, so
+import it once (see [Package entries](#package-entries)).
 
 ## Features
 
@@ -103,9 +107,32 @@ pnpm install --ignore-scripts
 pnpm dev
 ```
 
-The `Spreadsheet` facade accepts an element (or selector) plus options
-(`data`, `theme`, callbacks for every UI event), exposes `store` /
-`formula` / a command manager, and destroys cleanly with `ss.destroy()`.
+The `Spreadsheet` facade accepts an element, an element id (`'app'`) or a CSS
+selector (`'#app'`, `'.sheet-host'`) as its first argument — a string is looked
+up as an id first, then as a selector, and throws a descriptive `Error` when
+neither matches. Options (`data`, `theme`, callbacks for every UI event) come
+second. The instance exposes `store` / `formula` / a command manager, and
+destroys cleanly with `ss.destroy()`. The component fills its container
+(`width: 100%; height: 100%`), so give the container a size of its own.
+
+## Package entries
+
+| Entry | Contents |
+|-------|----------|
+| `web-spreadsheet` | The full SDK with the React UI: ESM (`import`) and CommonJS / UMD (`require`) |
+| `web-spreadsheet/core` | Headless: `Store`, `FormulaEngine`, `CommandManager`, `EventBus`, `CanvasRenderer` and services — no antd / chart.js / xlsx / dexie (ESM only) |
+| `web-spreadsheet/styles.css` | Component styles: theme variable tokens plus the layout and appearance rules |
+
+```ts
+import { Spreadsheet } from 'web-spreadsheet';
+import 'web-spreadsheet/styles.css'; // once, from the app entry
+```
+
+The styles are not part of the JS entry: Vite's library build emits them as a
+separate file and adds no import to the JS, so bundlers do not pick the CSS up
+on their own. The UMD bundle (`dist/web-spreadsheet.umd.cjs`) does not inline
+them either — when loading it through a `<script>` tag, add a `<link>` to
+`dist/web-spreadsheet.css` as well.
 
 ## Development
 
@@ -115,7 +142,8 @@ pnpm test           # vitest — 1240 tests, 185 files
 pnpm e2e            # Playwright (chromium desktop + chromium-touch 390×844) — context menus, dialogs & touch gestures in a real browser
 pnpm typecheck      # tsc --noEmit (strict, noUncheckedIndexedAccess)
 pnpm lint           # eslint
-pnpm build          # typecheck + library build (ESM/UMD + d.ts)
+pnpm build          # typecheck + library build (ESM, CommonJS/UMD, CSS + d.ts)
+pnpm check:dist     # smoke-check the built package: ESM import, CommonJS require, stylesheet, type entries
 pnpm coverage       # test coverage report
 pnpm docs:dev       # VitePress documentation site
 ```

@@ -38,7 +38,11 @@
     "demo/**/*.ts",
     "demo/**/*.tsx",
     "test/**/*.ts",
-    "vite.config.ts"
+    "test/**/*.tsx",
+    "e2e/**/*.ts",
+    "vite.config.ts",
+    "vite.core.config.ts",
+    "playwright.config.ts"
   ],
   "exclude": ["node_modules", "dist"]
 }
