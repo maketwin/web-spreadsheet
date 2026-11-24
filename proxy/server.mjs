@@ -16,7 +16,7 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 const UPSTREAM = process.env.UPSTREAM ?? 'https://www.yunoa.com';
 const PORT = Number(process.env.PORT ?? 8787);
@@ -41,6 +41,22 @@ function assertSafeUpstream(url) {
 
 const upstream = assertSafeUpstream(UPSTREAM);
 const upstreamHost = upstream.hostname;
+
+/**
+ * 请求行只接受"以单个 / 开头的路径"。`//host/x`、`/\host/x` 和绝对形式会被 URL
+ * 解析到别的主机——而转发时 Cookie 等请求头原样带过去，等于把会话送给第三方。
+ */
+export function isLocalTarget(path) {
+  return typeof path === 'string' && path.startsWith('/') && !path.startsWith('//') && !path.startsWith('/\\');
+}
+
+/**
+ * Host 必须就是本代理自己的地址：管理端点（/__spy/*）里的接口清单带着业务数据，
+ * 不能让别的网站借浏览器对 127.0.0.1 发跨站请求读走；也顺带挡住 DNS 重绑定。
+ */
+export function isLocalHostHeader(host, port) {
+  return host === `127.0.0.1:${port}` || host === `localhost:${port}` || host === `[::1]:${port}`;
+}
 
 const calls = [];
 let nextSeq = 1;
@@ -85,7 +101,14 @@ const STRIP_RES_HEADERS = new Set([
 
 async function forward(req, res) {
   const started = Date.now();
-  const url = new URL(req.url ?? '/', upstream.origin);
+  const target = req.url ?? '/';
+  if (!isLocalTarget(target) || !isLocalHostHeader(req.headers.host, PORT)) {
+    res.statusCode = 400;
+    res.setHeader('content-type', 'text/plain; charset=utf-8');
+    res.end('[proxy] 只接受指向本代理的路径形式请求');
+    return;
+  }
+  const url = new URL(target, upstream.origin);
   const body = await readBody(req);
 
   const headers = {};
@@ -141,13 +164,13 @@ async function forward(req, res) {
       }
       res.setHeader(key, value);
     }
-    // Set-Cookie：去掉 Domain/SameSite 限制，让会话落在本地域
+    // Set-Cookie：去掉 Domain/SameSite 限制，让会话落在本地域。一次可能下发多条
+    // （逐条 setHeader 会互相覆盖，只剩最后一条），整体作为数组设置。
     const cookies = typeof upstreamRes.headers.getSetCookie === 'function'
       ? upstreamRes.headers.getSetCookie()
       : (upstreamRes.headers.get('set-cookie') ? [upstreamRes.headers.get('set-cookie')] : []);
-    for (const cookie of cookies) {
-      res.setHeader('set-cookie', cookie.replace(/;\s*domain=[^;]+/gi, '').replace(/;\s*samesite=[^;]+/gi, ''));
-    }
+    const rewritten = cookies.map((cookie) => cookie.replace(/;\s*domain=[^;]+/gi, '').replace(/;\s*samesite=[^;]+/gi, ''));
+    if (rewritten.length > 0) res.setHeader('set-cookie', rewritten);
 
     if (isXhr || (upstreamRes.headers.get('content-type') ?? '').includes('json')) {
       record.kind = 'xhr';
@@ -182,9 +205,17 @@ function rewriteLocation(location) {
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
+/** 直接 `node proxy/server.mjs` 才启动；被测试 import 时只拿到纯函数。 */
+const isMain = process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 const server = createServer((req, res) => {
   const path = req.url ?? '/';
+  if (path.startsWith('/__spy') && !isLocalHostHeader(req.headers.host, PORT)) {
+    res.statusCode = 403;
+    res.setHeader('content-type', 'text/plain; charset=utf-8');
+    res.end('[proxy] 管理端点只接受本机访问');
+    return;
+  }
   if (path === '/__spy' || path === '/__spy/') {
     readFile(join(here, 'dashboard.html'), 'utf8')
       .then((html) => { res.setHeader('content-type', 'text/html; charset=utf-8'); res.end(html); })
@@ -217,12 +248,14 @@ const server = createServer((req, res) => {
   });
 });
 
-server.listen(PORT, HOST, () => {
-  console.log('='.repeat(64));
-  console.log('Mock 平台 · 接口侦察代理已启动');
-  console.log(`  上游：${upstream.origin}`);
-  console.log(`  ① 用 OA：    ${LOCAL_ORIGIN}/          （登录后照常使用）`);
-  console.log(`  ② 看流量：   ${LOCAL_ORIGIN}/__spy/     （实时接口清单）`);
-  console.log(`  ③ 导出清单： 面板里的"导出 JSON"按钮`);
-  console.log('='.repeat(64));
-});
+if (isMain) {
+  server.listen(PORT, HOST, () => {
+    console.log('='.repeat(64));
+    console.log('Mock 平台 · 接口侦察代理已启动');
+    console.log(`  上游：${upstream.origin}`);
+    console.log(`  ① 用 OA：    ${LOCAL_ORIGIN}/          （登录后照常使用）`);
+    console.log(`  ② 看流量：   ${LOCAL_ORIGIN}/__spy/     （实时接口清单）`);
+    console.log(`  ③ 导出清单： 面板里的"导出 JSON"按钮`);
+    console.log('='.repeat(64));
+  });
+}

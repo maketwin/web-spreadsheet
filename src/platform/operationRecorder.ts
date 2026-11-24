@@ -60,6 +60,8 @@ export function installOperationRecorder(hub: MockHub, events: EventBus, store?:
     events.on('command:executed', close),
     events.on('command:undone', close),
     events.on('command:redone', close),
+    // A command that threw never reaches its `…ed` event: close on the failure instead.
+    events.on('command:failed', close),
   ];
   return () => {
     for (const off of offs) off();

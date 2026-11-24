@@ -1,4 +1,4 @@
-import type { Command } from '../commands/Command';
+import type { Command, StructuralKind } from '../commands/Command';
 import type { Store } from '../store/Store';
 import { num2alpha } from '../util/alphabet';
 import type { ReplayPayload } from './types';
@@ -59,8 +59,13 @@ function rangeRef(r1: number, c1: number, r2: number, c2: number): string {
   return r1 === r2 && c1 === c2 ? cellRef(r1, c1) : `${cellRef(r1, c1)}:${cellRef(r2, c2)}`;
 }
 
+/** 命令声明的结构种类（见 Command.structuralKind）。平台核心不导入命令实现类，按声明读取。 */
+function structuralKindOf(cmd: Command): StructuralKind | null {
+  const declared = (cmd as { structuralKind?: () => StructuralKind | null }).structuralKind;
+  return typeof declared === 'function' ? declared.call(cmd) : null;
+}
+
 export function sampleOp(cmd: Command, store: Store): OpSample | null {
-  const name = cmd.describe();
   const args = argsOf(cmd);
   if (args === null) return null;
   const sheetId = typeof args.sheetId === 'string' ? args.sheetId : undefined;
@@ -70,23 +75,29 @@ export function sampleOp(cmd: Command, store: Store): OpSample | null {
   const c1 = num(args.c1);
   const count = num(args.count) ?? 1;
 
-  // 行/列结构操作：只有位置，载荷按命令名分派
-  if (r !== null && /row/i.test(name)) {
-    const kind = /insert/i.test(name) ? 'insertRow' : 'deleteRow';
-    return {
-      target: count > 1 ? `第${r + 1}-${r + count}行` : `第${r + 1}行`,
-      value: null,
-      replay: { kind, r, count, ...(sheetId !== undefined ? { sheetId } : {}) },
-    };
-  }
-  if (c !== null && /col/i.test(name)) {
-    const kind = /insert/i.test(name) ? 'insertCol' : 'deleteCol';
+  // 行/列结构操作：只有位置，载荷按命令自己声明的种类分派。不能按类名猜——
+  // 行高/列宽命令的类名同样含 Row/Col，且类名在压缩构建后会被改掉；曾因此把
+  // SetRowHeight 记成 deleteRow，重放时直接把行删掉。
+  const kind = structuralKindOf(cmd);
+  if (kind !== null) {
+    if (kind === 'insertRow' || kind === 'deleteRow') {
+      if (r === null) return null;
+      return {
+        target: count > 1 ? `第${r + 1}-${r + count}行` : `第${r + 1}行`,
+        value: null,
+        replay: { kind, r, count, ...(sheetId !== undefined ? { sheetId } : {}) },
+      };
+    }
+    if (c === null) return null;
     return {
       target: count > 1 ? `第${c + 1}-${c + count}列` : `第${c + 1}列`,
       value: null,
       replay: { kind, c, count, ...(sheetId !== undefined ? { sheetId } : {}) },
     };
   }
+  // 行高 / 列宽：只有行列坐标，能定位但不能重放
+  if (r !== null && c === null) return { target: `第${r + 1}行`, value: null, replay: null };
+  if (c !== null && r === null) return { target: `第${c + 1}列`, value: null, replay: null };
   // 区间命令（样式/边框/填充等）：显示范围，不可重放
   if (r1 !== null && c1 !== null) {
     return { target: rangeRef(r1, c1, num(args.r2) ?? r1, num(args.c2) ?? c1), value: null, replay: null };
