@@ -16,6 +16,8 @@
  * sections. Locale currency selectors like `[$¥-804]` are skipped.
  */
 
+import { roundHalfAwayFromZero } from '../util/roundHalfAwayFromZero';
+
 const EPOCH_MS = Date.UTC(1899, 11, 30);
 const DAY_MS = 86_400_000;
 const MONTHS_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -265,30 +267,67 @@ function compileSection(src: string, index: number): CompiledSection | undefined
 function renderNumber(value: number, s: CompiledSection): string {
   if (s.blank === true) return '';
   if (s.kind === 'date') return renderDate(value, s);
-  const scaled = s.percent ? value * 100 : value;
-  const body = s.scientific ? sciBody(scaled, s) : fixedBody(scaled, s);
-  return substituteNum(s.tokens, body, s.ampm);
+  // NaN / ±Infinity have no digits to place; substituting the plain string
+  // keeps a cell holding one from aborting the whole canvas paint.
+  if (!Number.isFinite(value)) return substituteNum(s.tokens, String(value), s.ampm);
+  // Excel rounds the decimal value half-away-from-zero at the printed
+  // precision; `%` multiplies by 100 first (in decimal), i.e. it rounds two
+  // places further out. The scientific path keeps its own mantissa rounding.
+  const frac = s.fracDigits + s.fracOptional;
+  const scaled = s.percent ? roundHalfAwayFromZero(value, frac + 2) * 100 : value;
+  if (s.scientific) return substituteNum(s.tokens, sciBody(scaled, s), s.ampm);
+  const rounded = roundHalfAwayFromZero(scaled, frac);
+  // The original sign survives rounding to zero (-0.001 with "0.00" prints
+  // "-0.00"); toFixed would drop a negative zero's sign. Object.is catches
+  // the signed zero a percent scaling (-0 * 100) leaves behind.
+  const negative = scaled < 0 || Object.is(scaled, -0);
+  const zeroSign = rounded === 0 && negative ? '-' : '';
+  return substituteNum(s.tokens, zeroSign + fixedBody(rounded, s), s.ampm);
 }
 
 function fixedBody(value: number, s: CompiledSection): string {
   const totalFrac = s.fracDigits + s.fracOptional;
-  const fixed = value.toFixed(totalFrac);
-  const [intPartRaw, fracRaw = ''] = fixed.split('.');
+  const fixed = fixedDecimal(value, totalFrac);
+  // A leading sign belongs in front of the padded digits (-5 with "000"
+  // prints -005, like Excel), so pad the digits only and re-attach it.
+  const negative = fixed.startsWith('-');
+  const [intPartRaw, fracRaw = ''] = (negative ? fixed.slice(1) : fixed).split('.');
   let intPart = intPartRaw!;
   if (s.groupThousands) intPart = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   if (intPart.length < s.intMinDigits) intPart = intPart.padStart(s.intMinDigits, '0');
   // Optional fraction slots: strip trailing zeros beyond the forced digits.
   let frac = fracRaw;
   while (frac.length > s.fracDigits && frac.endsWith('0')) frac = frac.slice(0, -1);
-  return frac.length > 0 ? `${intPart}.${frac}` : intPart;
+  const body = frac.length > 0 ? `${intPart}.${frac}` : intPart;
+  return negative ? `-${body}` : body;
+}
+
+/** toFixed without binary noise: when the rounded value's shortest decimal
+ * form already fits the requested precision (no exponent, ≤ totalFrac
+ * decimals), pad that exact decimal with zeros — toFixed would expand the
+ * double instead (1234567.891 with 10 forced decimals must print
+ * …8910000000, not …8910000001). Exponential shortest forms (≥1e21) and
+ * values still needing a real rounding fall back to toFixed. */
+function fixedDecimal(value: number, totalFrac: number): string {
+  const shortest = String(value);
+  if (shortest.indexOf('e') >= 0) return value.toFixed(totalFrac);
+  const dot = shortest.indexOf('.');
+  const decimals = dot < 0 ? 0 : shortest.length - dot - 1;
+  if (decimals > totalFrac) return value.toFixed(totalFrac);
+  if (dot < 0) return totalFrac > 0 ? `${shortest}.${'0'.repeat(totalFrac)}` : shortest;
+  return `${shortest}${'0'.repeat(totalFrac - decimals)}`;
 }
 
 function sciBody(value: number, s: CompiledSection): string {
-  const exp = value.toExponential(s.fracDigits);
-  const [mantissa, e] = exp.split('e');
+  // Excel rounds the mantissa half away from zero on the decimal value
+  // (1.005 → 1.01E+00); toExponential's own rounding keeps the binary
+  // double's 1.00. Rounding at (fracDigits − exponent) keeps fracDigits+1
+  // significant digits, and a mantissa carry (9.995 → 10) bumps the exponent.
+  const exp = Number(value.toExponential().split('e')[1] ?? 0);
+  const rounded = roundHalfAwayFromZero(value, s.fracDigits - exp);
+  const [mantissa, e] = rounded.toExponential(s.fracDigits).split('e');
   const sign = e!.startsWith('-') ? '-' : '+';
   const digits = e!.replace(/^[+-]/, '').padStart(2, '0');
-  void s;
   return `${mantissa}E${sign}${digits}`;
 }
 

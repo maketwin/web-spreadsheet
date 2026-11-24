@@ -9,7 +9,9 @@
  * - Numbers: an arithmetic source continues exactly; a non-arithmetic source
  *   is extended along its least-squares trend line (Excel's TREND mechanism).
  *   A lone plain number is NOT a series by default (`singleNumberStep` opts
- *   in for the Ctrl-drag toggle).
+ *   in for the Ctrl-drag toggle). Zero-padded integer sources keep their
+ *   padding ("001","002" → "003",…, overflowing naturally at "010"/"1000");
+ *   the width comes from the anchor cell.
  * - Dates (yyyy-mm-dd / yyyy/m/d / yyyy.m.d): step inferred from the source,
  *   one day for a lone date. Output keeps the separator and zero padding of
  *   the anchor cell.
@@ -61,12 +63,19 @@ export function nextSeriesValues(source: readonly string[], count: number, opts:
 }
 
 function numericSeries(source: readonly string[], count: number, direction: 1 | -1, opts: SeriesOptions): string[] | undefined {
-  const nums = source.map((t) => (t.trim().length > 0 ? Number(t) : NaN));
+  const trimmed = source.map((t) => t.trim());
+  const nums = trimmed.map((t) => (t.length > 0 ? Number(t) : NaN));
   if (nums.some((n) => Number.isNaN(n))) return undefined;
+  // Excel keeps the source's zero padding ("001","002" → "003",…): the width
+  // comes from the anchor cell (last cell for direction 1, first for -1),
+  // matching how dates and text+number series take the anchor's padding.
+  const anchorText = trimmed[direction === 1 ? trimmed.length - 1 : 0]!;
+  const padWidth = paddedWidth(anchorText);
+  const emit = (n: number): string => formatPaddedNumber(n, padWidth);
   const out: string[] = [];
   if (nums.length === 1) {
     if (opts.singleNumberStep !== true) return undefined;
-    for (let i = 1; i <= count; i += 1) out.push(formatNumber(nums[0]! + direction * i));
+    for (let i = 1; i <= count; i += 1) out.push(emit(nums[0]! + direction * i));
     return out;
   }
   // Least-squares line through (i, nums[i]); arithmetic sources fit exactly.
@@ -82,8 +91,24 @@ function numericSeries(source: readonly string[], count: number, direction: 1 | 
   const slope = cov / varX;
   const intercept = meanY - slope * meanX;
   const firstX = direction === 1 ? n : -1;
-  for (let i = 1; i <= count; i += 1) out.push(formatNumber(intercept + slope * (firstX + direction * (i - 1))));
+  for (let i = 1; i <= count; i += 1) out.push(emit(intercept + slope * (firstX + direction * (i - 1))));
   return out;
+}
+
+/** Digit width of a zero-padded integer ("0012" → 4, "-001" → 3); 0 when the text is not padded. */
+function paddedWidth(text: string): number {
+  if (!/^-?0\d+$/.test(text)) return 0;
+  return text.startsWith('-') ? text.length - 1 : text.length;
+}
+
+/** formatNumber, re-padded to `width`; overflows it naturally (…009 → 010 → 1000). */
+function formatPaddedNumber(n: number, width: number): string {
+  const text = formatNumber(n);
+  if (width === 0) return text;
+  const sign = text.startsWith('-') ? '-' : '';
+  const digits = sign.length > 0 ? text.slice(1) : text;
+  if (!/^\d+$/.test(digits)) return text; // non-integer trend values: padding is meaningless
+  return sign + digits.padStart(width, '0');
 }
 
 function formatNumber(n: number): string {

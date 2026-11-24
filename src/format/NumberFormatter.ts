@@ -1,4 +1,5 @@
 import type { Style } from '../types';
+import { roundHalfAwayFromZero } from '../util/roundHalfAwayFromZero';
 import { formatCustom } from './CustomFormat';
 
 export type NumberFormatType = NonNullable<Style['numberFormat']>;
@@ -44,17 +45,24 @@ export function formatValue(value: unknown, fmt: NumberFormatType): FormatResult
 }
 
 function formatNumber(value: number): FormatResult {
-  const formatted = value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // Round the decimal value first (Excel half-away-from-zero); the Intl call
+  // then only adds grouping and can no longer be steered by binary noise.
+  const formatted = roundHalfAwayFromZero(value, 2).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return { text: formatted, formatted: true };
 }
 
 function formatCurrency(value: number): FormatResult {
-  const formatted = value.toLocaleString('zh-CN', { style: 'currency', currency: 'CNY', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const formatted = roundHalfAwayFromZero(value, 2).toLocaleString('zh-CN', { style: 'currency', currency: 'CNY', minimumFractionDigits: 2, maximumFractionDigits: 2 });
   return { text: formatted, formatted: true };
 }
 
 function formatPercent(value: number): FormatResult {
-  const formatted = `${(value * 100).toFixed(2)}%`;
+  // Excel multiplies by 100 first (in decimal), then rounds to 2 places —
+  // equivalently: round the fraction to 4 places, then shift ×100. The sign
+  // survives rounding to zero (-0.00001 → "-0.00%"), like toFixed before.
+  const scaled = roundHalfAwayFromZero(value, 4) * 100;
+  const sign = scaled < 0 || (scaled === 0 && value < 0) ? '-' : '';
+  const formatted = `${sign}${Math.abs(scaled).toFixed(2)}%`;
   return { text: formatted, formatted: true };
 }
 
@@ -80,7 +88,12 @@ function formatTime(value: number): FormatResult {
 }
 
 function formatScientific(value: number): FormatResult {
-  const formatted = value.toExponential(2);
+  if (!Number.isFinite(value)) return { text: String(value), formatted: true };
+  // Excel rounds the mantissa half away from zero on the decimal value
+  // (1.005 → 1.01e+0); raw toExponential keeps the binary double's 1.00e+0.
+  const exp = Number(value.toExponential().split('e')[1] ?? 0);
+  const rounded = roundHalfAwayFromZero(value, 2 - exp);
+  const formatted = rounded.toExponential(2);
   return { text: formatted, formatted: true };
 }
 
