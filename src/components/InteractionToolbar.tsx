@@ -3,7 +3,8 @@ import { DownOutlined, AlignCenterOutlined, AlignLeftOutlined, AlignRightOutline
 import { memo, type Dispatch, type FC, type RefObject, type SetStateAction } from 'react';
 import type { CommandManager } from '../commands/CommandManager';
 import type { BorderPreset } from '../commands/impl/SetRangeBorder';
-import { clearRange } from '../util/rangeValues';
+import { axisSelectionOf } from '../commands/impl/SetAxisStyle';
+import { clearRange } from '../commands/rangeValues';
 import type { Store } from '../store/Store';
 import type { RangeAddress } from '../selection/Range';
 import type { Selection } from '../selection/Selection';
@@ -246,9 +247,16 @@ function sameStyle(a: Style | undefined, b: Style | undefined): boolean {
 function activeCellStyle(store: Store, selected: Selection | null): Style | undefined {
   const cell = selected?.active;
   if (cell === undefined) return undefined;
-  const data = store.getCell(cell.r, cell.c);
-  if (data?.styleId === undefined) return undefined;
-  return store.getStyle(data.styleId);
+  // Excel: on a whole-column / whole-row selection the toolbar shows the axis
+  // default format, ignoring the active cell's own direct format.
+  const range = selected?.range;
+  const axis = range !== undefined ? axisSelectionOf(range) : null;
+  if (axis !== null) {
+    const meta = axis.axis === 'col' ? store.getCol(cell.c) : store.getRow(cell.r);
+    const styleId = meta?.styleId;
+    return styleId === undefined ? undefined : store.getStyle(styleId);
+  }
+  return store.getCellStyle(cell.r, cell.c);
 }
 
 export const ProtectionModal: FC<{ readonly open: boolean; readonly onClose: () => void; readonly store: Store }> = ({ open, onClose, store }) => {

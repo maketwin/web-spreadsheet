@@ -7,6 +7,7 @@ import type { CommandManager } from '../../../commands/CommandManager';
 import type { ConditionalRule } from '../../../conditional/ConditionalRule';
 import { SetSheetConditionalRulesCommand } from '../../../commands/impl/SetConditionalFormat';
 import { xy2expr } from '../../../util/alphabet';
+import { parseInternalRange } from '../../../util/rangeNotation';
 
 export interface ConditionalRulesDialogProps {
   readonly open: boolean;
@@ -25,10 +26,9 @@ interface RuleRow {
 }
 
 function rangeKeyToA1(key: string): string {
-  const [lo, hi] = key.split(':');
-  const nums = [...(lo ?? '').split(','), ...(hi ?? '').split(',')].map(Number);
-  if (nums.length !== 4 || nums.some((n) => !Number.isInteger(n))) return key;
-  return `${xy2expr(nums[1] ?? 0, nums[0] ?? 0)}:${xy2expr(nums[3] ?? 0, nums[2] ?? 0)}`;
+  const range = parseInternalRange(key);
+  if (range === null) return key; // not a parsable range key → show it verbatim
+  return `${xy2expr(range.c1, range.r1)}:${xy2expr(range.c2, range.r2)}`;
 }
 
 function ruleText(rule: ConditionalRule): { typeLabel: string; summary: string } {

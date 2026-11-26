@@ -121,8 +121,11 @@ export const FormulaBar: FC<FormulaBarProps> = ({
           // Excel: the first click into an unfocused name box selects all; a
           // second click (already focused) places the caret. Without this the
           // already-focused click types at the caret mid-reference.
-          if (document.activeElement !== event.currentTarget) {
-            requestAnimationFrame(() => event.currentTarget.select());
+          // React clears `currentTarget` once the handler returns, so the
+          // element is kept for the deferred select.
+          const input = event.currentTarget;
+          if (document.activeElement !== input) {
+            requestAnimationFrame(() => input.select());
           }
         }}
         onChange={(event) => setNameInput(event.target.value)}

@@ -292,10 +292,15 @@ export class MockHub {
     return body;
   }
 
-  /** 操作开始：记操作事件并打开因果窗口，返回事件 seq。值摘要/重放载荷在执行后经 amendOp 补齐。 */
-  public openCause(type: string, via: OpVia, replay: ReplayPayload | null = null): number {
+  /** 操作开始：记操作事件并打开因果窗口，返回事件 seq。值摘要/重放载荷在执行后经 amendOp 补齐。
+   *  undoes：撤销条目指向被撤销正向条目的 seq（缺省不写字段——旧时间线形状不变）。 */
+  public openCause(type: string, via: OpVia, replay: ReplayPayload | null = null, undoes?: number): number {
     const seq = this.nextSeq++;
-    this.log.push({ seq, ts: Date.now(), kind: 'op', type, via, target: null, before: null, after: null, replay });
+    this.log.push({
+      seq, ts: Date.now(), kind: 'op', type, via,
+      target: null, before: null, after: null, replay,
+      ...(undoes !== undefined ? { undoes } : {}),
+    });
     this.currentCause = seq;
     this.scheduleNotify();
     return seq;

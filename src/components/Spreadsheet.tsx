@@ -2,7 +2,7 @@ import { Button, Input, Modal, message } from 'antd';
 import { flushSync } from 'react-dom';
 import { createRoot, type Root } from 'react-dom/client';
 import { useCallback, useEffect, useMemo, useRef, useState, type FC, type RefObject } from 'react';
-import { applyMatrix, clearRange } from '../util/rangeValues';
+import { applyMatrix, clearRange } from '../commands/rangeValues';
 import { fillSelectionPatches } from '../fill/fillSelection';
 import { openHyperlink } from '../util/hyperlink';
 
@@ -19,7 +19,8 @@ import { FormulaEngine } from '../formula/FormulaEngine';
 import { resolveEditAnchor, snapClickSelection, snapRangeSelection } from '../selection/mergeSnap';
 import type { FindMatch } from '../find/FindReplaceService';
 import { PluginManager, type Plugin } from '../plugin/PluginManager';
-import { TOTAL_COLS, TOTAL_ROWS, COL_HEADER_HEIGHT, type CellAddress } from '../renderer/coordinate';
+import { TOTAL_COLS, TOTAL_ROWS, COL_HEADER_HEIGHT } from '../util/gridSize';
+import { type CellAddress } from '../renderer/coordinate';
 import type { FormulaRefHighlight } from '../renderer/CanvasRenderer';
 import { RemoveChartCommand } from '../commands/impl/RemoveChart';
 import { SetChartAnchorCommand } from '../commands/impl/SetChartAnchor';
@@ -64,6 +65,7 @@ import { applyRunStyle, applyTextChangeToRuns, charsAllHave, flattenRuns, isRich
 import { InteractionToolbar, ProtectionModal } from './InteractionToolbar';
 import { useCanvasRenderer } from './hooks/useCanvasRenderer';
 import { useSheetFreeze } from './hooks/useSheetFreeze';
+import { useSheetSelection } from './hooks/useSheetSelection';
 import { useFormulaSync } from './formulaSync';
 import { loadData, loadSheets } from './workbookInit';
 
@@ -108,7 +110,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   useSheetFreeze(store, activeSheetId, view, setView);
   useEffect(() => {
     const update = (): void => setWorkbookLocked(store.getWorkbookPasswordHash() !== undefined && !workbookUnlocked);
-    const off = store.subscribe(update);
+    const off = subscribeCoalesced(store, update);
     update();
     return off;
   }, [store, workbookUnlocked]);
@@ -151,19 +153,24 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const richApiRef = useRef<RichEditorApi | null>(null);
   const { multiRef, rendererApiRef, setMulti } = useMultiSelection();
 
-  const selectSelection = useCallback((next: Selection) => {
+  /** Set by a selection that is a jump into the sheet (hyperlink, Find, name box); spent by the sync that hands it to the renderer. */
+  const revealRef = useRef(false);
+  const selectSelection = useCallback((next: Selection, reveal = false): void => {
     selectedRef.current = next;
+    revealRef.current = reveal;
     setSelected(next);
     setEditing(null);
     // Excel: selecting a cell deselects any selected floating object.
     setSelectedChartId(null);
   }, []);
   const selectRange = useCallback((range: RangeAddress) => selectSelection(rangeSelection(range)), [selectSelection]);
+  /** The name box is a jump: the range it names is brought into view even where the active cell does not move. */
+  const jumpToRange = useCallback((range: RangeAddress): void => selectSelection(rangeSelection(range), true), [selectSelection]);
   /** Follow a hyperlink: external → window.open; in-sheet/workbook → navigate. */
   const followHyperlink = useCallback((link: NonNullable<Cell['hyperlink']>) => {
     openHyperlink(store, link, (r, c, sheetId) => {
       if (sheetId !== undefined) store.activateSheet(sheetId);
-      selectSelection(snapClickSelection(store, r, c));
+      selectSelection(snapClickSelection(store, r, c), true);
     });
   }, [store, selectSelection]);
   const onCellClick = useCallback((cell: CellAddress, shift: boolean, ctrl = false) => {
@@ -255,7 +262,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   const execCmd = useCallback((cmd: Command) => {
     if (cmdManager !== undefined) cmdManager.execute(cmd); else cmd.execute(store);
   }, [cmdManager, store]);
-  const { canvasRef, rendererRef } = useCanvasRenderer(store, selected, onCellClick, selectSelection, view, setView, cmdManager, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick, editingRef);
+  const { canvasRef, rendererRef } = useCanvasRenderer(store, selected, revealRef, onCellClick, selectSelection, view, setView, cmdManager, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick, editingRef);
   const handleRefHighlights = useCallback((ranges: readonly FormulaRefHighlight[] | null) => { rendererRef.current?.setFormulaRefHighlights(ranges); }, []);
   // The renderer refuses to steal canvas focus (which would blur-commit the
   // cell editor) only while its editing flag is set — keep it in sync.
@@ -281,7 +288,6 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     rendererRef.current?.setHighlightMatches(cells, current);
   }, [findHighlights, activeSheetId, store]);
   rendererApiRef.current = { setExtraRanges: (ranges) => rendererRef.current?.setExtraRanges(ranges) };
-  useEffect(() => rendererRef.current?.setEditing(editing !== null), [editing, rendererRef]);
   // 移动端软键盘：visualViewport 收缩/平移时把编辑中的单元格滚到键盘上方的
   // 可视区，并 bump 一次布局让编辑浮层按新的 cellRect 重定位。桌面（无
   // visualViewport 或键盘不改变布局）不受影响。
@@ -325,6 +331,9 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     if (clipboardSession.current !== null) clearClipboardSession();
     // Excel: editing a merged cell always targets the anchor (upper-left) cell.
     const { anchor, merge } = resolveEditAnchor(store, cell.r, cell.c);
+    // The user may have wheeled away from the active cell: the editor opens
+    // on a cell that is on screen (the view goes to the cell, as with an arrow key).
+    rendererRef.current?.revealCell(anchor.r, anchor.c);
     const editValue = value ?? cellEditValue(store, anchor);
     // Excel: typing with a multi-cell selection keeps the range (Ctrl+Enter fills it all).
     const cur = selectedRef.current;
@@ -438,7 +447,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       if (cell === undefined || cell.formula !== undefined || typeof cell.value === 'number' || typeof cell.value === 'boolean') return false;
       if (end > cell.text.length) return false;
       const runs = isRich(cell.richText) ? [...cell.richText] : (runsFromText(cell.text) ?? [{ text: cell.text }]);
-      const cellStyle = cell.styleId !== undefined ? store.getStyle(cell.styleId) : undefined;
+      const cellStyle = store.getCellStyle(active.r, active.c, cell);
       const mutablePatch = patch as Record<string, unknown>;
       for (const key of ['bold', 'italic', 'underline'] as const) {
         if (patch[key] === true && charsAllHave(runs, start, end, key, cellStyle)) {
@@ -483,7 +492,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       return true;
     }
     const ed = editingRef.current;
-    const cellStyle = ed !== null && store.getCell(ed.r, ed.c)?.styleId !== undefined ? store.getStyle(store.getCell(ed.r, ed.c)!.styleId!) : undefined;
+    const cellStyle = ed !== null ? store.getCellStyle(ed.r, ed.c) : undefined;
     const mutablePatch = patch as Record<string, unknown>;
     for (const key of ['bold', 'italic', 'underline'] as const) {
       if (patch[key] === true && charsAllHave(runs, sel.start, sel.end, key, cellStyle)) {
@@ -508,6 +517,11 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   useTheme(theme);
   useFormulaSync(store, formulaEngine);
   useStoreSheets(store, setSheets, setActiveSheetId);
+  // Excel: the selection belongs to the sheet — a sheet comes back with its own.
+  /** An edit still open when its sheet is left (a host call mid-edit) ends there: it must not stay open on a cell of another sheet. */
+  const endEditOnLeave = useCallback((): void => { editingRef.current = null; }, []);
+  const clearMulti = useCallback((): void => setMulti([]), [setMulti]);
+  useSheetSelection(store, selectedRef, selectSelection, endEditOnLeave, clearMulti);
   const bumpStoreVersion = useCallback((): void => setStoreVersion((value) => value + 1), []);
   useStoreVersion(store, bumpStoreVersion);
   useFormulaValue(selected, editing, store, storeVersion, setFormulaValue);
@@ -581,10 +595,13 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
     if (painting) { setPainting(false); setSourceStyle(undefined); return; }
     const cell = selectedRef.current?.active;
     const data = cell === undefined ? undefined : store.getCell(cell.r, cell.c);
-    setSourceStyle(data?.styleId === undefined ? undefined : store.getStyle(data.styleId));
+    // Format painter copies the style in effect (own > row > column default),
+    // so painting from a cell inside a formatted column carries that format.
+    setSourceStyle(cell === undefined ? undefined : store.getCellStyle(cell.r, cell.c, data));
     setPainting(true);
   }, [painting, store]);
-  const onSheetChange = useCallback((id: string): void => { setMulti([]); store.activateSheet(id); }, [store, setMulti]);
+  // The extra (Ctrl-added) ranges do not outlive the sheet they were made on: useSheetSelection clears them.
+  const onSheetChange = useCallback((id: string): void => { store.activateSheet(id); }, [store]);
   const onAddSheet = useCallback((): void => setSheetPrompt({ mode: 'add', value: `Sheet${store.getSheets().length + 1}` }), [store]);
   const onRenameSheet = useCallback((id: string): void => setSheetPrompt({ mode: 'rename', id, value: sheets.find((s) => s.id === id)?.name ?? '' }), [sheets]);
   const onDeleteSheet = useCallback((id: string): void => deleteSheet(store, id), [store]);
@@ -603,7 +620,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
   }), [view]);
   const onFindNavigate = useCallback<NonNullable<MenuBarProps['onFindNavigate']>>((match) => {
     if (match.sheetId !== store.getActiveSheetId()) store.activateSheet(match.sheetId);
-    selectSelection(cellSelection(match.r, match.c));
+    selectSelection(cellSelection(match.r, match.c), true);
   }, [store, selectSelection]);
   const onFindHighlight = useCallback<NonNullable<MenuBarProps['onFindHighlight']>>((matches, current) => {
     setFindHighlights(matches.length === 0 ? null : { matches, current });
@@ -727,7 +744,7 @@ export const SpreadsheetComponent: FC<SpreadsheetProps> = ({ store, cmdManager, 
       setFormulaValue(cell?.formula ?? cell?.text ?? '');
       formulaRunsRef.current = cell !== undefined && isRich(cell.richText) ? [...cell.richText] : (cell !== undefined ? runsFromText(cell.text) : undefined);
       bumpFormulaRuns();
-    }} onGoTo={(input) => { jumpNameBox(store, input, selectRange); canvasRef.current?.focus(); }} inputRef={formulaInputRef} handleRef={formulaBarHandleRef} onCharStyleKey={applyCharStyleKey} />
+    }} onGoTo={(input) => { jumpNameBox(store, input, jumpToRange); canvasRef.current?.focus(); }} inputRef={formulaInputRef} handleRef={formulaBarHandleRef} onCharStyleKey={applyCharStyleKey} />
     <div className="ss-canvas-wrap"><canvas ref={canvasRef} className="ss-canvas" tabIndex={0} aria-label="Spreadsheet canvas, use arrow keys to navigate" onKeyDown={(e) => {
         if ((e.ctrlKey || e.metaKey) && e.altKey && e.key.toLowerCase() === 'v') {
           // Excel: Ctrl+Alt+V opens Paste Special.
@@ -804,7 +821,7 @@ export class Spreadsheet {
   private userTouched = false;
   private offTouch: (() => void) | null = null;
   public constructor(private readonly mountRoot: HTMLElement, private readonly options: SpreadsheetOptions = {}) {}
-  public mount(): void { this.loadInitialData(); this.offTouch = this.store.subscribe(() => { this.userTouched = true; }); void this.tryRestoreFromDB(); this.root = createRoot(this.mountRoot); this.root.render(<SpreadsheetComponent store={this.store} cmdManager={this.cmdManager} formulaEngine={this.formula} theme={this.options.theme} storage={this.options.storage} />); }
+  public mount(): void { this.loadInitialData(); this.offTouch = subscribeCoalesced(this.store, () => { this.userTouched = true; }); void this.tryRestoreFromDB(); this.root = createRoot(this.mountRoot); this.root.render(<SpreadsheetComponent store={this.store} cmdManager={this.cmdManager} formulaEngine={this.formula} theme={this.options.theme} storage={this.options.storage} />); }
   public destroy(): void { this.root?.unmount(); this.root = null; this.offTouch?.(); this.offTouch = null; this.plugins.clear(); }
   public use(plugin: Plugin): this { this.plugins.use(plugin); return this; }
   public get rowCount(): number { return this.options.data?.length ?? this.options.sheets?.[0]?.data?.length ?? 0; }
@@ -833,11 +850,25 @@ export class Spreadsheet {
 
 export { createFormulaSync } from './formulaSync';
 
-/** Excel: rows grow to fit a just-applied font size / wrap. Direct write — see growRowsToContent note in MenuBar. */
-
 function useTheme(theme: Theme | false | undefined): void { useEffect(() => { if (theme === false) return; if (theme === undefined) applyStoredTheme(); else setTheme(theme); }, [theme]); }
 function useStoreSheets(store: Store, setSheets: (s: readonly SheetInfo[]) => void, setActive: (id: string) => void): void { useEffect(() => store.subscribe((event) => { if (event.type !== 'sheet') return; setSheets(store.getSheets()); setActive(store.getActiveSheetId()); }), [store, setSheets, setActive]); }
-function useStoreVersion(store: Store, bump: () => void): void { useEffect(() => store.subscribe(() => bump()), [store, bump]); }
+/** Subscribe with the callback coalesced to once per synchronous flush: a
+ * million-cell structural move delivers one `structure` event now, but any
+ * burst of events must still cost one setState / one flag write, not one per
+ * event. The microtask runs after the flush that queued it. */
+function subscribeCoalesced(store: Store, fn: () => void): () => void {
+  let scheduled = false;
+  return store.subscribe(() => {
+    if (scheduled) return;
+    scheduled = true;
+    queueMicrotask(() => {
+      scheduled = false;
+      fn();
+    });
+  });
+}
+
+function useStoreVersion(store: Store, bump: () => void): void { useEffect(() => subscribeCoalesced(store, bump), [store, bump]); }
 function useAutoSave(store: Store, storage: StorageOptions | false | undefined): void {
   useEffect(() => {
     if (storage === false || storage?.enabled === false) return undefined;
@@ -859,14 +890,6 @@ function useFormulaValue(selected: Selection | null, editing: EditingCell | null
   }, [selected, editing, store, storeVersion, setFormulaValue]);
 }
 
-/** Excel Ctrl+End target: bottom-right of the used range (any cell with content). */
-
-/**
- * Excel End mode: pressing End arms it; the next plain arrow edge-jumps (like
- * Ctrl+arrow, Shift extends) and disarms. Any other key just disarms.
- * Returns true when the event was consumed.
- */
-
 function deleteSheet(store: Store, id: string): void {
   // window.confirm is suppressed (auto-dismissed) in embedded browsers — use
   // the in-app confirm so the entry point never silently does nothing.
@@ -879,14 +902,6 @@ function deleteSheet(store: Store, id: string): void {
     onOk: () => store.deleteSheet(id),
   });
 }
-
-/** `ss:theme-changed` is dispatched by setTheme() (src/theme/index.ts) — the
- * in-app switch and public hosts share one dispatch path. */
-
-
-
-
-
 
 /**
  * What the menu commands act on. The selection is handed over as an accessor:
@@ -907,36 +922,3 @@ function menuContext(store: Store, cmdManager: CommandManager | undefined, selec
   };
   return cmdManager === undefined ? context : { ...context, cmdManager };
 }
-
-/** Excel: Enter/Tab cycle the active cell through a multi-cell selection (Shift reverses). */
-
-/** Excel Alt+=: SUM over the contiguous numbers above the active cell, else to its left. */
-
-
-
-/**
- * Excel arrow-key landing: hidden rows/columns are skipped in the step
- * direction (selection stays put when the rest of the grid is hidden), and a
- * merged cell remains one navigation stop — including when the step-out lands
- * on a hidden cell.
- */
-
-/** 插入 → 图表: data range is the current selection; the object lands centered over the visible grid (Excel), selected. */
-
-/** 插入 → 图片: anchored at the active cell, default size 4×6 cells, selected. */
-
-/** Excel inserts a new chart centered on the visible grid with the default 15×7.5cm size. */
-
-/** 插入 → 迷你图: anchored at the active cell; returns false (dialog stays open) on a bad range. */
-
-/** Excel name box: jump to an A1 ref / range / defined name, switching sheets when prefixed. */
-
-/**
- * 隐藏行: hide the clicked span. 取消隐藏 (Excel): restores the hidden rows
- * covered by the header selection — to unhide, select across the collapsed
- * gap (or a wider span) and choose 取消隐藏, exactly like Excel.
- */
-
-/** 隐藏列 / 取消隐藏列: same selection-scoped unhide semantics as rows (Excel). */
-
-

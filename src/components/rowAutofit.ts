@@ -1,12 +1,12 @@
-import { DEFAULT_FONT_SIZE } from './defaults';
-import { COL_WIDTH, ROW_HEIGHT, TOTAL_COLS } from '../renderer/coordinate';
+import { DEFAULT_FONT_SIZE } from '../util/defaults';
+import { COL_WIDTH, ROW_HEIGHT, TOTAL_COLS } from '../util/gridSize';
 import { Command } from '../commands/Command';
 import type { Store } from '../store/Store';
 import type { RangeAddress } from '../selection/Range';
 import type { RowMeta } from '../types';
-import { effectiveRunStyle, flattenRuns, isRich } from './richText';
+import { effectiveRunStyle, flattenRuns, isRich } from '../util/richText';
 import { layoutRichText } from '../renderer/richTextLayout';
-import { excelRowHeightPx, wrapTextLinesCanvas } from './wrapText';
+import { excelRowHeightPx, wrapTextLinesCanvas } from '../util/wrapText';
 
 function clampVal(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
@@ -19,7 +19,7 @@ function lineCountForCell(
   ctx: CanvasRenderingContext2D | null,
 ): { fontSize: number; lineCount: number; hasText: boolean } {
   const cell = store.getCell(r, c);
-  const style = cell?.styleId === undefined ? undefined : store.getStyle(cell.styleId);
+  const style = store.getCellStyle(r, c, cell);
   const text = cell?.text ?? '';
   if (text.length === 0) return { fontSize: style?.fontSize ?? DEFAULT_FONT_SIZE, lineCount: 1, hasText: false };
 
@@ -77,12 +77,14 @@ export function autoFitRowHeight(store: Store, r: number): number {
   const ctx = canvas?.getContext('2d') ?? null;
   let maxH = ROW_HEIGHT;
   let hasContent = false;
-  for (let c = 0; c < TOTAL_COLS; c += 1) {
-    const { fontSize, lineCount, hasText } = lineCountForCell(store, r, c, ctx);
-    if (!hasText) continue;
+  // Walk only the stored cells of the row — the 16,384-column address space is
+  // never enumerated; an empty (unstored) cell has no text and cannot grow the row.
+  store.forEachCellInRect({ r1: r, c1: 0, r2: r, c2: TOTAL_COLS - 1 }, (rr, c) => {
+    const { fontSize, lineCount, hasText } = lineCountForCell(store, rr, c, ctx);
+    if (!hasText) return;
     hasContent = true;
     maxH = Math.max(maxH, excelRowHeightPx(fontSize, lineCount));
-  }
+  });
   if (!hasContent) return ROW_HEIGHT;
   return clampVal(maxH, 15, 500);
 }
@@ -96,21 +98,23 @@ export function autoFitRowHeight(store: Store, r: number): number {
 export function autofitRowHeights(store: Store, range: RangeAddress): readonly { readonly r: number; readonly height: number }[] {
   const canvas = typeof document !== 'undefined' ? document.createElement('canvas') : null;
   const ctx = canvas?.getContext('2d') ?? null;
+  // Cells inside the selection count even when empty (Excel grows the row for
+  // the selection's font before text is typed). An empty cell without a stored
+  // entry has no style, so it measures at the default font — one baseline max
+  // covers exactly what the old per-column walk measured for those.
+  const emptySelectionCellHeight = Math.max(ROW_HEIGHT, excelRowHeightPx(DEFAULT_FONT_SIZE, 1));
   const out: Array<{ readonly r: number; readonly height: number }> = [];
   for (let r = range.r1; r <= range.r2; r += 1) {
-    let maxH = ROW_HEIGHT;
-    for (let c = range.c1; c <= range.c2; c += 1) {
-      const { fontSize, lineCount, hasText } = lineCountForCell(store, r, c, ctx);
-      // Excel grows the row for the selection's font even before text is typed
+    let maxH = emptySelectionCellHeight;
+    // One pass over the stored cells of the row (never the 16,384-column
+    // address space): inside the selection every stored cell counts, outside
+    // it only stored cells that hold text do.
+    store.forEachCellInRect({ r1: r, c1: 0, r2: r, c2: TOTAL_COLS - 1 }, (rr, c) => {
+      const inSelection = c >= range.c1 && c <= range.c2;
+      const { fontSize, lineCount, hasText } = lineCountForCell(store, rr, c, ctx);
+      if (!hasText && !inSelection) return;
       maxH = Math.max(maxH, excelRowHeightPx(fontSize, hasText ? lineCount : 1));
-    }
-    // Also respect taller content elsewhere on the same row outside the selection
-    for (let c = 0; c < TOTAL_COLS; c += 1) {
-      if (c >= range.c1 && c <= range.c2) continue;
-      const { fontSize, lineCount, hasText } = lineCountForCell(store, r, c, ctx);
-      if (!hasText) continue;
-      maxH = Math.max(maxH, excelRowHeightPx(fontSize, lineCount));
-    }
+    });
     out.push({ r, height: clampVal(maxH, 15, 500) });
   }
   return out;
@@ -123,6 +127,8 @@ export function autofitRowHeights(store: Store, range: RangeAddress): readonly {
  */
 export class AutoRowHeightsCommand extends Command<RangeAddress> {
   private before: readonly (readonly [number, RowMeta | undefined])[] = [];
+
+  public override kind(): 'autoRowHeights' { return 'autoRowHeights'; }
 
   public execute(sheet: Store): void {
     const before: Array<readonly [number, RowMeta | undefined]> = [];

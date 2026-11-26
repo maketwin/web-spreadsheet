@@ -3,8 +3,7 @@ import type { Plugin } from './PluginManager';
 export const CsvImportPlugin: Plugin = {
   name: 'csv-import',
   install(api) {
-    api.on('csv:import', (payload) => {
-      const csv = String(payload);
+    api.on('csv:import', (csv) => {
       const lines = csv.split('\n').filter((line) => line.trim() !== '');
       for (let r = 0; r < lines.length; r += 1) {
         const line = lines[r];

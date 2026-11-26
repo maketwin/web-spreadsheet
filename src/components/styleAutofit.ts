@@ -1,5 +1,5 @@
 import { AutoRowHeightsCommand } from './rowAutofit';
-import { CompositeCommand } from './rangeValues';
+import { CompositeCommand } from '../commands/rangeValues';
 import { SetRangeStyleCommand } from '../commands/impl/SetRangeStyle';
 
 import type { Command } from '../commands/Command';

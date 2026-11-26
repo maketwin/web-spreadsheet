@@ -1,6 +1,7 @@
 import type { CommandManager } from '../commands/CommandManager';
 import type { EventBus } from '../events/EventBus';
-import { registry as formulaRegistry, type FunctionSpec } from '../formula/registry';
+import type { SpreadsheetEvents } from '../events/events';
+import type { FunctionSpec } from '../formula/registry';
 import type { FormulaEngine } from '../formula/FormulaEngine';
 import type { Store } from '../store/Store';
 
@@ -47,9 +48,12 @@ export class PluginAPI {
   /**
    * Registers a formula function and returns its undo. The undo restores the
    * definition that existed before (builtin or earlier registration); a
-   * function created from scratch is removed again.
+   * function created from scratch is removed again. Registered on the host
+   * engine's own table: an engine given a private registry keeps the function
+   * to itself.
    */
   public registerFunction(name: string, spec: FunctionSpec): () => void {
+    const formulaRegistry = this.formula.registry;
     const previous = formulaRegistry.get(name);
     formulaRegistry.register(name, spec);
     return this.track(() => {
@@ -58,8 +62,12 @@ export class PluginAPI {
     });
   }
 
-  /** Subscribes on the host event bus; the subscription is tracked for `dispose()`. */
-  public on(event: string, handler: (payload: unknown) => void): () => void {
+  /**
+   * Subscribes on the host event bus; the subscription is tracked for
+   * `dispose()`. Built-in event names type the payload precisely (see
+   * `SpreadsheetEvents`); plugin-defined names keep it `unknown`.
+   */
+  public on<K extends string>(event: K, handler: (payload: K extends keyof SpreadsheetEvents ? SpreadsheetEvents[K] : unknown) => void): () => void {
     const off = this.events.on(event, handler);
     return this.track(off);
   }

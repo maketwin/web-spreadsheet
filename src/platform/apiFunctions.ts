@@ -1,4 +1,4 @@
-import { registry, type FunctionSpec } from '../formula/registry';
+import { registry, type FunctionRegistry, type FunctionSpec } from '../formula/registry';
 import { matrix, type FormulaArgument, type FormulaValue } from '../formula/types';
 import { API_ERROR, type MockHub } from './MockHub';
 import type { HttpMethod } from './types';
@@ -48,7 +48,7 @@ function toMatrix(body: unknown): FormulaArgument {
   return matrix(rows.length, cols, data);
 }
 
-/** 三个取数函数的 FunctionSpec 工厂。拆出来是因为 registry 是全局单例，测试要绑自己的 hub。 */
+/** 三个取数函数的 FunctionSpec 工厂。拆出来是因为安装目标可以是私有注册表，每个 hub 要绑自己的出参。 */
 export function apiFunctionSpecs(hub: MockHub): { readonly GET: FunctionSpec; readonly POST: FunctionSpec; readonly DATA: FunctionSpec } {
   const scalarCall = (method: HttpMethod) => (args: readonly FormulaArgument[]): FormulaArgument => {
     const url = String(scalarOf(args[0]) ?? '');
@@ -73,10 +73,16 @@ export function apiFunctionSpecs(hub: MockHub): { readonly GET: FunctionSpec; re
   };
 }
 
-export function installApiFunctions(hub: MockHub): void {
-  if (registry.has('API.GET')) return; // 注册表是全局单例，幂等安装
+/**
+ * 向 `table` 注册 API.* 取数函数；缺省是共享表 `registry`，与旧调用一致。
+ * 多平台实例各传一张私有表（new FunctionRegistry(registry)），互不覆盖。
+ * 幂等判断只看目标表自身的注册（父表链上的不算）——父表已有同名函数时，
+ * 仍要在本表装上自己的 spec，取数才会走到自己的 hub。
+ */
+export function installApiFunctions(hub: MockHub, table: FunctionRegistry = registry): void {
+  if (table.hasOwn('API.GET')) return; // 幂等安装
   const specs = apiFunctionSpecs(hub);
-  registry.register('API.GET', specs.GET);
-  registry.register('API.POST', specs.POST);
-  registry.register('API.DATA', specs.DATA);
+  table.register('API.GET', specs.GET);
+  table.register('API.POST', specs.POST);
+  table.register('API.DATA', specs.DATA);
 }

@@ -1,9 +1,9 @@
 import { Modal } from 'antd';
 import { SetMerge, SetMergeAcross } from '../commands/impl/SetMerge';
 import { SetRangeStyleCommand } from '../commands/impl/SetRangeStyle';
-import { CompositeCommand } from '../util/rangeValues';
+import { CompositeCommand } from '../commands/rangeValues';
 import { mergeConflictCount } from '../util/merge';
-import { parseRange } from '../util/cell';
+import { parseRange } from '../util/rangeNotation';
 import { xy2expr } from '../util/alphabet';
 import type { CommandManager } from '../commands/CommandManager';
 import type { RangeAddress } from '../selection/Range';

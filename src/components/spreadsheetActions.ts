@@ -18,14 +18,14 @@ import { currentRegion } from '../selection/currentRegion';
 import { parseNameBoxInput } from '../selection/nameBox';
 import { toggleAutoFilterCommand } from '../filter/toggleFilter';
 import type { CanvasRenderer, CellAddress } from '../renderer/CanvasRenderer';
-import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
+import { TOTAL_COLS, TOTAL_ROWS } from '../util/gridSize';
 import { CHART_DEFAULT_H, CHART_DEFAULT_W, CHART_MIN_H, CHART_MIN_W, type ChartAnchor, type ChartType } from '../charts/types';
 import { normalizeAnchor } from '../charts/geometry';
 import type { SparklineType } from '../sparkline/types';
 import { DataValidationService } from '../validation/DataValidationService';
 import { cellFromText } from '../util/cell';
 import { num2alpha } from '../util/alphabet';
-import { autofitRowHeights } from '../util/rowAutofit';
+import { autofitRowHeights } from './rowAutofit';
 import { normalizeRuns } from '../util/richText';
 import type { RichTextRun } from '../types';
 import type { Style } from '../types';
@@ -242,6 +242,10 @@ export function unhideOrHideCols(store: Store, execCmd: (cmd: Command) => void, 
   execCmd(new SetColsHiddenCommand({ c1: c, c2: c + count - 1, hidden: false }));
 }
 
+/**
+ * Excel: rows grow to fit a just-applied font size / wrap. A direct store
+ * write rather than a command, so a later undo does not shrink them again.
+ */
 export function growRowsToContent(store: Store, range: RangeAddress): void {
   for (const { r, height } of autofitRowHeights(store, range)) {
     const meta = store.getRow(r);

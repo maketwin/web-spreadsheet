@@ -6,7 +6,7 @@ import { SetAutoFilterCriteriaCommand } from '../commands/impl/SetAutoFilterCrit
 import { SortRangeCommand } from '../commands/impl/SortRange';
 import type { Command } from '../commands/Command';
 import type { Store } from '../store/Store';
-import { CompositeCommand } from '../util/rangeValues';
+import { CompositeCommand } from '../commands/rangeValues';
 import { mergesIntersecting } from '../util/merge';
 import type { FilterCondition, FilterConditionOperator } from '../types';
 

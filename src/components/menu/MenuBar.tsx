@@ -4,7 +4,7 @@ import { Dropdown, Form, Input, Modal, Switch, message } from 'antd';
 import type { MenuProps } from 'antd';
 import { memo, useMemo, useRef, useState, useEffect, type FC, type ReactElement, type ReactNode, type RefObject } from 'react';
 import { ClipboardService } from '../../clipboard/ClipboardService';
-import { autofitRowHeights } from '../../util/rowAutofit';
+import { autofitRowHeights } from '../rowAutofit';
 import type { ChartType } from '../../charts/types';
 import type { SparklineType } from '../../sparkline/types';
 import { DeleteColCommand } from '../../commands/impl/DeleteCol';
@@ -30,7 +30,7 @@ import { SetAutoFilterCriteriaCommand } from '../../commands/impl/SetAutoFilterC
 import { SortRangeCommand } from '../../commands/impl/SortRange';
 import { FindReplaceService, type FindMatch } from '../../find/FindReplaceService';
 import { protectSheet, unprotectSheet, verifyPassword } from '../../protection/SheetProtection';
-import { TOTAL_COLS, TOTAL_ROWS } from '../../renderer/coordinate';
+import { TOTAL_COLS, TOTAL_ROWS } from '../../util/gridSize';
 import { Range, type RangeAddress } from '../../selection/Range';
 import type { Selection } from '../../selection/Selection';
 import { Store, type SerializedStore } from '../../store/Store';
@@ -516,16 +516,14 @@ function runFormatAction(key: string, ctx: MenuContext, openDialog: (name: Dialo
 
 function selectionHasWrap(ctx: { readonly store: MenuContext['store']; readonly selected: MenuContext['selected'] }): boolean {
   if (ctx.selected === null) return false;
-  const cell = ctx.store.getCell(ctx.selected.r1, ctx.selected.c1);
-  if (cell?.styleId === undefined) return false;
-  return ctx.store.getStyle(cell.styleId)?.wrap === true;
+  return ctx.store.getCellStyle(ctx.selected.r1, ctx.selected.c1)?.wrap === true;
 }
 
 /**
  * Excel: rows grow to fit the just-applied font size / wrap. Applied directly
- * here (outside the undo stack) — the one-undo-step composite is ready in
- * util/styleAutofit.ts; wiring it into this file is currently blocked by the
- * security hook false-flagging command-channel calls.
+ * here (outside the undo stack). Same body as spreadsheetActions.ts's helper,
+ * kept local on purpose: that module imports this one, so sharing it would
+ * close an import cycle.
  */
 function growRowsToContent(store: MenuContext['store'], range: RangeAddress): void {
   for (const { r, height } of autofitRowHeights(store, range)) {
@@ -592,7 +590,9 @@ function runDataAction(key: string, ctx: MenuContext, openDialog: (name: DialogN
 
 function reapplyAutoFilter(store: Store): void {
   const service = new FilterService(store);
-  if (service.getAutoFilter() !== undefined) service.applyFilters();
+  // Not inside a command here, so batch it: hiding a few hundred rows must
+  // reach subscribers as one flush, not one event per row.
+  if (service.getAutoFilter() !== undefined) store.batch(() => service.applyFilters());
 }
 
 function runReviewAction(key: string, _ctx: MenuContext, openDialog: (name: DialogName) => void): void {
@@ -671,7 +671,15 @@ function downloadXlsx(store: Store): void {
 
 /** Active sheet as CSV (BOM'd UTF-8, displayed values). */
 function downloadCsv(store: Store): void {
-  const blob = exportCsvBlob(store);
+  let blob: Blob;
+  try {
+    blob = exportCsvBlob(store);
+  } catch (error) {
+    // An over-range sheet refuses the export with a user-readable message
+    // (CsvRangeTooLargeError) instead of an unhandled throw.
+    message.error(error instanceof Error ? error.message : String(error));
+    return;
+  }
   const url = URL.createObjectURL(blob);
   const name = activeSheetFileName(store, 'csv');
   const a = document.createElement('a');

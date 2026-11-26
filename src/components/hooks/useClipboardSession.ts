@@ -2,8 +2,8 @@ import { useCallback, useRef, useState, type MutableRefObject, type RefObject } 
 import { message } from 'antd';
 import { ClipboardService } from '../../clipboard/ClipboardService';
 import { buildPasteSpecialMatrix, type PasteSpecialOptions } from '../../clipboard/pasteSpecial';
-import { buildSessionPasteValues, combineMultiRanges, mergePasteErrorMessage, pasteFromClipboard, planMergePaste, retargetPasteStyles, snapshotCells, snapshotMerges, type ClipboardSessionState } from '../../clipboard/session';
-import { CompositeCommand, clearRange, clearRangeCmd } from '../../util/rangeValues';
+import { buildSessionPasteValues, combineMultiRanges, mergePasteErrorMessage, pasteFromClipboard, planMergePaste, retargetPasteStyles, snapshotCells, snapshotMerges, sparseClearCmd, sparseClearRange, type ClipboardSessionState } from '../../clipboard/session';
+import { CompositeCommand } from '../../commands/rangeValues';
 import { SetRangeValues } from '../../commands/impl/SetRangeValues';
 import { ApplyMergeChanges } from '../../commands/impl/SetMerge';
 import { mergeToString } from '../../util/merge';
@@ -52,7 +52,7 @@ export function useClipboardSession(store: Store, cmdManager: CommandManager | u
     const values = elsewhere === undefined ? built : retargetPasteStyles(store, built, elsewhere, store.getActiveSheetId());
     // Excel: paste-special (and the source clear of a cut) is one undo step.
     const pasteCmd = new SetRangeValues({ r1: target.r1, c1: target.c1, r2: target.r1 + values.length - 1, c2: target.c1 + (values[0]?.length ?? 1) - 1, values });
-    const clearCmd = session !== null && session.type === 'cut' && opts.mode !== 'formats' && opts.operation === 'none' && !opts.transpose ? clearRangeCmd(session.range, session.sheetId) : undefined;
+    const clearCmd = session !== null && session.type === 'cut' && opts.mode !== 'formats' && opts.operation === 'none' && !opts.transpose ? sparseClearCmd(store, session.range, session.sheetId) : undefined;
     const op = clearCmd === undefined ? pasteCmd : new CompositeCommand([pasteCmd, clearCmd]);
     if (cmdManager === undefined) op.execute(store); else cmdManager.execute(op);
     // Excel: a cut session ends on the first paste; the source clears when content moved.
@@ -74,13 +74,14 @@ export function useClipboardSession(store: Store, cmdManager: CommandManager | u
         const sourceSheet = session.sheetId;
         const elsewhere = sourceSheet !== undefined && sourceSheet !== store.getActiveSheetId();
         const styled = elsewhere && sourceSheet !== undefined ? retargetPasteStyles(store, values, sourceSheet, store.getActiveSheetId()) : values;
-        const parts: Array<InstanceType<typeof SetRangeValues> | InstanceType<typeof ApplyMergeChanges> | ReturnType<typeof clearRangeCmd>> = [
+        const parts: Array<InstanceType<typeof SetRangeValues> | InstanceType<typeof ApplyMergeChanges> | ReturnType<typeof sparseClearCmd>> = [
           new SetRangeValues({ r1: plan.rect.r1, c1: plan.rect.c1, r2: plan.rect.r2, c2: plan.rect.c2, values: styled }),
           new ApplyMergeChanges({ add: plan.add, remove: [] }),
         ];
         if (session.type === 'cut') {
           // Cut = move (Excel): the source block and its merges move to the target.
-          parts.push(clearRangeCmd(session.range, sourceSheet));
+          // The source clear only walks the stored part — an entire-column source must not enumerate the grid.
+          parts.push(sparseClearCmd(store, session.range, sourceSheet));
           const moved = new Set(plan.add);
           parts.push(new ApplyMergeChanges({ add: [], remove: (session.merges ?? []).map(mergeToString).filter((m) => !moved.has(m)), ...(sourceSheet !== undefined ? { sheetId: sourceSheet } : {}) }));
         }
@@ -112,7 +113,7 @@ export function useClipboardSession(store: Store, cmdManager: CommandManager | u
   const runCtxClipboard = useCallback((type: 'cut' | 'copy' | 'paste' | 'clear') => {
     const range = selectedRef.current?.range;
     if (range === undefined) return;
-    if (type === 'clear') clearRange(store, cmdManager, range);
+    if (type === 'clear') sparseClearRange(store, cmdManager, range);
     else void runClipboard(type, range);
   }, [store, cmdManager, selectedRef, runClipboard]);
   return { clipboardSession, clearClipboardSession, runClipboard, runCtxClipboard, pasteSpecialOpen, setPasteSpecialOpen, applyPasteSpecial };

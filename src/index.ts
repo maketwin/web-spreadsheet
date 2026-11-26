@@ -23,18 +23,22 @@ export { SetCellStyleCommand } from './commands/impl/SetCellStyle';
 export { SetRangeStyleCommand } from './commands/impl/SetRangeStyle';
 export { SetRangeBorderCommand, edgesForPreset } from './commands/impl/SetRangeBorder';
 export type { BorderPreset, BorderLine } from './commands/impl/SetRangeBorder';
+export { SetAxisStyleCommand, ClearAxisStyleCommand, axisSelectionOf, reservedAxisStyleId } from './commands/impl/SetAxisStyle';
+export type { SetAxisStyleArgs, ClearAxisStyleArgs, StyleAxis, AxisSelection } from './commands/impl/SetAxisStyle';
 export { SpreadsheetComponent } from './components/Spreadsheet';
 export { ErrorBoundary } from './components/ErrorBoundary';
 export type { CellInput, SpreadsheetOptions, SpreadsheetProps, StorageOptions } from './components/Spreadsheet';
 export { DependencyGraph } from './formula/dependency';
 export { evaluate } from './formula/evaluator';
-export { FormulaEngine } from './formula/FormulaEngine';
+export { FormulaEngine, type FormulaEngineOptions } from './formula/FormulaEngine';
 export { FormulaParser } from './formula/parser';
-export { registry } from './formula/registry';
-export type { FunctionSpec } from './formula/registry';
-export type { AstNode, CellResolver, FormulaValue } from './formula/types';
+export { RANGE_DEP_CELLS } from './formula/precedents';
+export { registry, FunctionRegistry } from './formula/registry';
+export type { FunctionSpec, FunctionContext } from './formula/registry';
+export { isSparseRange } from './formula/types';
+export type { AstNode, CellResolver, FormulaValue, SparseRangeValue } from './formula/types';
 export { EventBus } from './events/EventBus';
-export type { EventHandler, WildcardPayload } from './events/EventBus';
+export type { EventHandler, WildcardPayload, SpreadsheetEvents, EventPayload } from './events/EventBus';
 export { PluginAPI, type PluginHost } from './plugin/PluginAPI';
 export { PluginManager } from './plugin/PluginManager';
 export type { Plugin } from './plugin/PluginManager';
@@ -48,12 +52,15 @@ export { VirtualScroller } from './renderer/VirtualScroller';
 export type { PixelPosition, VisibleRange, VirtualScrollerOptions } from './renderer/VirtualScroller';
 export { Store } from './store/Store';
 export { SheetData } from './store/SheetData';
-export type { SheetFreeze } from './store/SheetData';
+export type { CellRect, MergeRect, SheetFreeze } from './store/SheetData';
 export { Range } from './selection/Range';
 export { currentRegion, excelSelectAll } from './selection/currentRegion';
 export { ClipboardService } from './clipboard/ClipboardService';
 export { KeyboardHandler } from './keys/KeyboardHandler';
 export type { SerializedStore } from './store/Store';
+export type { ExecuteOptions } from './commands/CommandManager';
+export { MAX_HISTORY_RETAINED_CELLS } from './commands/CommandManager';
+export { isReplayableKind, buildReplayableCommand, REPLAYABLE_KINDS, type ReplayableCommandKind } from './commands/replayRegistry';
 export { applyStoredTheme, getTheme, setTheme, THEMES } from './theme';
 export type { Theme } from './theme';
 export type { Cell, CellValue, ColMeta, RowMeta, StoreEvent, Style, Unsubscribe } from './types';
@@ -67,8 +74,10 @@ export { SetRowsHiddenCommand, SetColsHiddenCommand } from './commands/impl/SetH
 export type { ChartSpec, ChartType, ChartAnchor, ChartAnchorEdge } from './charts/types';
 export { FloatingChart } from './charts/FloatingChart';
 export type { FloatingChartProps } from './charts/FloatingChart';
-export { exportCsv, exportCsvBlob, csvQuote } from './io/CsvExporter';
+export { exportCsv, exportCsvBlob, csvQuote, CsvRangeTooLargeError } from './io/CsvExporter';
 export { parseNameBoxInput } from './selection/nameBox';
+export { parseInternalRange, type InternalRange } from './util/rangeNotation';
+export { MAX_MATERIALIZED_CELLS, MAX_DENSE_RANGE_CELLS } from './util/limits';
 export { skipHiddenCells } from './selection/visibleStep';
 export type { NameBoxTarget } from './selection/nameBox';
 export { toggleAutoFilterCommand } from './filter/toggleFilter';
@@ -88,7 +97,7 @@ export type { SheetProtectionState } from './protection/SheetProtection';
 // IndexedDB persistence: hosts that seed initial data (options.data/options.sheets)
 // opt the SDK out of its own restore — they can still read the last autosave
 // and apply it themselves.
-export { loadWorkbook, deleteWorkbook } from './db/WorkbookDB';
+export { loadWorkbook, deleteWorkbook, WORKBOOK_FORMAT_VERSION } from './db/WorkbookDB';
 export { DEFAULT_ID } from './db/WorkbookDB';
 
 export class Spreadsheet extends SpreadsheetImpl {

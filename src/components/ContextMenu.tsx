@@ -268,28 +268,3 @@ const WidthInput: FC<{ readonly onChange: (v: number) => void; readonly defaultV
   const [value, setValue] = useState(defaultValue);
   return <InputNumber value={value} min={30} max={500} onChange={(v) => { if (v !== null) { setValue(v); onChange(v); } }} />;
 };
-
-export function isHeaderRightClick(
-  canvas: HTMLCanvasElement,
-  clientX: number,
-  clientY: number,
-  scrollLeft: number,
-  scrollTop: number,
-  zoom: number,
-): { type: 'row'; r: number; x: number; y: number } | { type: 'column'; c: number; x: number; y: number } | null {
-  const rect = canvas.getBoundingClientRect();
-  const localX = clientX - rect.left;
-  const localY = clientY - rect.top;
-  if (localX < 0 || localY < 0) return null;
-  if (localX < 46 && localY >= 25) {
-    const scale = zoom / 100;
-    const row = Math.floor((localY - 25 + scrollTop) / (25 * scale));
-    return { type: 'row', r: Math.max(0, Math.min(row, 999)), x: clientX, y: clientY };
-  }
-  if (localY < 25 && localX >= 46) {
-    const scale = zoom / 100;
-    const col = Math.floor((localX - 46 + scrollLeft) / (100 * scale));
-    return { type: 'column', c: Math.max(0, Math.min(col, 25)), x: clientX, y: clientY };
-  }
-  return null;
-}

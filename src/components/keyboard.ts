@@ -1,5 +1,5 @@
 import type { KeyboardEvent as ReactKeyboardEvent, Dispatch, SetStateAction } from 'react';
-import { applyMatrix, clearRange, clearRangeCmd, CompositeCommand } from '../util/rangeValues';
+import { applyMatrix, clearRange, clearRangeCmd, CompositeCommand } from '../commands/rangeValues';
 import { fillSelectionPatches } from '../fill/fillSelection';
 import { repeatOnRange } from '../commands/repeat';
 import type { Command } from '../commands/Command';
@@ -12,7 +12,8 @@ import { KeyboardHandler } from '../keys/KeyboardHandler';
 import { Range, type RangeAddress } from '../selection/Range';
 import type { Store } from '../store/Store';
 import { columnSelection, extendSelection, rangeSelection, rowSelection, type Selection } from '../selection/Selection';
-import { COL_HEADER_HEIGHT, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS, type CellAddress } from '../renderer/coordinate';
+import { COL_HEADER_HEIGHT, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS } from '../util/gridSize';
+import { type CellAddress } from '../renderer/coordinate';
 import { autoSumFormula, cellEditValue, cycleActive, handleMenuShortcut, lastUsedCell, moveArrowTarget, setCellText } from './spreadsheetActions';
 import { fillShortcut } from '../fill/fillShortcut';
 

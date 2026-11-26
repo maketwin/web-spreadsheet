@@ -1,5 +1,6 @@
 import { useEffect, useRef, type CSSProperties, type FC, type KeyboardEvent as ReactKeyboardEvent, type MutableRefObject, type RefObject } from 'react';
-import { COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS, type CellAddress } from '../renderer/coordinate';
+import { COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS } from '../util/gridSize';
+import { type CellAddress } from '../renderer/coordinate';
 import type { CanvasRenderer, FormulaRefHighlight } from '../renderer/CanvasRenderer';
 import { useFormulaAssist, parseFormulaRefs, REF_HIGHLIGHT_PALETTE } from './formulaAssist';
 import { cycleDollars, endsWithRef, isPointTrigger, refAtCaret, upsertRef } from '../formula/pointMode';
@@ -43,9 +44,9 @@ export const EditorOverlay: FC<EditorOverlayProps> = ({ refEl, editingRefSetter,
     onRefHighlights(ranges.length > 0 ? ranges : null);
   }, [editingValue, onRefHighlights]);
   useEffect(() => () => { onRefHighlights?.(null); }, [onRefHighlights]);
-  const cellStyle = store.getCell(editing.r, editing.c)?.styleId !== undefined
-    ? store.getStyle(store.getCell(editing.r, editing.c)!.styleId!)
-    : undefined;
+  // Effective style (own > row default > column default): the editor shows
+  // what the cell displays, including inherited axis formats.
+  const cellStyle = store.getCellStyle(editing.r, editing.c);
   const wrapping = cellStyle?.wrap === true || editing.value.includes('\n');
   const cell = store.getCell(editing.r, editing.c);
   const initialRuns = editing.richDraft ?? (isRich(cell?.richText) ? cell!.richText! : undefined);
@@ -253,7 +254,7 @@ export function caretOffsetAtClick(
   const canvasEl = document.querySelector('canvas.ss-canvas') as HTMLCanvasElement | null;
   if (canvasEl === null) return text.length;
   const bounds = canvasEl.getBoundingClientRect();
-  const style = data?.styleId !== undefined ? store.getStyle(data.styleId) : undefined;
+  const style = store.getCellStyle(cell.r, cell.c, data ?? undefined);
   return caretOffsetFromLocalPoint({
     text,
     localX: clientX - bounds.left - rect.x,

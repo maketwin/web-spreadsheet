@@ -1,7 +1,8 @@
 import { flushSync } from 'react-dom';
 import { useEffect, useRef, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import { CanvasRenderer } from '../../renderer/CanvasRenderer';
-import { COL_WIDTH, TOTAL_COLS, TOTAL_ROWS, type CellAddress } from '../../renderer/coordinate';
+import { COL_WIDTH, TOTAL_COLS, TOTAL_ROWS } from '../../util/gridSize';
+import { type CellAddress } from '../../renderer/coordinate';
 import type { CommandManager } from '../../commands/CommandManager';
 import { SetRowHeight } from '../../commands/impl/SetRowHeight';
 import { SetColWidth } from '../../commands/impl/SetColWidth';
@@ -11,13 +12,13 @@ import { Range, type RangeAddress } from '../../selection/Range';
 import { columnSelection, rangeSelection, rowSelection, sheetSelection, type Selection, type SelectionKind } from '../../selection/Selection';
 import { snapRangeSelection } from '../../selection/mergeSnap';
 import type { Store } from '../../store/Store';
-import { autoFitRowHeight } from '../../util/rowAutofit';
+import { autoFitRowHeight } from '../rowAutofit';
 import { clampVal } from '../EditorOverlay';
 import { allSheetRange } from '../menu/MenuBar';
 import type { EditingCell } from '../EditorOverlay';
 import type { ViewState } from '../keyboard';
 
-export function useCanvasRenderer(store: Store, selected: Selection | null, onCellClick: (cell: CellAddress, shift: boolean, ctrl: boolean) => void, onSelectionChange: (selection: Selection) => void, view: ViewState, setView: Dispatch<SetStateAction<ViewState>>, cmdManager: CommandManager | undefined, onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => void, onCellContextMenu: (cell: CellAddress, x: number, y: number) => void, onAutoFilterClick: (r: number, c: number, x: number, y: number) => void, editingLiveRef: RefObject<EditingCell | null>): { canvasRef: RefObject<HTMLCanvasElement | null>; rendererRef: RefObject<CanvasRenderer | null> } {
+export function useCanvasRenderer(store: Store, selected: Selection | null, reveal: RefObject<boolean>, onCellClick: (cell: CellAddress, shift: boolean, ctrl: boolean) => void, onSelectionChange: (selection: Selection) => void, view: ViewState, setView: Dispatch<SetStateAction<ViewState>>, cmdManager: CommandManager | undefined, onHeaderContextMenu: (info: { type: 'row'; r: number } | { type: 'column'; c: number }, x: number, y: number) => void, onCellContextMenu: (cell: CellAddress, x: number, y: number) => void, onAutoFilterClick: (r: number, c: number, x: number, y: number) => void, editingLiveRef: RefObject<EditingCell | null>): { canvasRef: RefObject<HTMLCanvasElement | null>; rendererRef: RefObject<CanvasRenderer | null> } {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<CanvasRenderer | null>(null);
   const callbacks = useRef({ onCellClick, onSelectionChange, onHeaderContextMenu, onCellContextMenu, onAutoFilterClick });
@@ -65,15 +66,25 @@ export function useCanvasRenderer(store: Store, selected: Selection | null, onCe
   useEffect(() => rendererRef.current?.setViewOptions({ zoom: view.zoom }), [view.zoom]);
   useEffect(() => rendererRef.current?.setViewOptions({ showFormula: view.showFormula }), [view.showFormula]);
   useEffect(() => rendererRef.current?.setViewOptions({ showGrid: view.showGrid }), [view.showGrid]);
-  useEffect(() => rendererRef.current?.setSelection(selected?.range, selected?.kind, selected?.active), [selected]);
+  // A selection that is a jump into the sheet (hyperlink, Find, name box) asks
+  // for its cell to be brought into view; the flag is spent by the sync it belongs to.
+  useEffect(() => {
+    rendererRef.current?.setSelection(selected?.range, selected?.kind, selected?.active, reveal.current);
+    reveal.current = false;
+  }, [selected, reveal]);
   useEffect(() => rendererRef.current?.setFreeze(view.frozenRows, view.frozenCols), [view.frozenRows, view.frozenCols]);
   return { canvasRef, rendererRef };
 }
 
-function autoFitColWidth(store: Store, c: number): number {
+/** Excel column-header double-click: width follows the widest stored text in the column. */
+export function autoFitColWidth(store: Store, c: number): number {
   let maxLen = 0;
   let hasContent = false;
-  for (let r = 0; r < TOTAL_ROWS; r += 1) { const t = store.getCell(r, c)?.text; if (t !== undefined && t.length > 0) { hasContent = true; if (t.length > maxLen) maxLen = t.length; } }
+  // Stored cells of the column only — the 1,048,576-row address space is never enumerated.
+  store.forEachCellInRect({ r1: 0, c1: c, r2: TOTAL_ROWS - 1, c2: c }, (_r, _cc, cell) => {
+    const t = cell.text;
+    if (t !== undefined && t.length > 0) { hasContent = true; if (t.length > maxLen) maxLen = t.length; }
+  });
   if (!hasContent) return COL_WIDTH;
   return clampVal(maxLen * 8 + 20, 30, 500);
 }

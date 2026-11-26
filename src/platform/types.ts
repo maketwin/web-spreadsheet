@@ -92,11 +92,19 @@ export interface MockProject {
 
 export type OpVia = 'user' | 'undo' | 'redo' | 'replay';
 
-/** 可重放的操作载荷：复现包/回放引擎据此重建命令（不经过 undo 栈）。sheetId 缺省 = 当前活动表。 */
+/** 可重放的操作载荷：复现包/回放引擎据此重建命令（不经过 undo 栈）。sheetId 缺省 = 当前活动表。
+ *
+ * 三种旧形状由 opDetail 采样五个旧命令类别产出（结构命令 + setCellText），已持久化的
+ * 时间线与复现包依赖它们，保持不变。第四种 `command` 形状按命令的稳定身份
+ * （Command.kind，见 src/commands/replayRegistry.ts 的白名单）记录任意可重放命令：
+ * command 用 string 而不是白名单的联合类型——读入的数据可能来自更新版本（带未知
+ * 命令名），校验放在使用处（回放引擎对未知名字按"跳过"处理，不抛错）。
+ */
 export type ReplayPayload =
   | { readonly kind: 'setCell'; readonly r: number; readonly c: number; readonly text: string; readonly sheetId?: string }
   | { readonly kind: 'insertRow' | 'deleteRow'; readonly r: number; readonly count: number; readonly sheetId?: string }
-  | { readonly kind: 'insertCol' | 'deleteCol'; readonly c: number; readonly count: number; readonly sheetId?: string };
+  | { readonly kind: 'insertCol' | 'deleteCol'; readonly c: number; readonly count: number; readonly sheetId?: string }
+  | { readonly kind: 'command'; readonly command: string; readonly args: unknown };
 
 /** 流量来源：命中规则 / 真实捕获 / 未命中。 */
 export type TrafficSource = 'rule' | 'capture' | 'miss';
@@ -116,6 +124,12 @@ export type TimelineEvent =
       readonly after: string | null;
       /** 可重放载荷（能从 args 重建命令的操作才有）。 */
       readonly replay: ReplayPayload | null;
+      /**
+       * 撤销条目专属：被撤销的那条正向操作（via user/redo）的 seq。撤销是
+       * 后进先出的——命令实例被 redo 后再撤销，指向 redo 那条。命令在记录器
+       * 安装之前执行、或指向的条目已不存在（时间线被清空）时缺省。
+       */
+      readonly undoes?: number;
     }
   | { readonly seq: number; readonly ts: number; readonly kind: 'scenario'; readonly from: string | null; readonly to: string }
   | {
