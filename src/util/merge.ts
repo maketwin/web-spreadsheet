@@ -1,6 +1,6 @@
-import { parseRange } from './cell';
+import { parseRange } from './rangeNotation';
 import { num2alpha } from './alphabet';
-import { Range, type RangeAddress } from '../selection/Range';
+import type { RangeAddress } from '../selection/Range';
 import type { Store } from '../store/Store';
 
 /**
@@ -8,6 +8,11 @@ import type { Store } from '../store/Store';
  * A merge is stored as a range string (e.g. "B2:D4"); its anchor is the
  * top-left cell — the only cell that keeps a value (Excel semantics).
  */
+
+/** Sort the corners so r1 ≤ r2 and c1 ≤ c2 (identical to `Range.normalize`). */
+function normalizeAddress(a: RangeAddress): RangeAddress {
+  return { r1: Math.min(a.r1, a.r2), c1: Math.min(a.c1, a.c2), r2: Math.max(a.r1, a.r2), c2: Math.max(a.c1, a.c2) };
+}
 
 export function rangesIntersect(a: RangeAddress, b: RangeAddress): boolean {
   return a.r1 <= b.r2 && a.r2 >= b.r1 && a.c1 <= b.c2 && a.c2 >= b.c1;
@@ -27,7 +32,7 @@ export function parseMerge(range: string): RangeAddress {
 }
 
 export function mergeToString(range: RangeAddress): string {
-  const a = Range.normalize(range);
+  const a = normalizeAddress(range);
   return `${num2alpha(a.c1)}${a.r1 + 1}:${num2alpha(a.c2)}${a.r2 + 1}`;
 }
 
@@ -65,14 +70,14 @@ export function mergesIntersecting(store: Store, range: RangeAddress): RangeAddr
  * since an expanded range may touch further merges.
  */
 export function expandRangeToMerges(store: Store, range: RangeAddress): RangeAddress {
-  let cur = Range.normalize(range);
+  let cur = normalizeAddress(range);
   let changed = true;
   while (changed) {
     changed = false;
     for (const m of store.getMerges()) {
       const addr = parseMerge(m);
       if (rangesIntersect(addr, cur) && !rangeContains(cur, addr)) {
-        cur = Range.normalize({
+        cur = normalizeAddress({
           r1: Math.min(cur.r1, addr.r1),
           c1: Math.min(cur.c1, addr.c1),
           r2: Math.max(cur.r2, addr.r2),
@@ -88,19 +93,17 @@ export function expandRangeToMerges(store: Store, range: RangeAddress): RangeAdd
 /**
  * Excel merge warning condition: more than one cell in the range holds a
  * value, so merging keeps only the upper-left one. Counts non-anchor
- * non-empty cells (per merge the anchor keeps its value).
+ * non-empty cells (per merge the anchor keeps its value). Walks the stored
+ * cells only — blank addresses hold nothing to conflict.
  */
 export function mergeConflictCount(store: Store, range: RangeAddress): number {
-  const normalized = Range.normalize(range);
+  const normalized = normalizeAddress(range);
   let count = 0;
-  for (let r = normalized.r1; r <= normalized.r2; r += 1) {
-    for (let c = normalized.c1; c <= normalized.c2; c += 1) {
-      if (r === normalized.r1 && c === normalized.c1) continue;
-      const cell = store.getCell(r, c);
-      // A formula cell counts as data even when its result is an empty string (Excel).
-      if (cell !== undefined && (cell.text !== '' || cell.formula !== undefined)) count += 1;
-    }
-  }
+  store.forEachCellInRect(normalized, (r, c, cell) => {
+    if (r === normalized.r1 && c === normalized.c1) return;
+    // A formula cell counts as data even when its result is an empty string (Excel).
+    if (cell.text !== '' || cell.formula !== undefined) count += 1;
+  });
   return count;
 }
 
