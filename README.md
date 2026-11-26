@@ -3,11 +3,13 @@
 ![version](https://img.shields.io/badge/version-v2.1.0-brightgreen)
 ![license](https://img.shields.io/badge/license-MIT-blue)
 ![typescript](https://img.shields.io/badge/TypeScript-strict%20%7C%20zero--any-3178c6)
-![tests](https://img.shields.io/badge/tests-1240%20passed-brightgreen)
+![tests](https://img.shields.io/badge/tests-2207%20passed-brightgreen)
 
 A modern, lightweight TypeScript spreadsheet SDK — a canvas-rendered,
 Excel-compatible grid with a formula engine, full undo/redo, and a plugin
-system, wrapped in a clean 4-layer architecture.
+system, organized as a one-way dependency graph: a headless
+store/formula/commands kernel that the renderer and the React shell depend
+on, never the other way around.
 
 **[Documentation](https://maketwin.github.io/web-spreadsheet/) · [Changelog](./CHANGELOG.md)**
 
@@ -30,7 +32,9 @@ import it once (see [Package entries](#package-entries)).
 ## Features
 
 **Grid & editing**
-- Canvas renderer with virtual scrolling (1000 × 26 default grid, O(log n) coordinate lookups; the scroller is benchmarked smooth at 10k+ rows) and dirty-region repainting
+- Excel-sized grid — 1,048,576 rows × 16,384 columns — over sparse storage: the address space is not an allocation, cost tracks the stored cells, not the selection
+- Canvas renderer with virtual scrolling (O(log n) coordinate lookups; the scroller is benchmarked smooth at 10k+ rows) and dirty-region repainting
+- Column/row default styles (Excel whole-column/whole-row formatting): effective style resolves cell > row default > column default, applies to blank and future cells at O(axis length)
 - Excel-style chrome: menu bar, toolbar, formula bar, status bar, sheet tabs, context menu
 - Cell editing with IME (Chinese input) support, find & replace, freeze panes
 - Touch devices: one-finger pan, long-press context menus (cells / headers / sheet tabs), pinch zoom, and soft-keyboard-aware editing (desktop mouse behavior is untouched)
@@ -48,14 +52,17 @@ import it once (see [Package entries](#package-entries)).
 - Formula references shift along the fill (`$A$1` / `$A1` / `A$1` absolute semantics respected); cell styles carry over
 
 **Formula engine**
-- 91 built-in functions (SUM, AVERAGE, IF, VLOOKUP, XLOOKUP, INDEX/MATCH, SUBTOTAL, date/time, text, …)
+- 96 built-in functions (SUM, AVERAGE, IF, VLOOKUP, XLOOKUP, INDEX/MATCH, SUBTOTAL, COUNTBLANK, date/time, text, …)
 - Dynamic-array spill, Excel-365 style: `SEQUENCE` / `FILTER` / `UNIQUE` / `SORT` and multi-cell `XLOOKUP` results overflow into neighbouring cells (`#SPILL!` when blocked, auto-recovers)
 - Dependency graph with automatic recalculation
+- Whole-column/whole-row and open-ended references (`=SUM(A:A)`, `=SUM(B2:B)`) evaluate exactly over huge ranges by walking the stored cells only
 - Cross-sheet references (`=Sheet2!A1`, `=SUM(Sheet2!A1:A5)`)
+- Custom functions can declare a `FunctionContext` (the calling cell/sheet); volatile functions (`NOW` / `TODAY`) re-evaluate on every recalc pass that has work, so a sheet open across midnight stays current; per-engine private function registries keep plugin registrations from leaking
 
 **Commands & undo**
-- Command pattern for every mutation — **all 37 commands are undoable**, with test coverage for each
+- Command pattern for every mutation — **all 42 commands are undoable**, with test coverage for each
 - Undo restores formula results too (batched deferred recalc)
+- Every command carries a stable `kind()` identity; 31 kinds are replayable from recorded arguments (the mock platform's timeline replay)
 
 **Data features**
 - AutoFilter with criteria dropdowns and range sorting (Ctrl+Shift+L toggles)
@@ -66,31 +73,52 @@ import it once (see [Package entries](#package-entries)).
 - Custom number format strings — Excel syntax: `#,##0.00`, `0.00E+00`, `yyyy-mm-dd`, `h:mm AM/PM`, `正;负;零;文本` sections, with xlsx round-trip
 
 **I/O & persistence**
-- Real xlsx import/export (SheetJS): number formats, cell styles and borders, freeze panes, the autofilter range, conditional formats and data validations round-trip (charts, comments and hyperlinks import; images/sparklines and filter criteria are not exported)
+- Real xlsx import/export (SheetJS + fflate, deflate-compressed output): number formats, cell styles and borders, column/row widths & heights and axis default styles, freeze panes, the autofilter range, conditional formats and data validations round-trip (charts, comments and hyperlinks import; images/sparklines and filter criteria are not exported)
 - CSV/TSV and JSON import, CSV export (BOM'd UTF-8, displayed values), JSON/xlsx export
-- Auto-save to IndexedDB with startup restore
+- Auto-save to IndexedDB (1.5 s after the last change, at the latest 5 s after the first unsaved one, and immediately when the page is left) with startup restore
 - Paginated printing: print preview with paper/orientation/margins/scale settings, merged-cell-aware page breaks, 192-dpi offscreen page rendering with progressive page-by-page rendering (cancelable, floating data-URL images printed), 当前工作表 / 整个工作簿 scope (`Ctrl+P`), PDF export
 
 **Extensibility**
-- Plugin system with a typed `PluginAPI` (see `src/plugins/CsvImportPlugin.ts` for an example)
-- Everything is exported from the package root: Store, EventBus, FormulaEngine, VirtualScroller, every Command class, theming
+- Plugin system with a typed `PluginAPI` (see `src/plugin/CsvImportPlugin.ts` for an example)
+- The building blocks are exported from the package root: Store, EventBus, FormulaEngine, VirtualScroller, the row/column, style and chart commands, theming
 
 ## Architecture
 
 ```
 [User]
    ↓
-[Layer 4: API / Facade]      src/index.ts
+[Entrances]                  src/index.ts (full SDK)  src/core.ts (headless)
    ↓
-[Layer 3: Commands]           src/commands/   (37 commands + undo)
+[UI / delivery]              src/components/  src/renderer/  src/io/
+                             src/print/  src/db/  src/platform/
    ↓
-[Layer 2: Store + Formula]    src/store/  src/formula/
-[Layer 2b: Event Bus]         src/events/
+[Kernel]                     src/commands/   (42 commands + undo)
+                             src/store/  src/formula/  src/events/
    ↓
-[Layer 1: Renderer]           src/renderer/  src/components/
+[Base]                       src/types.ts  src/util/ (grid constants)
 ```
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full breakdown.
+
+## Scale & experiments
+
+The grid is Excel's address space (1,048,576 × 16,384) over sparse storage, so
+large workbooks stay interactive. Two repeatable harnesses live in the repo:
+
+```bash
+pnpm bench:scale         # Node benchmarks (store / many sheets / formulas / I/O) → coverage/scale-bench/*.json
+pnpm e2e:scale           # real-browser timings: time-to-screen and longest main-thread block (opt-in; not part of `pnpm e2e`)
+```
+
+Representative numbers (Apple-Silicon laptop, Node): one million-cell column
+fills in ~0.9 s and `forEachCell` walks it in ~10 ms; a row insert above it +
+undo ~0.3 s / 0.26 s (was 1.2 s / 1.0 s); Delete on that column + undo ~0.2 s
+/ 0.26 s (was 2.6 s / 3.3 s with formulas attached); whole-column bold ~0.3
+ms; `=SUM(A:A)` over a million numbers ~60 ms; a 1M-cell xlsx round-trip
+exports in 6.9 s / 9.6 MB and imports in 2.7 s; in a real browser scrolling
+that sheet never drops a frame and the auto-save no longer blocks the main
+thread. Details, the full tables and what is still slow:
+[docs/guide/scale.md](./docs/guide/scale.md).
 
 ## Getting started
 
@@ -138,8 +166,9 @@ them either — when loading it through a `<script>` tag, add a `<link>` to
 
 ```bash
 pnpm dev            # dev server with HMR
-pnpm test           # vitest — 1240 tests, 185 files
+pnpm test           # vitest — 2,207 tests, 295 files
 pnpm e2e            # Playwright (chromium desktop + chromium-touch 390×844) — context menus, dialogs & touch gestures in a real browser
+pnpm e2e:scale      # real-browser scale experiment (opt-in): a million cells and 50 sheets, longest main-thread block per action
 pnpm typecheck      # tsc --noEmit (strict, noUncheckedIndexedAccess)
 pnpm lint           # eslint
 pnpm build          # typecheck + library build (ESM, CommonJS/UMD, CSS + d.ts)
@@ -148,8 +177,8 @@ pnpm coverage       # test coverage report
 pnpm docs:dev       # VitePress documentation site
 ```
 
-Quality gates: zero `any`, zero `as` without justification, 300-line file
-limit, every module tested.
+Quality gates: zero `any`, zero `eslint-disable`, every module tested, and
+the layering rules lint-enforced (see [ARCHITECTURE.md](./ARCHITECTURE.md)).
 
 ## Credits
 

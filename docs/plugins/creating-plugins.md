@@ -27,7 +27,7 @@ class PluginAPI {
   get formula(): FormulaEngine;              // 公式引擎本体（求值/重算入口）
 
   registerFunction(name: string, spec: FunctionSpec): () => void;
-  on(event: string, handler: (payload: unknown) => void): () => void;
+  on<K extends string>(event: K, handler: (payload: K extends keyof SpreadsheetEvents ? SpreadsheetEvents[K] : unknown) => void): () => void;
 }
 ```
 
@@ -35,10 +35,10 @@ class PluginAPI {
 |------|------|
 | `store` | 数据层，读写单元格、样式、规则 |
 | `cmdManager` | 执行命令（走命令系统的修改可撤销） |
-| `events` | 事件总线，监听 `command:executed` 等 |
+| `events` | 事件总线（类型化的 `EventBus<SpreadsheetEvents>`），监听 `command:executed` 等 |
 | `formula` | 公式引擎（`FormulaEngine`），需要主动求值/重算时使用 |
-| `registerFunction` | 向公式引擎注册函数，`FunctionSpec = { minArgs, maxArgs, evaluate(args) }`；返回该注册的**撤销函数**（恢复注册前的旧定义，或移除新函数） |
-| `on` | 订阅事件，返回退订函数 |
+| `registerFunction` | 向公式引擎注册函数，`FunctionSpec = { minArgs, maxArgs, evaluate(args, ctx?) }`；注册落在宿主引擎**自己的函数表**上（一张以共享 `registry` 为父表的私有表——内置函数仍然可用，本表的注册不外泄到其它引擎）；返回该注册的**撤销函数**（恢复注册前的旧定义，或移除新函数） |
+| `on` | 订阅事件（类型化：内置事件名的载荷类型精确，自定义事件名保持 `unknown`），返回退订函数 |
 
 ## 注册自定义公式函数
 
@@ -61,19 +61,33 @@ const StatsPlugin: Plugin = {
         return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
       },
     });
+    // 声明第二个参数 ctx（FunctionContext）可获知公式所在单元格 / 工作表；
+    // 引擎求值路径一定有值，不带上下文的直接求值（条件格式/验证规则）里为 undefined
+    api.registerFunction('MYTAG', {
+      minArgs: 0,
+      maxArgs: 0,
+      evaluate: (_args, ctx) => (ctx ? `${ctx.sheetId}!${ctx.cell.r},${ctx.cell.c}` : ''),
+    });
   },
 };
 ```
 
 注册后即可在任意单元格使用 `=MEDIAN(A1:A10)`。函数名统一按大写存储，可通过 `registry.list()` 查看。
 
+::: warning 作用域边界
+私有表里的函数只对**单元格公式**生效：条件格式规则与数据验证规则里的公式不带引擎注册表直接求值，看不到这些函数；公式自动补全默认也查共享 `registry`。
+:::
+
 ## 监听事件
+
+`api.on` 与 `api.events.on` 都可用；内置事件名（`SpreadsheetEvents` 表）的 handler 载荷类型精确：
 
 ```ts
 const LoggerPlugin: Plugin = {
   name: 'logger',
   install(api) {
-    const off = api.events.on('command:executed', ({ cmd }) => {
+    // payload 类型为 SpreadsheetEvents['command:executed']，即 { cmd: Command }
+    const off = api.on('command:executed', ({ cmd }) => {
       console.log('executed:', cmd.describe());
     });
     // 保存 off，在合适的时机退订

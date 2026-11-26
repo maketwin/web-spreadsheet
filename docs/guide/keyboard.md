@@ -1,6 +1,6 @@
 # 键盘快捷键
 
-键盘事件由 `KeyboardHandler` 统一解析（`src/keys/KeyboardHandler.ts`），画布聚焦时生效。移动类操作受网格边界 clamp（1000 行 × 26 列）。
+键盘事件由 `KeyboardHandler` 统一解析（`src/keys/KeyboardHandler.ts`），画布聚焦时生效。移动类操作受网格边界 clamp（1,048,576 行 × 16,384 列，即 Excel 地址空间）。
 
 ## 导航
 

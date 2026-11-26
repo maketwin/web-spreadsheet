@@ -37,6 +37,7 @@ export default defineConfig({
           text: '进阶',
           items: [
             { text: '文件 I/O 与持久化', link: '/guide/io' },
+            { text: '规模与性能', link: '/guide/scale' },
             { text: '事件系统', link: '/guide/events' },
             { text: '键盘快捷键', link: '/guide/keyboard' },
             { text: '主题与暗色模式', link: '/guide/theming' },

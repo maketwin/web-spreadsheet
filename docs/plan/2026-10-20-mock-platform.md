@@ -104,7 +104,7 @@
 
 **挂钩点**：命令总线的 `command:executing` / `command:undoing` / `command:redoing` 前置事件（本次为平台新增，镜像既有的 executed/undone/redone）。所有进 undo 栈的变更（编辑、插入删除行列、排序、粘贴、格式……）都经过命令总线，天然去重、天然结构化——不需要在几十个 UI 入口埋点。
 
-记录内容：`{seq, ts, kind: 'op', type: 命令名, via: user|undo|redo, target, before, after}`。undo/redo 本身也是一等操作。
+记录内容：`{seq, ts, kind: 'op', type: 命令名, via: user|undo|redo, target, before, after}`。undo/redo 本身也是一等操作；每条还带**可重放载荷**（`opDetail.sampleOp` 按命令的稳定身份 `cmd.kind()` 分派提取——不按参数形状猜：行高命令的类名含 Row，曾因此被当成删行回放）。载荷形状：原来 5 种（`setCell` 与四个结构命令）保持旧形状不变，其余 **24 种白名单命令**用 `{ kind: 'command', command, args }`（参数不是纯数据——含函数/类实例等——时不带载荷）；图表 / 图片 / 迷你图等白名单外的有身份命令只展示位置、不可重放，无身份命令退化为只记命令名。`via: 'undo'` 的条目带的是**逆操作**载荷——`setCell` 写回撤销后恢复出的值（公式单元格写回公式本体，原值为空串照常写回空串），`insertRow`/`insertCol` 换成对应的 `deleteRow`/`deleteCol`；撤销「删除行/列」与 `command` 形状的载荷没有逆操作（后者参数里没有旧值），记 `null`（回放计入 skipped，由前面的原操作条目承担重放）。`via: 'user'` 与 `'redo'` 直接用采样载荷。
 
 **值采样（✅）**：命令执行前/后各采一次目标位置的当前值（`opDetail.sampleOp`），补进操作记录——时间线能直接回答"**改了哪里、从什么值变成什么值**"：
 - 单元格命令（编辑/恢复）：`target=B3`，公式单元格显示公式本体，空单元格显示 ∅；
@@ -112,7 +112,9 @@
 - 区间命令（样式/填充/边框）：`target=B2:D5`（无值）；
 - 未识别命令：只显示命令名。
 
-完成事件按命令实例配对（executing/executed 携带同一 cmd），撤销方向自动相反。
+完成事件按命令实例配对（executing/executed 携带同一 cmd），撤销方向自动相反（before/after 互换；重放载荷取逆操作，见上）。
+
+撤销条目还带 `undoes`——**它撤销的是哪一条正向条目的 seq**（记录器按命令实例记住最近一次 user/redo 执行的 seq；同一命令重做后再撤销，指向重做那条）。回放时的**抵消规则**：撤销条目没有逆载荷（行高、样式、合并等——旧值不在参数里）且 `undoes` 落在回放区间内时，**两条都不回放**、各计一次 skipped——否则会出现"正向操作被重放、撤销被跳过"，回放结果里留下用户已经撤销掉的效果，而且不报偏差。依据是撤销的后进先出：一个操作被撤销时，它之后的操作要么已被撤销（各自的撤销条目排在前面、各自抵消），要么仍然成立且不依赖它。有逆载荷的撤销（单元格编辑、插入/删除行列）照旧回放逆操作；`undoes` 指向区间外或已不存在的条目时只跳过撤销条目本身；没有 `undoes` 字段的旧时间线行为不变。
 
 记录分档（控制噪声）：变更级（默认，✅）→ 交互级（+ 选区/按键路径，规划，用于复现输入类 bug）→ 关闭（对外演示）。
 
@@ -124,7 +126,7 @@
 
 ### 6.3 回放与复现包（✅ 回放引擎与复现包已实现）
 
-- **回放引擎（`src/platform/replay.ts`）**：按 seq 重演时间线里的场景切换与可重放操作。操作记录带**可重放载荷**（`ReplayPayload`：setCell 含坐标与文本，insertRow/deleteRow/insertCol/deleteCol 含位置与数量），由 `opDetail.sampleOp` 在记录时从命令 args 提取。命令直接对 store 重建执行（不污染 undo 栈），回放过程以 `via='replay'` 入时间线、接口调用挂其因果；**每步与记录的 after 值比对**，偏差（期望 vs 实际）逐条上报——回放即自带断言。回放起点快照时间线，自身事件不会被重复回放。
+- **回放引擎（`src/platform/replay.ts`）**：按 seq 重演时间线里的场景切换与可重放操作。操作记录带**可重放载荷**（`ReplayPayload`：`setCell` 含坐标与文本，`insertRow`/`deleteRow`/`insertCol`/`deleteCol` 含位置与数量，其余 24 种白名单命令为 `{ kind: 'command', command, args }`——回放白名单共 **29 种**，见 `src/commands/replayRegistry.ts` 的 `BUILDERS`，命令名即持久化格式的一部分、只能新增不能改名；撤销条目为逆操作载荷，见 6.1），由 `opDetail.sampleOp` 在记录时按 `cmd.kind()` 提取。载荷经一个回放私有的 `CommandManager` 以 `record: false` 程序化应用——与用户编辑走**同一个 store 批处理与异常边界**（成千上万个搬表事件合并成一次刷新、一轮重算，实测回放一条「插入行」从 1,003 轮重算降到 1 轮、53.8ms → 3.2ms），不污染 undo 栈、不发 `command:*` 事件；回放遇到**未知的命令名**（可能是更新版本导出的时间线）计入 skipped 继续执行；回放过程以 `via='replay'` 入时间线、接口调用挂其因果。**每步与记录的 after 值比对**，偏差（期望 vs 实际）逐条上报——回放即自带断言。载荷应用失败抛 `Replay failed at seq <seq> (<载荷种类>)` 并中止回放，因果窗口随之关闭（此前异常会把窗口一直开着，之后的流量被错挂到陈旧的因果上）。回放起点快照时间线，自身事件不会被重复回放。
 - **复现包（`src/platform/bundle.ts`）**：`工作簿快照(store.serialize) + 项目 + 捕获 + 事件流` 一个 JSON 文件（`.repro.json`），导入即整体替换（undo 栈随之清空），再点回放即可确定性复现。解决"我这里好好的"。
 - **规划中**：回放控制条（步进/断点/到第 N 步）、`场景 + 操作序列 + 断言集` 形式化回归用例接 CI、流量入包。
 

@@ -40,7 +40,7 @@ export interface Cell {
 
 `RichTextRun { text, style? }` 的 `style` 支持 bold/italic/underline/strike/字号/字体/颜色/上下标。`spillOf` 影子格随单元格序列化，锚点每次重算时整批重建。
 
-单元格按 `"r,c"`（行,列，从 0 开始）为键存在 `Map` 里，空单元格不占存储。
+单元格以数值键 `r * TOTAL_COLS + c` 存在 `Map` 里（`src/store/SheetData.ts`），空单元格不占存储；对外的 `getCells()` / `serialize()` 仍产出 `"r,c"`（行,列，从 0 开始）字符串键。网格是 Excel 的地址空间（1,048,576 行 × 16,384 列），核心原则是**地址空间不是分配**——键是一个数字，任何遍历都只走已存储的格子（见下文「稀疏遍历与范围 API」）。
 
 ## Style（样式）
 
@@ -73,22 +73,51 @@ export interface Style {
 ## 行 / 列元数据
 
 ```ts
-export interface RowMeta { height?: number; hide?: boolean; }
-export interface ColMeta { width?: number; hide?: boolean; }
+export interface RowMeta { height?: number; hide?: boolean; styleId?: string; }
+export interface ColMeta { width?: number; hide?: boolean; styleId?: string; }
 ```
+
+`styleId` 是**列/行默认样式**（整列/整行格式化，Excel 语义）：没有自有样式的格子显示它，之后输入的格子也立即生效。有效样式的解析顺序是**格子自有样式 > 行默认 > 列默认**，入口是 `Store.getCellStyle(r, c, cell?, sheetId?)`（详见[格式化](/guide/formatting)的「列/行默认样式」）。
 
 默认尺寸（全局常量，非 per-sheet 配置）：
 
 | 常量 | 值 |
 |------|-----|
-| `TOTAL_ROWS` | 1000 |
-| `TOTAL_COLS` | 26（A–Z） |
+| `TOTAL_ROWS` | 1,048,576 |
+| `TOTAL_COLS` | 16,384（A–XFD） |
 | `ROW_HEIGHT` | 20px |
 | `COL_WIDTH` | 64px |
 | `ROW_HEADER_WIDTH` | 46px |
 | `COL_HEADER_HEIGHT` | 20px |
 
 行高/列宽拖拽调整的下限/上限：行高 15–500px，列宽 30–500px。双击行头/列头触发自动适应（auto-fit）。
+
+## 稀疏遍历与范围 API
+
+网格大小只是**地址空间**：遍历和统计永远只碰已存储的格子。`Store` 上新增的 API（均有可选 `sheetId` 尾参）：
+
+```ts
+store.forEachCell((r, c, cell) => { ... });            // 每个已存储格子调用一次
+store.forEachCellInRect(rect, (r, c, cell) => { ... }); // 只回调 rect 内已存储的格子
+store.getCellCount();                                   // 已存储格子数
+store.getUsedBounds();                                  // 已用范围 { r1, c1, r2, c2 }；空表 undefined
+store.limitToData(range);                               // 选区 ∩ 已用范围
+```
+
+- `forEachCellInRect` 的代价按「矩形地址数与已存储格子数中较小者」走：小矩形逐地址查表，大矩形一次全扫过滤。
+- `limitToData` 把选区收缩到与已用范围的交集；**不相交时回落到选区首格**——对空选区的操作仍有一个格子可落点，永远不会扫地址空间。
+- `CellRect { r1, c1, r2, c2 }` 与合并查询的 `MergeRect` 类型都从两个包入口导出。
+
+## 物化上限常量
+
+会**创建或展开**格子的操作有硬上限（`src/util/limits.ts`，前两个从两个包入口导出）：
+
+| 常量 | 值 | 约束 |
+|------|-----|------|
+| `MAX_MATERIALIZED_CELLS` | 250,000 | 一次粘贴平铺 / 智能填充最多写入的格子数；Excel 会把复制块平铺填满整列选区，这里粘贴只在锚点落一次、填充到该数为止 |
+| `MAX_DENSE_RANGE_CELLS` | 2,000,000 | 一个区间引用最多读进一个稠密数组的格子数；更大的区间仍然精确——聚合类函数只走已存储的格子，其余函数返回 `#VALUE!`（见[公式引擎](/guide/formulas)） |
+
+逐格类命令（样式、数字格式、边框、清空等）按同一原则收缩处理范围，见[命令与撤销](/guide/commands)的「有效范围与逐格命令」。
 
 ## 合并单元格
 
@@ -97,9 +126,12 @@ export interface ColMeta { width?: number; hide?: boolean; }
 ```ts
 store.addMerge('A1:B2');    // 合并
 store.removeMerge('A1:B2'); // 取消合并
-store.getMergeAt(0, 0);     // 查询 (0,0) 所在的合并区域
+store.getMergeAt(0, 0);     // 查询 (0,0) 所在的合并区域（A1 串）
+store.getMergeRectAt(0, 0); // 同上，返回解析后的边界 { r1, c1, r2, c2, range }
 store.getMerges();          // 当前 sheet 全部合并区域
 ```
+
+`getMergeAt` / `getMergeRectAt` 由 SheetData 内的按行合并索引支撑（不再每次线性扫描并解析 A1 串）；返回的 `MergeRect` 是内部共享对象，调用方应视为只读。
 
 UI 层由 `mergeSelection`（`src/components/mergeActions.ts`）统一入口，菜单栏与工具栏共用，语义对齐 Excel：
 
@@ -118,8 +150,8 @@ UI 层由 `mergeSelection`（`src/components/mergeActions.ts`）统一入口，�
 
 | 数据 | 说明 |
 |------|------|
-| `cells` | `"r,c" → Cell` |
-| `rows` / `cols` | 行高列宽、隐藏标记 |
+| `cells` | 已存储格子（内部数值键 `r * TOTAL_COLS + c`，序列化为 `"r,c"` 键） |
+| `rows` / `cols` | 行高列宽、隐藏标记、列/行默认样式（`styleId`） |
 | `styles` | `styleId → Style` 样式表 |
 | `merges` | 合并区域集合 |
 | `conditionalRules` | 条件格式规则（见[格式化](/guide/formatting)） |
@@ -162,6 +194,8 @@ store.getCellBySheetName('Sheet2', r, c);
 store.getStyle(cell.styleId!);                // Style | undefined
 store.getActiveSheetId();                     // 'sheet-1'、'sheet-2' …
 store.getSheets();                            // [{ id, name }]
+store.getRowEntries();                        // 带元数据的行：[index, RowMeta][]
+store.getColEntries();                        // 带元数据的列：[index, ColMeta][]
 
 // 写
 store.setCell(r, c, { text: 'hello' });

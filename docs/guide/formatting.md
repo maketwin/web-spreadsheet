@@ -69,6 +69,33 @@
 
 数字格式随 xlsx 导入导出**双向保留**：导出时写入 xlsx 单元格的 `z` 字段（内置格式映射为对应 Excel 格式串），导入时从 `z` 字段提取回来。详见[文件 I/O](/guide/io)。
 
+## 列/行默认样式
+
+Excel 的「整列 / 整行格式化」：选区跨全部行（点列标选中整列）时写**列默认样式**，跨全部列（点行号选中整行）时写**行默认**，整表选中（左上角全选按钮）则给全部 16,384 列各写一条列默认。存储上是 `RowMeta` / `ColMeta` 新增的可选 `styleId`（见[数据模型](/guide/data-model)），轴样式 id 用保留前缀 `colstyle-<c>` / `rowstyle-<r>`。
+
+```ts
+import { SetAxisStyleCommand } from 'web-spreadsheet';
+
+// 给 C 列（索引 2）设列默认：粗体 + 千分位数字格式
+ss.cmdManager.execute(new SetAxisStyleCommand(
+  { axis: 'col', from: 2, to: 2, style: { bold: true, numberFormat: '#,##0.00' } },
+));
+
+// 通常不必手动判定选区类型：SetRangeStyleCommand / SetNumberFormatCommand /
+// SetRangeBorderCommand 在 execute 开头用 axisSelectionOf 判定后自动委托——
+// 整列/整行/整表选区走轴默认，有界选区走逐格样式，调用方无需区分。
+```
+
+特性与 Excel 一致：
+
+- **代价 O(轴长)、零格子写入**——一列 100 万格的表加粗整列只写一条列元数据；对空白格和之后输入的格子**立即生效**。
+- **优先级**：有效样式按 **格子自有样式 > 行默认 > 列默认** 在 `Store.getCellStyle(r, c, cell?, sheetId?)` 解析（已导出）。已有自有样式的格子不被整列命令改动（直接格式优先）。
+- **有界选区的合并基底是有效样式**：在粗体列里的格子再加斜体，得到粗体+斜体（而不是覆盖成只有斜体）。
+- **清除格式**：格子自有样式清掉后显示轴默认；整列选区的「清除格式」同时清列默认和列内格子的自有样式，一步撤销（`ClearAxisStyleCommand`）。
+- **整列边框**：`outer` 预设 = 列左右两条边；`inner` = 列内上下两条边（`SetRangeBorderCommand` 按轴换算边）。
+- **复制物化**：复制时继承来的有效样式会被物化成自有 `styleId`（Excel 复制的是有效格式），粘贴到别处不再依赖原列的默认。
+- **工具栏**：整列/整行选区下显示轴默认样式（`src/components/InteractionToolbar.tsx`）；同一批轴写里基底相同的连续索引共享一条样式表条目，撤销只记例外。
+
 ## 条件格式
 
 五种规则类型（`ConditionalRule`），挂在范围上：
@@ -95,7 +122,7 @@ ss.cmdManager.execute(new SetConditionalFormatCommand(
 ));
 ```
 
-覆盖层（`ConditionalOverlay`：`style` / `dataBar` / `icon`）由 `ConditionalService.computeOverlay(store, r, c)` 实时计算，叠加在单元格原有样式之上；公式求值出错时不产生覆盖层。图标绘制在单元格左缘，xlsx 导出时图标集不写入（已知偏差）。
+覆盖层（`ConditionalOverlay`：`style` / `dataBar` / `icon`）由 `ConditionalService.computeOverlay(store, r, c)` 计算，叠加在单元格原有样式之上；结果按 store 版本缓存——同一个 `store.revision` 内重复调用直接返回上一次的结果对象（规则或数据未变时每帧开销从毫秒级降到微秒级），因此**返回值必须当作不可变**。公式求值出错时不产生覆盖层。图标绘制在单元格左缘，xlsx 导出时图标集不写入（已知偏差）。
 
 ::: tip 公式规则与数据验证自定义公式的相对引用
 公式规则（`formula`）与数据验证的自定义公式（`custom`）都按 Excel 语义书写：公式相对**规则范围的左上角单元格**，求值时按当前单元格相对左上角的偏移平移（带 `$` 的绝对引用不动）。验证一侧在编辑器提交时带上单元格位置求值（见[API](/api/spreadsheet#数据功能服务)）；粘贴与填充**不跑验证**（与 Excel 一致），只有编辑器输入会校验。

@@ -67,7 +67,7 @@ filter.setColumnFilter(1, {
 // cmdManager.execute(new SortRangeCommand(range, { sortCol: 1, direction: 'asc' }))
 ```
 
-排序规则与 Excel 一致：数字排在文本前，空值始终排最后；筛选状态下隐藏行钉在原位、只对可见行排序。排序在单个 batch 内完成，且按 Excel 的「移动语义」重映射引用：区间内公式的行号经置换表改写，区间外引用被移动单元格的公式（含跨表 `Sheet!A1` 引用）也会全簿跟随改写，并纳入同一次撤销。全簿重写由独立服务 `src/formula/rowMoveRefs.ts` 的 `remapRefsForMovedRows` 统一完成——任何「行移动」类操作（排序、将来的剪切移动/结构调整）只需产出置换表并调用它，不必各自实现引用维护。
+排序规则与 Excel 一致：数字排在文本前，空值始终排最后；筛选状态下隐藏行钉在原位、只对可见行排序。排序在单个 batch 内完成，且按 Excel 的「移动语义」重映射引用：区间内公式的行号经置换表改写，区间外引用被移动单元格的公式（含跨表 `Sheet!A1` 引用）也会全簿跟随改写，并纳入同一次撤销。全簿重写由独立服务 `src/formula/rowMoveRefs.ts` 的 `remapRefsForMovedRows` 统一完成——任何「行移动」类操作（排序、将来的剪切移动/结构调整）只需产出置换表并调用它，不必各自实现引用维护。规模行为：排序快照是**稀疏的**——`forEachCellInRect` 只取已存储的格子（`src/commands/impl/SortRange.ts`），整列排序只走已存储格子而不是地址空间；筛选下拉的唯一值统计同样对没有存储格的行做算术处理（`src/filter/FilterService.ts`），代价随已存储格子数走。
 
 ## 命名区域
 
@@ -111,7 +111,7 @@ store.setProtection(unprotectSheet());       // 解除保护
 
 ## 冻结窗格
 
-冻结现在是**每张工作表的数据**（`SheetData.freeze`，`SheetFreeze { rows, cols }`）：随工作表一起序列化、随 xlsx 导入/导出，通过 `store.getFreeze(sheetId?)` / `store.setFreeze(freeze | undefined, sheetId?)` 读写。视图只显示活动工作表的冻结，组件在两者间双向同步（`src/components/hooks/useSheetFreeze.ts`）——切换活动工作表时视图跟随读取，在视图里切换冻结时写回当前工作表。
+冻结现在是**每张工作表的数据**（`SheetData.freeze`，`SheetFreeze { rows, cols }`）：随工作表一起序列化、随 xlsx 导入/导出，通过 `store.getFreeze(sheetId?)` / `store.setFreeze(freeze | undefined, sheetId?)` 读写。视图只显示活动工作表的冻结，组件在两者间双向同步（`src/components/hooks/useSheetFreeze.ts`）——切换活动工作表时视图跟随读取，在视图里切换冻结时写回当前工作表；宿主代码直接对**当前活动工作表**调用 `store.setFreeze` 时视图同样跟随（工作簿被替换时也是）。
 
 - 冻结语义与 Excel 一致：冻结到某格，即冻结其上方所有行和左侧所有列（在 B2 处冻结 = 冻结 1 行 1 列）。
 - 冻结区域在滚动时固定，可见范围计算自动把滚动起点推到冻结区之后。
@@ -202,7 +202,8 @@ winloss 类型正值为蓝色柱、负值为红色柱，带中轴线；默认尺
 - 多格选区直接使用选区；单格则扩展到当前数据区域（与筛选相同的 `inferDataRegion`）。
 - 对话框可选「数据包含标题行」与要参与比较的列；保留首次出现，删除后续重复的**整行**。
 - 选区与合并单元格相交时拒绝操作。
-- 可撤销（整表快照还原）。
+- 可撤销，且是**轻量撤销**：删除走 `Store.deleteRows` 整段搬移原语（连续删除的行合并成整段），撤销只保留被删的格子、文本被改写的公式、特性和元数据带，不留整表快照（见[命令与撤销](/guide/commands)）。
+- 规模行为：**只让有存储格的行参与**——整列去重不会去「删除」表格下方百万个空行；筛选隐藏行钉在原位的排序语义不受影响。
 
 ## 分列
 

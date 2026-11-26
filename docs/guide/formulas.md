@@ -21,12 +21,16 @@ const ss = new Spreadsheet('app', {
 |------|------|------|
 | 单元格引用 | `A1` | 列字母 + 行号（内部转 0 基坐标） |
 | 区域引用 | `A1:B5` | 用在 `SUM` 等聚合函数里 |
-| 跨 Sheet 引用 | `Sheet2!A1`、`SUM(Sheet2!A1:A5)` | 含空格的表名：`'My Sheet'!A1` |
+| 整列 / 整行引用 | `A:A`、`A:C`、`1:1`、`3:5` | 跨整个地址空间的引用，见下文「大区间与稀疏求值」 |
+| 开口区间 | `B2:B`（= `B2:B1048576`）、`B1:1`（= `B1:XFD1`） | 缺失的一端开向对应边缘；`$` 锚定与 `Sheet!` 前缀同样支持 |
+| 跨 Sheet 引用 | `Sheet2!A1`、`SUM(Sheet2!A1:A5)` | 含空格的表名：`'My Sheet'!A1`；整列/整行与开口区间同样可带 `Sheet2!B:B` |
 | 命名区域 | `=销售额*2` | 解析为 `name` 节点后经命名区域解析，见[数据功能](/guide/data-features) |
 | 算术运算符 | `+` `-` `*` `/` | |
 | 比较运算符 | `>` `<` | |
 | 一元负号 | 结果层支持取负 | |
 | 函数调用 | `SUM(A1:A5)` | 函数名大小写不敏感 |
+
+插删行列时这些写法按 Excel 语义改写：有锚定端的开口区间（`B2:B`）锚定端按普通引用平移（插行后变 `B3:B`），开口端保持开口；整列/整行引用（`A:A`、`3:5`）本身没有锚定端，保持原样。`INDIRECT` 的字面量参数同样支持整列/整行与开口区间（`INDIRECT("B2:B")`）。
 
 ## 内置函数（91 个）
 
@@ -56,6 +60,7 @@ const ss = new Spreadsheet('app', {
 | `MAX` / `MIN` | 1–255 | 最大 / 最小 |
 | `COUNT` | 1–255 | 数值个数 |
 | `COUNTA` | 1–255 | 非空个数 |
+| `COUNTBLANK` | 1 | 空白个数：未存储的地址与空串格子都算；稀疏区间上按「面积 − 已存储非空」算术补足 |
 | `COUNTIF` | 2 | 条件计数 |
 | `COUNTIFS` | 2n | 多条件计数 |
 | `AVERAGEIF` / `AVERAGEIFS` | 2–3 / 3+ | 条件平均 |
@@ -74,7 +79,7 @@ const ss = new Spreadsheet('app', {
 | `IF` | 2–3 | 条件分支，第三参（假值）可省略 |
 | `IFS` | 2n | 多分支：成对的「条件, 值」，取第一个命中的；全不命中 `#N/A` |
 | `SWITCH` | 3+ | 与多值逐一比较，命中返回对应值；可带默认值 |
-| `AND` / `OR` | 1–255 | 逻辑与 / 或 |
+| `AND` / `OR` | 1–255 | 逻辑与 / 或；区间里的空格和文本被忽略（Excel 语义），一个逻辑值都没有时返回 `#VALUE!` |
 | `NOT` | 1 | 逻辑非 |
 | `IFERROR` / `IFNA` | 2 | 错误兜底（`#N/A` 专用见 `IFNA`） |
 | `ISBLANK` / `ISNUMBER` / `ISTEXT` / `ISERROR` / `ISNA` | 1 | 信息判断 |
@@ -125,12 +130,26 @@ Excel 365 风格：结果为多值时**溢出**到右侧/下方相邻空格，�
 
 溢出被非空格阻挡时锚点显示 `#SPILL!`；清开阻挡后自动恢复。编辑锚点为标量、删除行等结构操作都会让旧影子格退役（见 [CHANGELOG v2.2.0](https://github.com/maketwin/web-spreadsheet/blob/master/CHANGELOG.md)）。
 
+## 大区间与稀疏求值
+
+网格是 Excel 的地址空间，一个区间引用最多把 `MAX_DENSE_RANGE_CELLS`（200 万，`src/util/limits.ts`，已导出）个格子读进一个稠密数组。更大的区间以**稀疏值**表示（`SparseRangeValue`，守卫 `isSparseRange`，均已导出）：只携带区间形状和一次「已存储格子」的遍历，地址空间永不展开。
+
+**按已存储格子求值（精确）**的函数：`SUM`、`AVERAGE`、`MIN`、`MAX`、`COUNT`、`COUNTA`、`COUNTBLANK`、`PRODUCT`、`MEDIAN`、`LARGE`、`SMALL`、`STDEV` 系列、`RANK`、`TEXTJOIN`、`CONCAT`、`COUNTIF` / `SUMIF` 及其 `IFS` / `AVERAGEIF(S)` / `MAXIFS` / `MINIFS`、`SUMPRODUCT`、`AND`、`OR`、`SUBTOTAL`、`VLOOKUP`、`HLOOKUP`（查找按存储位置逐格走，整列查找是 O(已存储) 而不是 O(行数)）。稀疏区间上匹配空格的条件（`COUNTIF(range, "")`、`=`）按「面积 − 已存储」算术补足，不逐空地址遍历。
+
+**返回 `#VALUE!`** 的场景：区间类函数（`UNIQUE`、`SORT`、`FILTER`、`IS*` 族）以及把大区间当标量或做二元运算——它们需要整个网格或按位置索引，宁可报错也不分配。例外：**`INDEX` 的行、列参数都是标量时按地址直接取值**，`INDEX(A1:C1048576, 5, 2)` 可用，越界返回 `#REF!`；`MATCH` / `XLOOKUP` 的大区间仍返回 `#VALUE!`。
+
+**Excel 语义对齐**：`AND` / `OR` 忽略区间里的空格和文本，一个逻辑值都没有返回 `#VALUE!`；`COUNTBLANK` 在稀疏区间上按算术补足空格数。
+
+::: tip
+大区间照样精确：`=SUM(A:A)` 覆盖 100 万个数字的求值在毫秒级完成（见[规模与性能](/guide/scale)），因为求值只走已存储的格子。
+:::
+
 ### 日期时间
 
 | 函数 | 参数 | 说明 |
 |------|------|------|
-| `NOW` | 0 | 当前日期时间 |
-| `TODAY` | 0 | 当前日期（`yyyy-mm-dd` 字符串） |
+| `NOW` | 0 | 当前日期时间（易失函数，每轮有工作的重算都会刷新） |
+| `TODAY` | 0 | 当前日期（`yyyy-mm-dd` 字符串；易失函数，跨午夜自动更新） |
 | `YEAR` / `MONTH` / `DAY` | 1 | 从日期值取年 / 月 / 日 |
 | `HOUR` | 1 | 从日期值取小时 |
 | `DATE` | 3 | 构造日期（月/日溢出自动进位），返回 `yyyy-mm-dd` |
@@ -164,12 +183,13 @@ Excel 365 风格：结果为多值时**溢出**到右侧/下方相邻空格，�
 ## 依赖图与重算
 
 - 每个公式的依赖（`A1`、`Sheet2!B2` 等）注册进 `DependencyGraph`；键为 `sheetId:单元格` 的 scoped key。
+- **大区间登记成一个矩形依赖**（`src/formula/precedents.ts` 的 `RANGE_DEP_CELLS = 256`，已导出）：面积超过它的区间不再每格一条边（整列 `SUM` 否则要建 104 万条边），而是登记为一个矩形——矩形内任何一格变化就把归属公式标脏。区间内已有的公式仍保留精确的逐格边，环检测与拓扑序不受影响；标量查找函数（`INDEX` / `VLOOKUP` / `HLOOKUP` / `MATCH` / `XLOOKUP`）所在格子落在自己的大区间内不算自引用。
 - 重算按 Excel 的规则调度：值可能过期的公式带「脏」标记，求值时只顺着脏的前驱拉取——同一次重算里每个公式最多求值一次；并且**只有值真的变了的单元格**才会让读它的公式变脏。
 - 引擎写结果时内容没变就不写、不发事件；同步层（`createFormulaSync`）也不会把引擎自己的写入当成编辑再回流一遍。
 - 一次操作里的多处改动（整行插入、批量粘贴、排序）经 `engine.coalesce()` 合并成一遍：先登记，再按依赖序统一求值。
 - 跨 sheet 依赖自动按 `SheetName:cellId` 键补查。
 - 循环引用有显式检测：`DependencyGraph.wouldCreateCycle` 只在登记公式（依赖边变化）时执行，环上单元格按 Excel 习惯显示 `0`，求值栈兜底，不会死循环。
-- `recalculateAll()` 按依赖序把所有公式各求值一次（`NOW` 这类易变函数随之刷新）。
+- **易失函数**（`FunctionSpec.volatile`，内置的 `NOW` / `TODAY` 已标）所在单元格在每一轮「本来就有工作」的重算里重新求值（Excel 的易失规则）——表格开过午夜 `=TODAY()` 也会翻到新的一天；`recalculateAll()` 仍按依赖序把所有公式各求值一次。
 - 整个工作簿被替换（新建 / 打开 / 恢复）时 Store 先发 `workbook` 事件，同步层调用 `engine.reloadFromStore()` 从最终状态重建全部登记，新工作簿里没有的单元格不会留下旧公式。
 - 重算过程中的异常会被捕获并 `console.error`，不会导致 UI 崩溃。
 
@@ -184,7 +204,7 @@ Excel 365 风格：结果为多值时**溢出**到右侧/下方相邻空格，�
 - `SUBTOTAL` 的 7/8/10/11 功能号未实现；`LAMBDA` / `LET` 未实现。
 - `SUBTOTAL`：隐藏行（含筛选与手动隐藏，共用 `RowMeta.hide`）一律跳过，不区分 Excel 的 1–11 vs 101–111 细别。
 - `INDIRECT` / `OFFSET` 已实现；依赖图只跟踪公式里的静态引用，**仅改动态目标单元格不一定触发重算**（与计划原「可选/延期」文档不同步处已按代码纠正）。
-- 矩阵与区域可参与标量运算：`=SUM(A1:A3*SEQUENCE(3))` 等元素级运算已支持（矩阵操作数自动展平）。
+- 矩阵与区域可参与标量运算：`=SUM(A1:A3*SEQUENCE(3))` 等元素级运算已支持（矩阵操作数自动展平）。超过稠密上限的大区间不行——当标量或参与二元运算返回 `#VALUE!`（见上文「大区间与稀疏求值」）。
 - 字符串字面量的引号不会被特殊处理，含引号的参数会连同引号一起成为字符串。
 :::
 
@@ -204,8 +224,43 @@ registry.register('DOUBLE', {
   evaluate: ([x]) => Number(x) * 2,
 });
 
+// 函数可声明第二个参数，获知公式所在单元格 / 工作表（引擎求值路径一定有值；
+// 条件格式 / 验证规则那种不带上下文的直接求值里为 undefined）
+registry.register('MYCELL', {
+  minArgs: 0, maxArgs: 0,
+  evaluate: (_args, ctx) => ctx ? `${ctx.cell.r},${ctx.cell.c}@${ctx.sheetId}` : '',
+});
+
+// 易失函数：所在单元格在每一轮「本来就有工作」的重算里重新求值（NOW/TODAY 已标）
+registry.register('FEED', {
+  minArgs: 0, maxArgs: 0, volatile: true,
+  evaluate: () => fetchFeedSnapshot(),
+});
+
 // 查看已注册函数
 registry.list();   // ['SUM', 'AVERAGE', ..., 'DOUBLE']
 ```
+
+### 私有函数注册表
+
+`registry` 是所有引擎共享的注册表；`FunctionRegistry` 是导出的类，构造时可传父表：
+
+```ts
+import { FormulaEngine, FunctionRegistry, registry } from 'web-spreadsheet';
+
+const table = new FunctionRegistry(registry); // 私有表：查不到的名字回落到共享表
+table.register('FEED', { minArgs: 0, maxArgs: 0, evaluate: () => feed() });
+
+const engine = new FormulaEngine(store, { registry: table }); // 引擎改用私有表
+engine.registry;                 // 可读
+```
+
+- 私有表里注册的函数本引擎可用、不外泄；内置函数仍然可用（回落父表）。
+- 插件里的 `api.registerFunction` 注册到宿主引擎自己的表上，撤销（插件卸载/销毁）时恢复原定义。
+- **默认不变**：`new FormulaEngine(store)` 用的仍是共享 `registry`。
+
+::: warning 私有表的边界
+条件格式规则与数据验证规则里的公式是直接调用 `evaluate()` 求值的，不带引擎的注册表——私有表里的函数对它们**不可见**，只对单元格公式生效。公式自动补全（`autoCompleteNames`）默认也查共享表。
+:::
 
 `FormulaEngine` 的方法见 [API 文档](/api/spreadsheet#formulaengine)。单元格公式的同步与重算由 UI 自动完成，一般无需手动调用。

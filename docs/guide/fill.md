@@ -59,6 +59,8 @@
 
 **填充后的选区（Excel 对齐）**：拖动填充柄或双击填充完成后，选区落在「源 ∪ 目标」——活动单元格仍在源区内，`Shift`+方向键的支点在远端边缘；名称框与公式栏经 `onSelectionChange` 同步跟随。
 
+**填充上限**：一次填充写入的格子数受 `MAX_MATERIALIZED_CELLS`（25 万，`src/util/limits.ts`，已导出）约束——Excel 会把源块平铺填满整列拖拽，这里填充写到上限为止（`src/fill/fillSelection.ts` / `src/fill/dblclickFill.ts` / `FillRangeCommand` 同一口径），粘贴平铺同限（见[文件 I/O](/guide/io)的剪贴板一节）。
+
 **填充溢出块（v2.2.0）**：对动态数组溢出块（含影子格）执行填充/复制时，派生的影子格会被丢弃，目标格的锚点公式在新位置重新溢出，不会把影子文本固化成值（见[公式引擎](/guide/formulas)）。
 
 ## 程序化触发

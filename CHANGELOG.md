@@ -2,6 +2,85 @@
 
 ## v2.2.0 — 开发中（移动端适配）
 
+### Breaking
+
+- **Store events: disguised `style` events split into their own types** —
+  feature changes that used to arrive disguised as
+  `{ type: 'style', id: 'cf:…' }` now have dedicated `StoreEvent` types:
+  `conditionalRules` (with `range`), `charts` / `images` / `sparklines`
+  (with `id`), `validations` (with `range`), `namedRanges` (with `name`),
+  `rowGroups`, `freeze`, `protection` (all with an optional `sheetId`), and
+  workbook-level `workbookPassword` (no `sheetId`). The `style` type now
+  means a real cell-style change only. The `sheet` event's `action` gained
+  `'move'` (`moveSheet`) and `'recolor'` (`setSheetColor`) — those changes
+  used to borrow `activate` / `rename`. **Host code that subscribed to the
+  store and matched `type === 'style'` by id prefix must switch to the new
+  event types.** Batch coalescing keeps the old granularity: identity-bearing
+  events merge per (type, sheet, identity); `rowGroups` / `freeze` /
+  `protection` / `workbookPassword` carry no identity and are always
+  delivered in order.
+- **Grid 1000×26 → Excel's address space (1,048,576 × 16,384)** —
+  `TOTAL_ROWS` / `TOTAL_COLS` now match Excel exactly (`src/util/gridSize.ts`).
+  The governing principle: **the address space is not an allocation** —
+  every cost tracks stored cells / metadata entries, never the selection or
+  the used range's area. Code that walked the old bounded grid must go
+  through the stored cells (`Store.forEachCell` / `forEachCellInRect` /
+  `getUsedBounds` / `limitToData`) instead of row/column loops.
+- **`StoreEvent` gained `structure` and `cells` variants** —
+  `{ type: 'structure', axis, kind: 'insert' | 'delete', start, count,
+  sheetId? }` (one per structural command; the half-plane at/after `start`
+  moved as one piece and moved content emits no per-cell events) and
+  `{ type: 'cells', keys, sheetId? }` (a batch rewrite with numeric
+  `r * TOTAL_COLS + c` keys). **Subscribers that maintain per-position
+  state must handle `structure`** (rebuild from the final state) and
+  `cells` (invalidate by key).
+- **`Store.replaceAll` no longer emits per-cell `cell` events** — imports
+  deliver one `workbook replace` plus `sheet` delete/add/activate events.
+  **Hosts that tracked imported content through `cell` events must rebuild
+  from the final state on `workbook` / `sheet`** — a million-cell import no
+  longer allocates a million event objects.
+- **Workbook records are format version 2** — `{ id, updatedAt,
+  formatVersion: 2, activeSheetId, passwordHash, sheets: [{ id, name,
+  color?, data: <per-sheet JSON string> }] }` (`WORKBOOK_FORMAT_VERSION = 2`).
+  New builds read v1 records; **older builds refuse v2 records** and leave
+  the record untouched. `loadWorkbook`'s return type
+  (`SerializedStore | undefined`) and `saveWorkbook(id, data)`'s signature
+  are unchanged.
+- **Paste/fill writes are capped at `MAX_MATERIALIZED_CELLS` = 250,000
+  cells** (exported, `src/util/limits.ts`). Excel tiles a copied block over
+  a whole-column selection; here a paste lands once at the anchor and a
+  fill stops at the cap instead of materializing millions of cells.
+- **Clearing removes emptied cells from storage** — Delete / clear contents
+  / pasting blanks / cut leave no `{ text: '' }` ghosts behind: a cell that
+  ends up empty and unstyled is removed; styled blanks are kept. Hosts that
+  assumed cleared cells still exist must handle `undefined` reads.
+- **Whole-column/whole-row/whole-sheet style selections write axis default
+  styles** — `SetRangeStyleCommand` / `SetNumberFormatCommand` /
+  `SetRangeBorderCommand` detect the whole-axis selection and delegate to
+  the new `SetAxisStyleCommand` / `ClearAxisStyleCommand`. Consequences for
+  bounded selections too: the style merge base is the **effective** style
+  (cell > row default > column default — italic on a cell in a bold column
+  yields bold+italic), and a whole-column format clear drops both the
+  column default and the cells' own styles in one undo step.
+- **xlsx export is now deflate-compressed; import limits relaxed; row
+  heights import with the right unit** — the package is re-zipped with
+  fflate after the in-memory post-processing passes (SheetJS's own zip is
+  uncompressed); import ceilings moved from 32/64 MiB to 128 MiB per entry /
+  256 MiB total (`src/io/safeUnzip.ts`). OOXML row `ht` is **points** and
+  converts ×4/3 to px — it used to be read as px, inflating imported row
+  heights by a third (re-import the same file to fix them).
+- **CSV export throws `CsvRangeTooLargeError`** (exported) when the used
+  range's area exceeds `MAX_DENSE_RANGE_CELLS` — two far-apart cells would
+  otherwise turn the dense CSV walk into billions of empty addresses.
+- **`AND` / `OR` ignore blanks and text inside range arguments** (Excel
+  semantics) and return `#VALUE!` when no argument contributed a logical
+  value; criteria that match blanks (`COUNTIF(range, "")`, `=`) count the
+  never-stored addresses of a sparse range arithmetically.
+- **Open-ended references now parse** — `A:A`, `A:C`, `3:5`, `B2:B`
+  (= `B2:B1048576`), `B1:1` (= `B1:XFD1`), with `$` anchors and `Sheet!`
+  scopes; `INDIRECT` literals accept them too. Formulas that used to fail
+  to parse may now evaluate.
+
 ### Architecture
 
 - **Headless core entry `web-spreadsheet/core`** (`src/core.ts` + second lib
@@ -23,6 +102,75 @@
   adapter files (type imports allowed).
 - **`src/plugin` + `src/plugins` merged** into the single `src/plugin/`
   directory (contracts and CsvImportPlugin together).
+- **Grid-constant lint rule (layer rule ③)** — `TOTAL_ROWS / TOTAL_COLS /
+  ROW_HEIGHT / COL_WIDTH / ROW_HEADER_WIDTH / COL_HEADER_HEIGHT` have their
+  single definition in `src/util/gridSize.ts`; `renderer/coordinate` only
+  forwards them now, and the last 23 non-renderer files that still imported
+  the constants through it point at `util/gridSize` directly. A
+  `no-restricted-imports` rule (with `importNames`) blocks new non-renderer
+  imports of those names from `renderer/coordinate`.
+- **`src/util/` is the lint-enforced bottom layer (layer rule ④)** —
+  `src/util/**` value-imports only util-internal paths (`./…`, `../util/…`)
+  and `../types`; type imports are unrestricted; no third-party libraries.
+  Making that true took one round of verbatim moves: A1 + internal range
+  notation parsing now lives in the new `util/rangeNotation.ts`
+  (`parseRange`, `parseInternalRange`, `shiftInternalRange`, `shiftAxis`);
+  formula-aware helpers moved beside their dependencies (`formula/
+  refRewrite.ts` — `replaceRefTokens`, `remapFormulaRows`,
+  `shiftFormulaRows/Cols` plus the old `util/formulaRefs.ts` `shiftFormula`;
+  `formula/precedents.ts` — `formulaDependencies`, `dependenciesOfAst`;
+  `format/displayText.ts` — `displayTextOf`); command-backed helpers moved
+  up (`util/rangeValues.ts` → `commands/rangeValues.ts`; `util/rowAutofit.ts`
+  / `util/styleAutofit.ts` → `components/`). `util/cell.ts` keeps only the
+  cell-input normalization leaf functions and `util/merge.ts` no longer
+  depends on `selection/Range` at runtime. The dependency analysis reports
+  0 upward value-dependencies out of `util/` and 0 file-level value-import
+  cycles.
+
+### Architecture（规模与大数据）
+
+- **Sparse cell storage** (`src/store/SheetData.ts`) — cells live in one
+  Map keyed by the number `r * TOTAL_COLS + c` (never a string); the public
+  `getCells()` / `serialize()` keep the `"r,c"` string keys. New
+  stored-cell-only APIs on `Store`: `forEachCell(fn, sheetId?)`,
+  `forEachCellInRect(rect, fn, sheetId?)` (cost tracks min(rect area,
+  stored cells)), `getCellCount(sheetId?)`, `getUsedBounds(sheetId?)`
+  (`{ r1, c1, r2, c2 }`, undefined on an empty sheet) and
+  `limitToData(range, sheetId?)` (range ∩ used bounds; a disjoint range
+  falls back to its first cell). `CellRect` / `MergeRect` types are
+  exported from both entries. Merges are indexed in 64-row bands
+  (`mergesByRow`), so `Store.getMergeRectAt` stays allocation-free on the
+  big grid (a whole-column merge costs ~16k band entries, not one per row).
+- **Structural move primitives** (`src/store/Store.ts`) — `insertRows(at,
+  count, sheetId?)` / `insertCols` / `deleteRows` / `deleteCols` move the
+  half-plane as one piece and deliver ONE `{ type: 'structure', axis, kind,
+  start, count, sheetId }` event (`bulkSetCells(entries, sheetId?)` writes a
+  batch and delivers one `{ type: 'cells', keys, sheetId }`). They do not
+  touch row/col metadata, merges, formulas or features — that remains the
+  commands' job. The four structural commands and `RemoveDuplicatesCommand`
+  build on them, so undo no longer keeps whole-band snapshots (only the
+  removed cells, formulas whose text was rewritten, features, and the
+  metadata band); spill shadow cells (`spillOf`) are dropped on the move
+  and their anchors re-spill.
+- **Export pipeline rebuilt around one in-memory file table**
+  (`src/io/XlsxExporter.ts`) — SheetJS writes the base package, fflate
+  unpacks it once (it is this export's own output, so import-side zip
+  limits do not apply), four post-processors patch it in place (packed
+  coordinate restore → styles → sheet features → charts, comments), and
+  fflate compresses once at the end. The worksheet build is sparse (one
+  SheetJS cell per stored cell, `!ref` clamped to the used bounds), and
+  past `MAX_DENSE_EXPORT_EMPTY_CELLS` (1,000,000, internal) empty
+  addresses in the used range the cells take the packed-export path
+  (`src/io/sheetPackingExport.ts`): dense block + coordinate restore in
+  the sheet XML, output byte-identical to the plain path.
+- **Sharded auto-save encoder** (`src/db/autoSave.ts`,
+  `src/db/workbookEncoder.ts`) — store events mark sheets dirty, only
+  changed sheets re-encode, each sheet encodes in ~20,000-cell chunks that
+  yield the main thread between chunks (`AUTOSAVE_ENCODE_CHUNK_CELLS`),
+  unchanged sheets reuse their committed JSON string, and leaving the page
+  (`pagehide` / hidden / `stop()`) writes everything in one synchronous
+  shot. `startAutoSave(store, id?, options?)` takes an injectable
+  `yieldFn`.
 
 ### Features
 
@@ -76,6 +224,246 @@
   `--ss-tab-hover-bg`, `--ss-chart-*`, toolbar gradient tokens); dark
   `--ss-header-text` fixed to `#b3b3b3` for contrast. antd popups stay light
   (separate decision).
+- **Programmatic command execution** — `CommandManager.execute` is now
+  `execute(cmd, options?: ExecuteOptions): boolean` (was `execute(cmd):
+  void`). Default (`record: true`) keeps the old behavior: protection check,
+  `command:*` events, undo history, F4 repeat source. `record: false` applies
+  the command as a programmatic edit (timeline replay, import, migration) —
+  the same Store batch and exception boundary, but no undo stack, no redo
+  clearing, no repeat source, no `command:*` events, and no protection check.
+  Returns `true` when the command body ran (no-ops included), `false` when
+  protection rejected it or the body threw. `ExecuteOptions` is exported from
+  both package entries.
+- **New Store queries** — `getMergeRectAt(r, c, sheetId?)` returns the merge
+  covering a cell with parsed bounds (`MergeRect { r1, c1, r2, c2, range }`;
+  the type is exported from both entries); `getMergeAt` keeps its signature
+  and returns that rect's `range`. `getRowEntries(sheetId?)` /
+  `getColEntries(sheetId?)` return `[index, meta]` pairs of the rows/columns
+  that carry metadata (fresh arrays). The `SerializedSheetData` format is
+  unchanged.
+- **Typed event bus** — `EventBus<TEvents extends object =
+  SpreadsheetEvents>`: the built-in event table `SpreadsheetEvents` types
+  the known names (`command:executing/executed/undoing/undone/redoing/
+  redone` carry `{ cmd }`, `command:failed` a `CommandFailedPayload`,
+  `command:rejected` `{ reason: 'protected' }`, `csv:import` the raw CSV
+  string), so `on('command:executed', …)` types the handler's payload
+  precisely while plugin-defined names stay `unknown`. `emit` is unchanged
+  and runtime behavior is identical. `api.on` in the plugin API is typed
+  the same way. New exports: `SpreadsheetEvents`, `EventPayload`.
+- **Formula functions: volatility, function context, private registries** —
+  `FunctionSpec.volatile?: boolean` marks a function as wall-clock/world
+  dependent (Excel's rule): its cell is re-evaluated on every recalculation
+  pass that already has other work (`NOW` / `TODAY` are marked).
+  `FunctionSpec.evaluate(args, ctx?)` takes an optional second parameter
+  `FunctionContext { cell: { r, c }, sheetId }` so a function can know
+  where its calling formula lives — always supplied on the engine path,
+  `undefined` for bare `evaluate()` calls (conditional-format / validation
+  rules). Existing one-parameter functions and plugin specs compile
+  unchanged. `FunctionRegistry` is now an exported class: `new
+  FunctionRegistry(registry)` builds a private table that falls back to the
+  shared one for unknown names without leaking its own registrations; `new
+  FormulaEngine(store, { registry })` points the engine at it
+  (`engine.registry` is readable) and `api.registerFunction` registers on
+  the host engine's own table (restored on undo). The default is unchanged —
+  without the option the engine still uses the shared `registry`;
+  `installApiFunctions(hub, table?)` takes the table the same way. Known
+  limits: conditional-format and validation rule formulas are evaluated via
+  bare `evaluate()` without the engine's table, so private-table functions
+  apply to cell formulas only; formula autocomplete (`autoCompleteNames`)
+  still reads the shared table by default. New exports: `FunctionRegistry`,
+  `FunctionContext`, `FormulaEngineOptions`.
+- **Stable command identities + replay coverage (29 kinds)** — `Command.kind()`
+  returns the minification-invariant identity of a command, overridden by
+  all 39 command classes (`CompositeCommand` stays `null`); `Command.args`
+  is now `public readonly` so the platform can sample it by type. These
+  names enter the persisted timeline / repro-bundle format — they can only
+  be added to, never renamed. The replay whitelist
+  (`src/commands/replayRegistry.ts`) covers 29 kinds — edits, row/column
+  structure, styles/borders/number formats, merges, validations,
+  conditional formats, hyperlinks, comments, move/fill/sort/dedupe/
+  text-to-columns, autofilter (state + criteria), table style; chart/image/
+  sparkline commands, whole-block value payloads, `autoRowHeights` and
+  composites are deliberately excluded (rationale in the file header).
+  Timeline payloads: the former 5 shapes keep their old form, other
+  whitelisted commands record `{ kind: 'command', command, args }` (only
+  when args are plain data — functions/class instances mean no payload);
+  platform sampling ("动了哪里" display strings) dispatches on `kind()`
+  instead of guessing from argument shapes; replay skips unknown command
+  names into the `skipped` counter and keeps going; undo entries with a
+  `command`-shaped payload carry no inverse (counted as skipped). New
+  exports: `isReplayableKind`, `buildReplayableCommand`, `REPLAYABLE_KINDS`,
+  `ReplayableCommandKind`.
+- **Workbook format version** — `WORKBOOK_FORMAT_VERSION = 1`, exported from
+  the package root. `saveWorkbook` stamps each record with `formatVersion`;
+  records without the field read as version 1; `loadWorkbook` refuses a
+  newer version with an error naming both versions (the record is left
+  untouched, Dexie schema unchanged). The host's existing `.catch` handles
+  it — the SDK's own restore logs a `console.error` and the demo shows its
+  "读取失败" bar.
+
+### Features（规模与大数据）
+
+- **Excel reference syntax** — whole-column `A:A` / `A:C`, whole-row `1:1` /
+  `3:5`, and open-ended `B2:B` (= `B2:B1048576`) / `B1:1` (= `B1:XFD1`),
+  with `$` anchors, `Sheet!` scopes and `INDIRECT` literals. On row/col
+  insert/delete the anchored end rewrites like an ordinary reference and
+  the open end stays open (`shiftFormulaRows` / `shiftFormulaCols`).
+- **Sparse evaluation over huge ranges** — a range reference beyond
+  `MAX_DENSE_RANGE_CELLS` (2,000,000, exported) becomes a `SparseRangeValue`
+  (guard `isSparseRange`, both exported) that carries the rectangle's shape
+  and a walk of its stored cells. Exact over stored cells: SUM, AVERAGE,
+  MIN, MAX, COUNT, COUNTA, COUNTBLANK, PRODUCT, MEDIAN, LARGE, SMALL, the
+  STDEV family, RANK, TEXTJOIN, CONCAT, the COUNTIF/SUMIF family with
+  IFS/AVERAGEIF(S)/MAXIFS/MINIFS, SUMPRODUCT, AND, OR, SUBTOTAL, VLOOKUP,
+  HLOOKUP. `#VALUE!` for what would need the full grid: UNIQUE / SORT /
+  FILTER / the IS* family, a big range used as a scalar or in binary
+  arithmetic, MATCH and XLOOKUP — except INDEX with scalar row and column
+  arguments, which reads by address (`INDEX(A1:C1048576, 5, 2)` works;
+  out-of-bounds is `#REF!`). New function `COUNTBLANK` (over a sparse range
+  the blank total is area − stored non-blanks).
+- **Rectangle dependencies for big ranges** — a range over
+  `RANGE_DEP_CELLS` = 256 cells (exported, `src/formula/precedents.ts`)
+  registers as ONE rectangular dependency instead of one edge per cell;
+  formulas already inside the rectangle keep exact edges for cycle
+  detection, and a scalar-lookup formula (INDEX/VLOOKUP/HLOOKUP/MATCH/
+  XLOOKUP) sitting inside its own big range is not a self-reference.
+- **Column/row default styles** (`src/commands/impl/SetAxisStyle.ts`) —
+  `RowMeta` / `ColMeta` gain an optional `styleId`. A selection spanning
+  every row formats the columns, every column the rows, the whole sheet
+  writes column defaults for all 16,384 columns — O(axis length), zero
+  cell writes, effective immediately on blank and future cells. Effective
+  style resolves cell > row default > column default via the new exported
+  `Store.getCellStyle(r, c, cell?, sheetId?)`; cells with their own style
+  keep winning. New exports: `SetAxisStyleCommand`, `ClearAxisStyleCommand`,
+  `axisSelectionOf`, `reservedAxisStyleId` (reserved ids `colstyle-<c>` /
+  `rowstyle-<r>`); consecutive indices sharing a base share one style-table
+  entry per write and undo records only the exceptions. The toolbar shows
+  axis defaults under whole-column/whole-row selections
+  (`src/components/InteractionToolbar.tsx`).
+- **Effective-range rule for per-cell commands**
+  (`src/commands/impl/effectiveRange.ts`) — a selection at or under
+  `MAX_MATERIALIZED_CELLS` is honored verbatim (blanks included); larger
+  selections collapse to the used part (`Store.limitToData`) and past the
+  cap inside it, only stored cells are touched. Style commands on a
+  selection disjoint from the data fall back to one anchor cell.
+- **Undo history memory budget** (`src/commands/CommandManager.ts`) —
+  besides `MAX_HISTORY = 100` steps, `MAX_HISTORY_RETAINED_CELLS = 2,000,000`
+  (exported) caps the cells kept across both stacks by `Command.historyWeight()`
+  (base default 0); the oldest undo steps are evicted over budget, always
+  keeping the newest. `CommandManager.historyWeight()` reports the current
+  total.
+- **xlsx axis metadata round-trip** — column widths, column hiding,
+  column default styles (`<cols>` with `width` / `hidden` / `style=`) and
+  row heights, row hiding, row default styles (`<row>` `ht` / `hidden` /
+  `s` + `customFormat`) now export and import. Column width converts from
+  the raw `<col width>` attribute (chars ×7 px +5 px) instead of SheetJS's
+  re-derived `wpx`/`wch`. Hyperlink targets import without the stray
+  `&amp;` (SheetJS reads attributes raw; the importer decodes entities
+  once).
+- **CSV guardrails** — export uses the effective style (column/row default
+  number formats apply) and throws the exported `CsvRangeTooLargeError`
+  beyond a 2,000,000-cell used-range area.
+- **Replay whitelist grows to 31 kinds** — `setAxisStyle` and
+  `clearAxisStyle` join `src/commands/replayRegistry.ts` (was 29).
+
+### Performance
+
+- **Merge lookup via a per-row index** — `getMergeAt` / `getMergeRectAt` are
+  served by a row → merges index in `SheetData` instead of a linear scan over
+  the merge set with an A1 string parse per candidate (the index covers grid
+  rows only, so a whole-column merge still costs one entry). Painting a
+  1040-cell viewport twice over a sheet with 20/100/200 merges: 8.0 / 38.9 /
+  69.6 ms per frame → ≤ 0.12 ms.
+- **Structural commands touch only rows/columns carrying metadata** —
+  insert/delete row/column and RemoveDuplicates now emit store events only
+  for indexes that actually have row/column metadata (at most 2 per index);
+  the resulting state is identical to the old per-index walk. Inserting a row
+  above a 130-cell sheet with no row heights: 1,158 delivered events → 158.
+- **Conditional-format overlay cache** — `ConditionalService.computeOverlay`
+  returns the previous result object for repeat calls within one store
+  revision (per-sheet Map keyed `r * TOTAL_COLS + c`, capacity-capped, no
+  store subscription). Callers must treat returned overlays as immutable.
+  With rules unchanged: 1.2–2.3 ms per frame → 0.02–0.04 ms.
+- **Replay applies payloads through one batch** — mock-platform replay runs
+  every payload through a replay-private `CommandManager` with
+  `record: false`, sharing the user-edit batch and exception boundary:
+  replaying one insert-row performs a single recalculation round instead of
+  ~1,003 (53.8 ms → 3.2 ms). Successful replays produce the same timeline
+  events as before.
+- **Selection changes repaint headers only** — a selection change dirties
+  just the row/column header tint bands, and dirty rectangles inside the
+  header strips now take a fast path (headers + freeze separators, no
+  cell-paint pipeline); a frame that repaints only headers no longer copies
+  the whole grid into the scroll cache. `setExtraRanges` is a no-op when
+  the incoming ranges equal the current ones (an ordinary click used to
+  "clear" the always-empty multi-selection and invalidate the whole canvas),
+  and the status bar's filled-cell count is memoized per (store, active
+  sheet, `store.revision`) so selection changes no longer scan the sheet.
+  Measured on a full 1000×26 styled sheet over 300 clicks (Playwright +
+  headless Chromium): canvas repaint 3.75 ms → 0.68 ms per click; dev build
+  click-to-settle median 7.3 → 6.1 ms, p90 16.5 → 14.0 ms; production build
+  median 3.2 ms / p90 3.7 ms; on a 120 Hz display the worst frame interval
+  dropped 33 ms → 16.8 ms (no dropped frames). Pixel-identical: per-region
+  checksums match across 30 clicks × 4 regions.
+
+### Performance（规模与大数据，Node 本机实测 / 无头 Chromium）
+
+- **Structural commands at a million cells** — top insert row above a
+  1M-cell column 289 ms / undo 258 ms; delete row 251 ms / undo 232 ms
+  (before: 1,186 / 1,022 / 1,126 / 945 ms). A 100k×10 block: insert column
+  277 ms / undo 269 ms.
+- **Whole-column formatting** — bold on a whole column 0.3 ms, undo 0.1 ms;
+  styling a 500k-row selection ~300–360 ms while adding one style-table
+  entry.
+- **Sort at scale** — 500,000 rows × 3 columns 3.07 s, undo 1.98 s.
+- **Formulas at scale** — entering 100k `=A{r}*2` formulas ~0.7–1.7 s;
+  full recalc ~0.9 s; 100k chained formulas from scratch 339 ms; editing
+  one number that feeds 8 million-cell aggregates 522 ms; exact-match
+  VLOOKUP over a whole column 85–90 ms; MATCH ~290 ms; `=SUM(A:A)` over a
+  million numbers ~60 ms.
+- **Storage walks** — a 1M-cell column fills in 0.9 s; `forEachCell` 10 ms;
+  whole-column range walk 13.5 ms; serialize ~75 ms; deserialize ~0.25 s;
+  `replaceAll` ~0.27 s; sheet copy ~0.14 s.
+- **Import/export at a million cells** — A1 + XFD1048576 exports in 3 ms
+  (an hour+ before); 2,000 far-apart cells 8.6 ms; one column of a million
+  numbers exports 6.9 s / 9.6 MB (53.7 MB and unreadable before) and
+  imports in 2.7 s; 100k×10 exports 3.2 s / 7.3 MB, imports 2.2 s; 50
+  sheets with a million cells total export 2.3 s / 7.2 MB, import 1.7 s;
+  CSV export of 100k×10 130 ms. Importing a million cells peaks at
+  ~1.1–1.4 GB Node RSS.
+- **Browser measurements (headless Chromium)** — a million cells hold
+  ~60 MB of live heap (~60 bytes/cell); auto-save went from one ~260 ms
+  main-thread long task per save to no task ≥ 50 ms in four measurements;
+  the undo history costs ~110–145 bytes per retained cell.
+- **Clearing a whole column** — Delete on a million-cell column took 950 ms
+  and its undo 806 ms with no formula engine attached, 2,629 / 3,297 ms with
+  one attached (the clear wrote and announced every cell, and the formula
+  sync built one deferred entry per cell). The sparse clear now takes the
+  cells out in one sweep with a single `cells` event
+  (`Store.takeCellsInRect`), its undo puts them back through `bulkSetCells`,
+  and the formula sync answers a `cells` event of more than 256 keys by its
+  bounding rectangle: 154–177 ms / 156–194 ms. In the real page (dev build)
+  the longest main-thread block is 567 ms for the Delete and 400 ms for the
+  undo.
+- **Real browser, dev build (headless Chromium)** — one sheet of 1,000,000
+  cells (100,000 × 10): open to screen 2.2 s, reopen from IndexedDB after a
+  reload 1.2 s; scrolling 300 wheel ticks, jumping to XFD1048576 and typing
+  there never block the main thread longer than two 60 Hz frames (16.7–33
+  ms); whole-column bold 33 ms; a row inserted through the header menu 267
+  ms, undo 233 ms; no long task during the auto-save. 50 sheets with a
+  million cells: open 1.7 s, switching sheets 17 ms.
+- **Many sheets with formulas** — 50 sheets × 2,000 rows × 4 columns with a
+  SUM per row (100k formulas) and a cross-sheet summary: inserting a row at
+  the top of one data sheet (its formulas and the summary's reference move)
+  ~115 ms, undo ~64 ms; editing one number updates its sheet total and the
+  grand total in ~2 ms; `replaceAll` with the engine attached ~1.5 s.
+- **Not yet resolved** — the same workbook shape at 200 sheets (250k
+  formulas) enters in 8.9 s, recalculates in 8.1 s and reloads in 10.1 s
+  with a ~1.9 GB Node heap: superlinear against the 50-sheet figures, cause
+  not yet located. Also still slow by nature of the work: a 500,000 × 3
+  sort 1.3–3.1 s (the sort engine writes every cell of the block), and one
+  edit that feeds several million-cell aggregates costs ~65 ms per
+  aggregate.
 
 ### Fixes
 
@@ -142,6 +530,156 @@
 - **Proxy spy dashboard survives a server restart** — the spy API tags
   responses with a per-boot `bootId`; the dashboard drops its remembered
   sequence numbers when the proxy restarts instead of never matching again.
+- **Auto-save no longer starves while editing continues** — the debounce
+  (1500 ms, `AUTOSAVE_DEBOUNCE_MS`) was the only trigger, so a steady edit
+  stream never reached IndexedDB; a second timer now forces a save at most
+  5000 ms after the first unsaved change (`AUTOSAVE_MAX_WAIT_MS`), even while
+  changes keep coming. `pagehide` and `visibilitychange` → hidden flush
+  immediately, even with a save in flight (IndexedDB commits writes to one
+  record in creation order, so the newer snapshot wins); outside those paths
+  only one write runs at a time. `stop()` flushes pending changes and removes
+  the listeners; failures surface as `console.error`, never an unhandled
+  rejection. `startAutoSave` / `AutoSaveHandle` signatures unchanged.
+- **Replayed undo no longer replays the original edit (mock platform)** —
+  timeline entries with `via: 'undo'` carry the inverse payload now (they used
+  to carry the original command's payload, so a replay turned the undo back
+  into the edit): `setCell` writes back the value the undo restored (formula
+  cells their formula text; an originally empty cell stays empty),
+  `insertRow`/`insertCol` become the matching `deleteRow`/`deleteCol`, and an
+  undone delete cannot resurrect its content — payload `null`, counted as
+  skipped. `via: 'user'` / `'redo'` entries are unchanged. A payload that
+  fails to apply throws `Replay failed at seq <seq> (<payload kind>)` and
+  aborts the replay, which closes the causal window — a previously thrown
+  error left it open and mis-attributed later traffic to the stale cause.
+- **`Store.isFlushing` is depth-counted** — when a flush-time listener opens
+  a batch of its own (formula spill writes do), the outer flush's remaining
+  events no longer report "not flushing" mid-delivery; the boolean became a
+  nesting count. Public signature and flush-time semantics otherwise
+  unchanged.
+- **`=TODAY()` showed yesterday after midnight** — a sheet left open across
+  midnight kept its volatile cells' stale results because nothing dirtied
+  them. `FunctionSpec.volatile` (see Features) re-evaluates them on every
+  recalculation pass that has other work, so `NOW` / `TODAY` track the wall
+  clock like Excel.
+- **Internal range keys parsed once, strictly** — all 14 call sites of the
+  internal `"r,c"` / `"r1,c1:r2,c2"` notation (named ranges, conditional
+  formats, validations, charts, sparklines, autofilter) go through one
+  parser, `parseInternalRange` in `src/util/rangeNotation.ts`: coordinates
+  must be decimal integer literals (a leading `-` is fine), no whitespace,
+  exactly two per corner, at most one `:`; corners are normalized
+  (r1 ≤ r2, c1 ≤ c2); anything else returns null. Behavior changes:
+  reversed-corner keys used to be kept verbatim — validation / conditional
+  rules never matched, named ranges resolved to a backwards A1 span, and
+  named-range formulas evaluated to nothing — and now match; malformed keys
+  used to degrade into wrong shapes (`"2,3:"` matched cell (0,0) because
+  `Number('')` is 0; `"2,3:5"` fell back to a partial corner) and are now
+  invalid — only externally hand-edited JSON carries such shapes; the
+  conditional-format / validation dialogs accept single-cell keys;
+  `NamedRangeService` no longer throws on junk keys nor injects `NaN` into
+  formulas; xlsx export skips rules with unparsable keys instead of writing
+  degenerate references. The public `parseInternalRangeKey` wrapper keeps
+  its return shapes for invalid input.
+- **Re-applying an AutoFilter runs in one store batch** — re-applying a
+  filter that hides a few hundred rows triggered one refresh per hidden
+  row; the menu action now wraps `applyFilters()` in `store.batch` (one
+  refresh). Also dropped a stale `MenuBar.tsx` comment pointing at a
+  since-moved file.
+- **Replay cancels operations that were undone (mock platform)** — undo
+  entries whose command has no inverse payload (row height, styles, merges:
+  the old values are not in the arguments) used to be skipped while the
+  forward entry was replayed, so a replayed session kept effects the user
+  had undone — silently, with no deviation reported. An undo entry now
+  records the `seq` of the entry it reverses (`undoes`), and replay skips
+  both; an undo that does carry an inverse (cell edits, row/column
+  structure) is still replayed as that inverse. Undo is last-in-first-out,
+  so nothing still standing can depend on a cancelled entry. Timelines
+  without `undoes` replay exactly as before.
+- **The view follows a freeze set through the store** — `store.setFreeze(…)`
+  on the active sheet used to be ignored
+  by the view until the next sheet switch; the freeze hook now reloads the
+  view from the sheet on the store's `freeze` event. Its load and write-back
+  paths were merged into one effect that runs exactly one branch per commit:
+  besides breaking the event → view → write → event echo, this removes a
+  transient write of the previous sheet's freeze into the sheet being
+  switched to.
+- **Every sheet shared one scroll position and one selection** — a sheet
+  switched to after scrolling another one opened at the same offset, with
+  the active cell at the other sheet's coordinates. As in Excel, the view
+  (scroll position, at the zoom it was left at) and the selection now belong
+  to each sheet (`CanvasRenderer.switchViewTo`, `useSheetSelection`): the
+  sheet entered returns to where it was left, or opens at the top-left with
+  A1; the sheet left keeps both for when it comes back — whichever way the
+  switch happens (tab, hyperlink, Find, `Store.activateSheet`). The sheet's
+  own view outranks its selection coming back, so wheeling away from the
+  active cell before leaving is preserved. A replaced workbook starts over at
+  the top-left and A1; Ctrl-added extra ranges do not outlive their sheet.
+  Behaviour change: an edit still open when a host switches sheets
+  programmatically is cancelled — it used to stay open on a cell of the
+  sheet switched to and commit there.
+- **Typing into an active cell that had been scrolled out of sight opened the
+  editor off-canvas** — the draft went into a cell nobody could see (found by
+  real-page acceptance once sheets kept their own views). An edit — a typed
+  character or F2 — now brings its cell into view first, freeze-aware like
+  the scroll that follows an arrow key. Jumps do the same: the name box,
+  Find and hyperlinks reveal their target even where the active cell does
+  not move (`CanvasRenderer.setSelection(…, reveal)`, `revealCell`).
+
+### Fixes（规模与大数据）
+
+- **`MAX` / `MIN` blew the call stack on million-argument ranges** —
+  `Math.max(…spread)` over a materialized million-cell range overflowed;
+  the aggregates now reduce in a loop (`extremeOf`).
+- **SUMIFS mismatched its criteria ranges on the sparse branch** — the
+  aligned criteria group now keys stored values by row-major offset from
+  each range's top-left corner, exactly like the dense loop indexes both
+  lists at `i`.
+- **Hyperlink targets kept `&amp;` after import** — SheetJS escapes `&`
+  into the rels Target on write but never decodes entities on read; the
+  importer now decodes once (idempotent for internal links, which SheetJS
+  does decode).
+- **Column widths / row heights imported with the wrong units** — row `ht`
+  is points and is now converted ×4/3 to px (was read as px); column width
+  converts from the raw `<col width>` attribute (chars ×7 + 5 px) instead
+  of the drifted `wpx`/`wch` guesses.
+- **Million-cell import/export lost sheets, hung, or produced unreadable
+  files** — the old dense worksheet build walked every address of the used
+  range (a workbook whose only cells sat at A1 and XFD1048576 kept the
+  writer busy for hours and hit the old 32 MiB entry cap on import, so the
+  sheet was skipped or the file could not be read back). The sparse build,
+  packed export and raised ceilings fix the family; "beyond the grid"
+  truncation warnings are gone (the grid is Excel's whole address space).
+- **An aggregate over a big range stopped updating once a formula appeared
+  inside the range** — a formula landing inside an existing rectangle
+  dependency now becomes a precedent of the rectangle's owner, so the
+  owner recalculates when the interior formula's result changes.
+- **Typing a range into the name box scrolled the view to the range's last
+  cell** — a range selected without an explicit active cell took its
+  bottom-right cell as active, and the viewport follows the active cell:
+  `A:A` meant A1048576, so the view jumped to the last row (hard to notice
+  on the old 1,000-row grid). The active cell now defaults to the range's
+  top-left cell, as in Excel.
+- **Clicking the name box threw an uncaught `TypeError`** — the deferred
+  select-all read `event.currentTarget`, which React clears once the handler
+  returns (`Cannot read properties of null (reading 'select')` on every
+  first click into the name box). The handler now keeps the element.
+- **Remove duplicates left outline row groups behind** — the removed rows
+  moved up, the row groups above and below them did not; groups now shift
+  with the deleted spans and come back on undo.
+- **Four callable functions were missing from the formula AutoComplete
+  catalog** — `NA`, `ISERR`, `MINUTE` and `SECOND` evaluated but were never
+  offered or described; the catalog now lists all 96 built-in functions.
+- **Deleting the row of a spill anchor left the anchor's value and shadows
+  behind** — found by acceptance while the bulk structural move was being
+  built (it never shipped): the formula sync now unregisters the formulas of
+  a deleted band before waking spill anchors, so a deleted array is gone and
+  its undo restores it whole.
+
+**Known gap (pre-existing, not addressed here)**: a spilled array
+(`=SEQUENCE(…)`) does not survive an xlsx round trip — the export writes the
+anchor formula and the spill values as independent cells, so the re-imported
+anchor finds its neighbours occupied and shows `#SPILL!`. The same happens
+on the last release. Fixing it means exporting the spill as an array formula
+over its range (and reading Excel's dynamic-array metadata on import).
 
 ### Refactoring
 
@@ -150,6 +688,10 @@
   numbers; `renderer/coordinate` re-exports for compat. The dead
   `layoutTick` prop on EditorOverlay is gone (positioning is fully derived
   from the fresh `cellRect` the host recomputes).
+- **Editor/exporter dead code** — removed a duplicated `setEditing` effect in
+  `Spreadsheet.tsx` along with the doc comments orphaned by functions that
+  had moved out, and moved one `io/XlsxExporter.ts` comment onto the function
+  it actually describes.
 
 ### Testing
 
@@ -169,6 +711,54 @@
   `stripLiterals`. CI caches Playwright browsers keyed on the lockfile;
   the pan e2e asserts a 13–17 row landing band instead of any far row.
   Suite 185 files / 1240 tests.
+- 8 new test files / 56 cases for this batch: auto-save scheduling
+  (debounce/max-wait/pagehide), merge index, structural-axis events,
+  `CommandManager` programmatic execution, batch-flush nesting, overlay
+  cache, replay batching and undo replay. Suite now 251 files / 1,828 tests.
+- 12 new test files / 95 cases for this batch: the unified internal-range
+  parser matrix (`internalRange.test.ts`), typed event bus, function
+  context, registry scoping (private tables), volatile functions, `kind()`
+  identities, replayable-command replay, the de-disguised store events,
+  the selection fast-path repaint and the status bar memo, undone-operation
+  cancellation in replay, and the freeze hook following host-side changes.
+  Suite now 263 files / 1,923 tests.
+- **Scale round** — suite 263 → 295 files, 1,923 → 2,207 tests (33 new
+  files with 286 cases; one 2-case file that only tested a dead helper went
+  with it). The new suites cover sparse store walks and the structural
+  primitives, the undo memory budget, whole-column and row default styles
+  (commands, renderer, toolbar, copy, print), sparse range evaluation,
+  rectangle dependencies, whole-column / open-ended references, bulk
+  `cells`-event sync, the structural move and its formula sync, packed xlsx
+  export, axis metadata and hyperlink round trips, the sliced auto-save
+  encoder, the command scale guards, and the per-sheet views and selections
+  (`test/renderer/sheetView.test.ts`,
+  `test/components/sheetSelection.test.ts`). Every wall-clock assertion added
+  on a scale path leaves an order of magnitude over the local measurement
+  (CI runs the suite under coverage on a shared runner) and is paired with an
+  exact guard. One such wall was wrong in both directions and got fixed
+  while closing the round: the million-read guard in
+  `test/store/scale.test.ts` sat at 60 ms, above what string keys cost
+  (≈55 ms) and below what numeric keys cost on a loaded runner (76 ms) — it
+  guarded nothing and failed under load. It now leaves an order of magnitude
+  (400 ms against ≈40 ms under coverage) and says what it guards; the key
+  type is asserted deterministically in the test above it.
+- **Scale experiments (opt-in, not part of the pass/fail suite)** —
+  `pnpm bench:scale` (Node: store, many sheets, formulas, I/O; tables in
+  `coverage/scale-bench/*.json`) and `pnpm e2e:scale` (real
+  browser: time-to-screen and the longest main-thread block per action; its
+  own `playwright.scale.config.ts`). The scale experiment is therefore not a
+  project of the main Playwright config, so a plain `playwright test` — what
+  CI runs — still runs the 13 interaction specs only.
+
+### Build & CI
+
+- **`packageManager: pnpm@11.25.0`** — both workflows' `pnpm/action-setup`
+  no longer pin `version: 9` and follow `packageManager` instead; the docs
+  deploy moved from Node 20 to Node 22.
+- **Coverage counts `src/` only** — `coverage.include: ['src/**']` stops the
+  demo, proxy and scripts from inflating the report. `pnpm coverage`
+  currently reports 87.1% statements / lines, 82.7% branches, 80.5%
+  functions. CI has not yet run under the new configuration (not pushed).
 
 ## v2.1.0 — 2026-09-28
 
