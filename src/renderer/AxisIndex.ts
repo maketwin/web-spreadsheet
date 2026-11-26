@@ -36,6 +36,17 @@ export class AxisIndex {
     this.prefix = null;
   }
 
+  /** Reset the entire axis to one default size in O(n): every explicit size is
+   * dropped (NaN = unset, so 0-height hidden rows must be re-set explicitly)
+   * and cached prefixes are invalidated. This is what axis re-syncs use instead
+   * of writing the default through setSize one index at a time — at Excel scale
+   * (1,048,576 rows) that walk costs over a million calls per sheet switch. */
+  public reset(size: number): void {
+    this.defaultSize = () => size;
+    this.sizes.fill(Number.NaN);
+    this.prefix = null;
+  }
+
   public setSize(index: number, size: number): void {
     if (index < 0 || index >= this.count) return;
     if (this.sizes[index] === size) return;

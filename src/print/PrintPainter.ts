@@ -11,11 +11,11 @@ import type { ChartAnchor, ImageSpec } from '../charts/types';
 import { ConditionalService } from '../conditional/ConditionalService';
 import { formatValue } from '../format/NumberFormatter';
 import { collectCellBorderEdges, edgesToPaintSegs, strokeBorderSegs, type LogicalBorderEdge } from '../renderer/BorderPainter';
-import { COL_WIDTH, ROW_HEIGHT } from '../renderer/coordinate';
+import { COL_WIDTH, ROW_HEIGHT, TOTAL_COLS } from '../util/gridSize';
 import { TextMetricsCache } from '../renderer/cache/TextMetricsCache';
 import type { Store } from '../store/Store';
 import type { Style, RichTextRun } from '../types';
-import { parseRange } from '../util/cell';
+import { parseRange } from '../util/rangeNotation';
 import { indentPixels } from '../util/generalAlign';
 import { isRich } from '../util/richText';
 import { WRAP_LINE_HEIGHT, wrapTextLines } from '../util/wrapText';
@@ -45,6 +45,11 @@ export interface PrintImageLayer {
 export class PrintPainter {
   private readonly conditional = new ConditionalService();
   private readonly textMetrics = new TextMetricsCache();
+  /** Per-page effective-style caches (cell > row default > column default),
+   * cleared at the start of every paint() so they never outlive their page. */
+  private readonly styleCache = new Map<number, Style | undefined>();
+  private readonly rowStyleCache = new Map<number, Style | undefined>();
+  private readonly colStyleCache = new Map<number, Style | undefined>();
 
   public constructor(private readonly store: Store, private readonly sheetId: string) {}
 
@@ -52,6 +57,9 @@ export class PrintPainter {
    * When header/footer text is configured, bands are reserved and the text drawn there.
    * `images` (optional, pre-loaded) float above the cells, clipped to the page band. */
   public paint(page: PageLayout, scale: number, settings: PrintSettings, totalPages = 1, images: readonly PrintImageLayer[] = []): HTMLCanvasElement {
+    this.styleCache.clear();
+    this.rowStyleCache.clear();
+    this.colStyleCache.clear();
     const canvas = document.createElement('canvas');
     const content = contentPx(settings);
     canvas.width = Math.max(1, Math.round(content.w * PRINT_DPI_SCALE));
@@ -119,9 +127,33 @@ export class PrintPainter {
     return meta !== undefined && meta.hide === true ? 0 : meta?.height ?? ROW_HEIGHT;
   }
 
+  /** Style in effect at (r, c): cell's own > row default > column default
+   * (Excel axis semantics), cached per paint pass. */
   private cellStyle(r: number, c: number): Style | undefined {
+    const key = r * TOTAL_COLS + c;
+    const hit = this.styleCache.get(key);
+    if (hit !== undefined || this.styleCache.has(key)) return hit;
+    let style: Style | undefined;
     const cell = this.store.getCell(r, c, this.sheetId);
-    return cell?.styleId === undefined ? undefined : this.store.getStyle(cell.styleId, this.sheetId);
+    if (cell?.styleId !== undefined) style = this.store.getStyle(cell.styleId, this.sheetId);
+    if (style === undefined) {
+      if (this.rowStyleCache.has(r)) style = this.rowStyleCache.get(r);
+      else {
+        const styleId = this.store.getRow(r, this.sheetId)?.styleId;
+        style = styleId === undefined ? undefined : this.store.getStyle(styleId, this.sheetId);
+        this.rowStyleCache.set(r, style);
+      }
+    }
+    if (style === undefined) {
+      if (this.colStyleCache.has(c)) style = this.colStyleCache.get(c);
+      else {
+        const styleId = this.store.getCol(c, this.sheetId)?.styleId;
+        style = styleId === undefined ? undefined : this.store.getStyle(styleId, this.sheetId);
+        this.colStyleCache.set(c, style);
+      }
+    }
+    this.styleCache.set(key, style);
+    return style;
   }
 
   /** Merge rect clipped to this page's band: merges cut by a page break still fill/border their visible part. */

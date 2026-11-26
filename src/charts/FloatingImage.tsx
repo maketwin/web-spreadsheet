@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FC, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { type ChartAnchor, type ImageSpec } from './types';
 import type { CanvasRenderer } from '../renderer/CanvasRenderer';
-import { ROW_HEADER_WIDTH, COL_HEADER_HEIGHT } from '../renderer/coordinate';
+import { ROW_HEADER_WIDTH, COL_HEADER_HEIGHT } from '../util/gridSize';
 import { applyGesture, commitAnchor, HANDLES, HANDLE_CURSOR, type Gesture, type Rect } from './FloatingChart';
 
 export interface FloatingImageProps {

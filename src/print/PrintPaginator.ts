@@ -5,9 +5,9 @@
  * Band boundaries never cut through a merged cell when the merge fits on a
  * page of its own; a merge wider/taller than a page is cut (Excel behavior).
  */
-import { COL_WIDTH, ROW_HEIGHT } from '../renderer/coordinate';
+import { COL_WIDTH, ROW_HEIGHT } from '../util/gridSize';
 import type { Store } from '../store/Store';
-import { cellIdCoords, parseRange } from '../util/cell';
+import { parseRange } from '../util/rangeNotation';
 import { contentPx, footerBandPx, headerBandPx, type PrintSettings } from './types';
 
 export interface UsedRange { readonly r1: number; readonly c1: number; readonly r2: number; readonly c2: number }
@@ -43,14 +43,13 @@ const FIT_EPSILON = 0.5;
 export function usedRange(store: Store, sheetId = store.getActiveSheetId()): UsedRange {
   let maxR = 0;
   let maxC = 0;
-  for (const [key, cell] of store.getCells(sheetId)) {
+  // Numeric sweep over the stored cells — no per-cell "r,c" strings.
+  store.forEachCell((r, c, cell) => {
     const empty = cell.text.length === 0 && cell.formula === undefined && cell.styleId === undefined;
-    if (empty) continue;
-    const coords = cellIdCoords(key);
-    if (coords === null) continue;
-    if (coords.r > maxR) maxR = coords.r;
-    if (coords.c > maxC) maxC = coords.c;
-  }
+    if (empty) return;
+    if (r > maxR) maxR = r;
+    if (c > maxC) maxC = c;
+  }, sheetId);
   for (const merge of store.getMerges(sheetId)) {
     const { r2, c2 } = parseRange(merge);
     if (r2 > maxR) maxR = r2;

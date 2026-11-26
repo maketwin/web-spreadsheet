@@ -1,4 +1,5 @@
-import { COL_HEADER_HEIGHT, ROW_HEADER_WIDTH, TOTAL_COLS, TOTAL_ROWS, type CellAddress } from '../renderer/coordinate';
+import { COL_HEADER_HEIGHT, ROW_HEADER_WIDTH, TOTAL_COLS, TOTAL_ROWS } from '../util/gridSize';
+import { type CellAddress } from '../renderer/coordinate';
 import type { VirtualScroller } from '../renderer/VirtualScroller';
 import type { RangeAddress } from '../selection/Range';
 

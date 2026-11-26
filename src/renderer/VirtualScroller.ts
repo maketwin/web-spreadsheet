@@ -65,12 +65,34 @@ export class VirtualScroller {
     this.cols.setDefaultSize(defaultColWidth);
   }
 
+  /** Reset both axes to their current defaults in O(axis length): drops every
+   * explicit row height / column width (and cached prefixes) without calling
+   * setRowHeight/setColWidth once per index. Axis re-syncs from the store call
+   * this first, then apply only the entries that actually carry meta. */
+  public resetAxes(): void {
+    this.rows.reset(this.opts.defaultRowHeight);
+    this.cols.reset(this.opts.defaultColWidth);
+  }
+
   public getRowHeight(r: number): number {
     return this.rows.getSize(r);
   }
 
   public getColWidth(c: number): number {
     return this.cols.getSize(c);
+  }
+
+  /** Sum of sizes for rows r1..r2 (inclusive) via the prefix sums — O(log n)
+   * amortized, independent of the span length. Spans that reach toward the
+   * grid edge (whole-row/column/sheet selections) answer here instead of
+   * walking up to 1,048,576 sizes one by one. */
+  public rowHeightSpan(r1: number, r2: number): number {
+    return this.rows.position(r2 + 1) - this.rows.position(r1);
+  }
+
+  /** Sum of sizes for columns c1..c2 (inclusive), as `rowHeightSpan`. */
+  public colWidthSpan(c1: number, c2: number): number {
+    return this.cols.position(c2 + 1) - this.cols.position(c1);
   }
 
   public getVisibleRange(): VisibleRange {

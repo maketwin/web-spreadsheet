@@ -1,7 +1,6 @@
 import type { Store } from '../store/Store';
 import type { FreezeManager } from '../freeze/FreezeManager';
 import type { RangeAddress } from '../selection/Range';
-import { parseRange } from '../util/cell';
 import type { ChartAnchor } from '../charts/types';
 import { anchorToRect, rectToAnchor } from '../charts/geometry';
 import { TOTAL_ROWS, TOTAL_COLS, ROW_HEIGHT, ROW_HEADER_WIDTH, COL_HEADER_HEIGHT, clamp, type CellAddress, type HeaderHit } from './coordinate';
@@ -33,13 +32,30 @@ export interface GridGeometryOptions {
 }
 
 export class GridGeometry {
+  /** Ranges wider/taller than this answer their pixel size from the axis prefix
+   * sums instead of a per-cell sum (identical for whole-pixel sizes; a per-cell
+   * walk would reach 16,384 columns / 1,048,576 rows for whole-row/column/sheet
+   * selections, several times per painted frame). */
+  private static readonly DIRECT_SUM_LIMIT = 512;
+
   public constructor(private readonly o: GridGeometryOptions) {}
 
   public rangeRect(range: RangeAddress): { x: number; y: number; w: number; h: number } {
     const { x, y } = this.cellVP(range.r1, range.c1);
-    let w = 0; for (let c = range.c1; c <= range.c2; c += 1) w += this.o.scroller.getColWidth(c);
-    let h = 0; for (let r = range.r1; r <= range.r2; r += 1) h += this.o.scroller.getRowHeight(r);
+    const w = range.c2 - range.c1 >= GridGeometry.DIRECT_SUM_LIMIT
+      ? this.o.scroller.colWidthSpan(range.c1, range.c2)
+      : this.sumAxisSizes(range.c1, range.c2, (c) => this.o.scroller.getColWidth(c));
+    const h = range.r2 - range.r1 >= GridGeometry.DIRECT_SUM_LIMIT
+      ? this.o.scroller.rowHeightSpan(range.r1, range.r2)
+      : this.sumAxisSizes(range.r1, range.r2, (r) => this.o.scroller.getRowHeight(r));
     return { x, y, w, h };
+  }
+
+  /** Exact per-index sum, as rangeRect always computed it for small ranges. */
+  private sumAxisSizes(from: number, to: number, sizeAt: (i: number) => number): number {
+    let acc = 0;
+    for (let i = from; i <= to; i += 1) acc += sizeAt(i);
+    return acc;
   }
 
   public pointerCell(cx: number, cy: number): CellAddress | null {
@@ -56,8 +72,8 @@ export class GridGeometry {
   /** Viewport rect of a cell (includes scroll) — use this for the editor overlay so it matches canvas geometry. */
   public getCellViewportRect(r: number, c: number): { x: number; y: number; w: number; h: number } {
     // Excel: the in-cell editor covers the whole merged area, not just the anchor cell.
-    const merge = this.o.store.getMergeAt(r, c);
-    if (merge !== undefined) return this.rangeRect(parseRange(merge));
+    const merge = this.o.store.getMergeRectAt(r, c);
+    if (merge !== undefined) return this.rangeRect(merge);
     const { x, y } = this.cellVP(r, c);
     return { x, y, w: this.o.scroller.getColWidth(c), h: this.o.scroller.getRowHeight(r) };
   }

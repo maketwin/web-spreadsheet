@@ -8,7 +8,7 @@
  * `afterprint` (with a timeout fallback for environments that never fire it).
  */
 import type { Store } from '../store/Store';
-import { parseRange } from '../util/cell';
+import { parseRange } from '../util/rangeNotation';
 import { paginate, usedRange, type PrintGeometry, type UsedRange } from './PrintPaginator';
 import { PrintPainter, type PrintImageLayer } from './PrintPainter';
 import { contentPx, marginPx, paperPx, type PaperSize, type PrintSettings } from './types';

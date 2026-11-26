@@ -1,3 +1,4 @@
+import { MAX_MATERIALIZED_CELLS } from '../util/limits';
 import type { Store } from '../store/Store';
 import type { RangeAddress } from '../selection/Range';
 
@@ -12,10 +13,16 @@ function hasContent(store: Store, r: number, c: number): boolean {
  * first column and right of its last column both bound the fill. Returns the
  * extended target range, or undefined when neither neighbor has data below
  * (no fill happens).
+ *
+ * The extension stops at the materialization cap: a million-row neighbor
+ * column bounds the *address space*, not how many cells one fill writes.
  */
 export function doubleClickFillTarget(store: Store, source: RangeAddress, totalRows: number): RangeAddress | undefined {
+  const cols = source.c2 - source.c1 + 1;
+  const maxRows = Math.max(1, Math.floor(MAX_MATERIALIZED_CELLS / cols));
+  const hardBottom = Math.max(source.r2, Math.min(totalRows - 1, source.r1 + maxRows - 1));
   let last = source.r2;
-  for (let r = source.r2 + 1; r < totalRows; r += 1) {
+  for (let r = source.r2 + 1; r <= hardBottom; r += 1) {
     const left = source.c1 > 0 ? hasContent(store, r, source.c1 - 1) : false;
     const right = hasContent(store, r, source.c2 + 1);
     if (!left && !right) break;

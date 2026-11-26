@@ -24,8 +24,8 @@ import { FreezeManager } from '../freeze/FreezeManager';
 import { ResizeHandler } from './ResizeHandler';
 import { VirtualScroller, type VisibleRange } from './VirtualScroller';
 import type { StoreEvent, Style, RichTextRun } from '../types';
-import { parseRange } from '../util/cell';
-import { coveredBySameMerge } from '../util/merge';
+import { parseRange } from '../util/rangeNotation';
+import { coveredBySameMerge, sameRange } from '../util/merge';
 import { selectionFillBands } from './selectionFill';
 import { hashFillText, usesHashOverflow } from './narrowOverflow';
 import { indentPixels, resolveCellAlign } from '../util/generalAlign';
@@ -63,6 +63,13 @@ export interface CanvasRendererOptions {
 }
 
 type DragAnchor = { type: 'cell'; r: number; c: number } | { type: 'column'; c: number } | { type: 'row'; r: number };
+
+/**
+ * How long after a sheet switch the restored view outranks the panes being
+ * re-applied (see `restoredView`): far longer than the re-sync that follows
+ * the switch, far shorter than it takes a person to change the panes.
+ */
+const RESTORED_VIEW_HOLD_MS = 200;
 
 /** A paint tile: cell range plus the viewport rect it is clipped to (freeze quadrants). */
 interface PaintQuad {
@@ -140,6 +147,46 @@ export class CanvasRenderer {
   private clipboardRange: RangeAddress | undefined;
   private antsOffset = 0;
   private antsTimer: number | null = null;
+  /** Per-frame effective-style caches: one resolved style per visible cell,
+   * plus one per visible row/column index — a frame never looks a style up
+   * three times (cell > row default > column default). Cleared at frame start
+   * (render), which every invalidation funnel reaches. */
+  private readonly styleCache = new Map<number, Style | undefined>();
+  private readonly rowStyleCache = new Map<number, Style | undefined>();
+  private readonly colStyleCache = new Map<number, Style | undefined>();
+  /**
+   * Excel: every sheet keeps its own view. Where each sheet was left, as
+   * pixel offsets at the zoom they were taken at — row heights and column
+   * widths scale with zoom, so a position is rescaled when it comes back.
+   */
+  private readonly sheetViews = new Map<string, { top: number; left: number; zoom: number }>();
+  /** The sheet whose view the scroller shows; undefined right after the workbook was replaced. */
+  private viewedSheetId: string | undefined = undefined;
+  /**
+   * The view restored for the latest sheet switch, and until when it outranks
+   * `setFreeze`'s reset. Frozen panes belong to each sheet, so the view
+   * re-applies them right after a switch, and `setFreeze` starts the
+   * unfrozen pane at the freeze corner — which would wipe the position that
+   * was just restored. That re-application follows the switch within a few
+   * milliseconds; nobody changes the panes that fast by hand, so the sheet's
+   * own view wins only for that moment (and only until something scrolls).
+   */
+  private restoredView: { top: number; left: number; until: number } | undefined = undefined;
+  /**
+   * A sheet switch happened and the view has not been drawn since: the next
+   * selection re-sync hands over the sheet's own selection, which must not
+   * move the view the switch restored (the user may have wheeled away from
+   * the active cell before leaving — Excel keeps the view and the selection
+   * apart). A jump into the sheet asks to see its target with `reveal`.
+   */
+  private restoringSelection = false;
+  /**
+   * The cell a jump into the sheet asked to see, kept until the next frame is
+   * drawn: the frozen panes are re-applied in the same round as the jump when
+   * the sheet's panes differ, and `setFreeze` starts the unfrozen pane at the
+   * freeze corner — the round must still end with the target in view.
+   */
+  private revealTarget: CellAddress | undefined = undefined;
 
   public constructor(private opts: CanvasRendererOptions) {
     const ctx = opts.canvas.getContext('2d');
@@ -158,6 +205,7 @@ export class CanvasRenderer {
     // report no selection so its hit-test and crosshair cursor stay inactive.
     this.fillHandle = new FillHandle({ canvas: opts.canvas, scroller: this.scroller, selectedRange: () => this.antsReplaceSelection(this.selectedRange) ? undefined : this.selectedRange, onFill: (source, target, ctrlKey) => { opts.onFill?.(source, target, ctrlKey); this.selectAfterFill(source, target); }, invalidate: () => this.invalidateAll(), cellVP: (r, c) => this.cellVP(r, c), cellAtPoint: (x, y) => this.pointerCell(x, y) });
     this.unsubscribe = opts.store.subscribe((e: StoreEvent) => this.onStoreEvent(e));
+    this.viewedSheetId = opts.store.getActiveSheetId();
     this.setupCanvas(); this.setupOverlay(); this.bindEvents(); this.invalidateAll();
   }
 
@@ -218,19 +266,41 @@ export class CanvasRenderer {
   }
   public setSelectedRange(range: RangeAddress | undefined): void { this.selectedRange = range; this.invalidateAll(); }
 
-  /** Excel multi-selection (Ctrl+click/drag): extra ranges painted like the main one, minus active cell/handle. */
-  public setExtraRanges(ranges: readonly RangeAddress[]): void { this.extraRanges = [...ranges]; this.invalidateAll(); }
+  /**
+   * Excel multi-selection (Ctrl+click/drag): extra ranges painted like the main one, minus active cell/handle.
+   * Ranges equal to the current ones repaint nothing — a plain click clears
+   * ranges that are usually already clear, and that must not cost a full repaint.
+   */
+  public setExtraRanges(ranges: readonly RangeAddress[]): void {
+    const unchanged = ranges.length === this.extraRanges.length
+      && ranges.every((range, i) => { const current = this.extraRanges[i]; return current !== undefined && sameRange(range, current); });
+    if (unchanged) return;
+    this.extraRanges = [...ranges];
+    this.invalidateAll();
+  }
 
   /** Focus the canvas unless the cell editor is open — stealing focus would blur (commit) the editor. */
   private focusCanvas(): void { if (!this.editing) this.opts.canvas.focus(); }
-  public setSelection(range: RangeAddress | undefined, kind: SelectionKind | undefined, activeCell?: CellAddress): void {
+  /**
+   * `reveal` — a jump into the sheet (hyperlink, find, name box): the active
+   * cell is brought into view even where an ordinary re-sync would not move.
+   */
+  public setSelection(range: RangeAddress | undefined, kind: SelectionKind | undefined, activeCell?: CellAddress, reveal = false): void {
     const prev = this.selectedRange;
     const prevActive = this.activeCell;
+    const restored = this.restoringSelection;
+    this.restoringSelection = false;
     this.selectedRange = range; this.selectionKind = kind; this.activeCell = activeCell;
     // Only scroll when the active cell moves — re-sync from React must not yank scroll
     // back while the user is panning under freeze panes. Whole-sheet selection (Ctrl+A /
-    // corner click) never scrolls: Excel keeps the viewport where it is.
-    if (kind !== 'sheet' && activeCell !== undefined && (prevActive?.r !== activeCell.r || prevActive?.c !== activeCell.c)) {
+    // corner click) never scrolls: Excel keeps the viewport where it is. The sheet's own
+    // selection coming back after a switch never moves its view either (see
+    // `restoringSelection`); a jump reveals its target instead.
+    if (reveal && activeCell !== undefined) {
+      this.restoredView = undefined;
+      this.revealTarget = activeCell;
+      this.ensureCellVisible(activeCell);
+    } else if (!restored && kind !== 'sheet' && activeCell !== undefined && (prevActive?.r !== activeCell.r || prevActive?.c !== activeCell.c)) {
       this.ensureCellVisible(activeCell);
     }
     this.invalidateSelectionChrome(prev, range);
@@ -254,6 +324,19 @@ export class CanvasRenderer {
     }
     if (dx !== 0 || dy !== 0) this.scrollBy(dx, dy);
   }
+
+  /**
+   * Bring a cell into view whatever the selection history — freeze-aware
+   * like the scroll that follows an arrow key. The view stops being the one a
+   * switch restored: an edit starting on a cell the user wheeled away from
+   * shows that cell, and a pane re-application in the same round must not
+   * pull the view away from it.
+   */
+  public revealCell(r: number, c: number): void {
+    this.restoredView = undefined;
+    this.revealTarget = { r, c };
+    this.ensureCellVisible({ r, c });
+  }
   public setSelectedCell(cell: CellAddress | undefined): void { this.setSelection(cell === undefined ? undefined : Range.single(cell.r, cell.c).toAddress(), cell === undefined ? undefined : 'cell', cell); }
   /** Excel behavior: while editing, only the edited cell keeps a border — fills and the fill handle disappear. */
   public setEditing(editing: boolean): void {
@@ -262,14 +345,17 @@ export class CanvasRenderer {
     this.invalidateSelectionChrome(this.selectedRange, this.selectedRange);
   }
 
-  /** Selection/edit chrome: selection art lives on the overlay; grid only repaints header tint bands. */
+  /** Selection/edit chrome: selection art lives on the overlay; grid only repaints header tint bands.
+   * The bands stay exactly inside the header strips (the boundary hairline at
+   * RHW-0.5 / CHH-0.5 is inside them) so paintRegion can classify them as
+   * header-only and skip the cell pipeline — no cell pixel is stale here. */
   private invalidateSelectionChrome(prev: RangeAddress | undefined, next: RangeAddress | undefined): void {
     const pad = 8;
     const mark = (range: RangeAddress | undefined): void => {
       if (range === undefined) return;
       const { x, y, w, h } = this.rangeRect(range);
-      this.dirty.invalidate({ x: 0, y: Math.max(0, y - pad), w: ROW_HEADER_WIDTH + 2, h: h + pad * 2 });
-      this.dirty.invalidate({ x: Math.max(0, x - pad), y: 0, w: w + pad * 2, h: COL_HEADER_HEIGHT + 2 });
+      this.dirty.invalidate({ x: 0, y: Math.max(0, y - pad), w: ROW_HEADER_WIDTH, h: h + pad * 2 });
+      this.dirty.invalidate({ x: Math.max(0, x - pad), y: 0, w: w + pad * 2, h: COL_HEADER_HEIGHT });
     };
     mark(prev);
     mark(next);
@@ -320,6 +406,17 @@ export class CanvasRenderer {
     this.freeze.freezeAt(rows, cols);
     // Excel: after Freeze Panes, the unfrozen pane starts at the freeze corner (scroll origin).
     this.scroller.setScroll(0, 0);
+    // Frozen panes belong to each sheet, so the view re-applies them right
+    // after a sheet switch; the sheet's own view outranks that reset — for
+    // the first such call only, and only right after the switch. A jump into
+    // the sheet outranks it for the rest of that round.
+    if (this.restoredView !== undefined) {
+      const { top, left, until } = this.restoredView;
+      this.restoredView = undefined;
+      if (performance.now() < until) this.scroller.setScroll(top, left);
+    } else if (this.revealTarget !== undefined) {
+      this.ensureCellVisible(this.revealTarget);
+    }
     this.blitValid = false;
     this.invalidateAll();
   }
@@ -747,13 +844,31 @@ export class CanvasRenderer {
 
   private scheduleRender(): void { if (this.rafId !== null) return; this.rafId = window.requestAnimationFrame(() => { this.rafId = null; this.render(); }); }
   private render(): void {
+    // Fresh frame, fresh style lookups: the caches must never outlive the
+    // events that preceded this frame (axis default writes arrive as
+    // row/col events, size changes as the same events with other fields).
+    this.styleCache.clear();
+    this.rowStyleCache.clear();
+    this.colStyleCache.clear();
+    // The frame after a sheet switch: whatever re-synced the selection or
+    // re-applied the panes in between has happened by now, so a jump's
+    // request to see its target ends with it.
+    this.revealTarget = undefined;
     const resized = this.syncViewport();
     if (resized) this.dirty.invalidateAll();
     const theme = this.cachedTheme ?? (this.cachedTheme = readCanvasTheme());
     const vis = this.scroller.getVisibleRange();
-    const painted = !this.dirty.isEmpty();
-    if (painted) this.dirty.drain().forEach((r) => this.paintRegion(r, vis, theme));
-    if (painted) this.snapshotGrid();
+    if (!this.dirty.isEmpty()) {
+      // Snapshot only when some repainted rect actually reached the cell area —
+      // header-only rounds (selection chrome) leave every cell pixel untouched,
+      // so re-copying the whole grid would be pure waste. A stale blit cache
+      // must still be refreshed, or the next scroll degrades to a full repaint.
+      let touchedCells = false;
+      for (const region of this.dirty.drain()) {
+        if (this.paintRegion(region, vis, theme)) touchedCells = true;
+      }
+      if (touchedCells || !this.blitValid) this.snapshotGrid();
+    }
     this.paintOverlay(theme);
   }
 
@@ -779,6 +894,9 @@ export class CanvasRenderer {
     const left = Math.min(maxLeft, Math.max(0, this.scroller.scrollLeft + dx));
     const top = Math.min(maxTop, Math.max(0, this.scroller.scrollTop + dy));
     if (left === this.scroller.scrollLeft && top === this.scroller.scrollTop) return;
+    // Something moved the view (the user, or a selection scrolling into
+    // sight): it is this sheet's view now, not the one a switch restored.
+    this.restoredView = undefined;
     const canBlit = this.blitValid && this.blitCanvas !== null && !this.freeze.isFrozen() && typeof this.ctx.drawImage === 'function';
     if (canBlit && this.blitCanvas !== null) {
       const shiftX = this.blitLeft - left;
@@ -843,12 +961,28 @@ export class CanvasRenderer {
     return true;
   }
 
-  private paintRegion(region: Rect, vis: VisibleRange, theme: CanvasTheme): void {
+  /** Repaint one dirty rect. Returns true when the rect reached the cell area,
+   * i.e. the full cell pipeline ran and the region must count for snapshotGrid. */
+  private paintRegion(region: Rect, vis: VisibleRange, theme: CanvasTheme): boolean {
     // Clamp dirty clip to the canvas — a MAX_SAFE_INTEGER rect (invalidateAll) nested with
     // freeze quadrant clips can blank the scrollable panes on some GPUs/browsers.
     const rr = this.clampToViewport(region);
-    if (rr.w <= 0 || rr.h <= 0) return;
+    if (rr.w <= 0 || rr.h <= 0) return false;
+    // Header-only fast path: a rect entirely inside the header strips needs just
+    // header chrome (selection tint bands; the boundary hairline and freeze
+    // separator crosses are inside/through the strips). paintHeaders opaquely
+    // repaints both strips, so skipping the outside/background fills is safe and
+    // no cell pixel is touched. The test must be exact: a scroll-exposed band
+    // merged with a header strip may end only 1px past the header edge, and
+    // those pixels DO carry fresh cell content that must be repainted.
+    const headerOnly = rr.x + rr.w <= ROW_HEADER_WIDTH || rr.y + rr.h <= COL_HEADER_HEIGHT;
     this.ctx.save(); this.ctx.beginPath(); this.ctx.rect(rr.x, rr.y, rr.w, rr.h); this.ctx.clip();
+    if (headerOnly) {
+      this.paintHeaders(vis, theme);
+      this.paintFreezeSeparators(theme);
+      this.ctx.restore();
+      return false;
+    }
     // Excel: gray outside the sheet; theme.bg only over headers + in-bounds grid.
     this.ctx.fillStyle = theme.outside; this.ctx.fillRect(0, 0, this.vpW(), this.vpH());
     const contentW = Math.min(this.gridW(), Math.max(0, this.scroller.totalWidth() - this.scroller.scrollLeft));
@@ -867,6 +1001,7 @@ export class CanvasRenderer {
     this.paintSparklines(quads);
     this.paintFreezeSeparators(theme);
     this.ctx.restore();
+    return true;
   }
 
   /** Row×col tiles to paint, each clipped to its quadrant: the scrollable area plus
@@ -1061,11 +1196,10 @@ export class CanvasRenderer {
           for (let c = q.c0; c < q.c1; c += 1) {
             if (skip.has(`${r},${c}`)) continue;
             if (this.opts.store.getCol(c)?.hide === true) continue;
-            const merge = this.opts.store.getMergeAt(r, c);
+            const merge = this.opts.store.getMergeRectAt(r, c);
             if (merge !== undefined) {
-              const mr = parseRange(merge);
-              const rect = this.rangeRect(mr);
-              this.paintCellFillOnly(mr.r1, mr.c1, rect.x, rect.y, rect.w, rect.h, theme);
+              const rect = this.rangeRect(merge);
+              this.paintCellFillOnly(merge.r1, merge.c1, rect.x, rect.y, rect.w, rect.h, theme);
               continue;
             }
             const { x, y } = this.cellVP(r, c);
@@ -1089,14 +1223,13 @@ export class CanvasRenderer {
           for (let c = q.c0; c < q.c1; c += 1) {
             if (skip.has(`${r},${c}`)) continue;
             if (this.opts.store.getCol(c)?.hide === true) continue;
-            const merge = this.opts.store.getMergeAt(r, c);
+            const merge = this.opts.store.getMergeRectAt(r, c);
             if (merge !== undefined) {
-              const mr = parseRange(merge);
               // Only paint text from the merge anchor
-              if (r !== mr.r1 || c !== mr.c1) continue;
-              const rect = this.rangeRect(mr);
-              const style = this.mergedPaintStyle(mr.r1, mr.c1);
-              this.paintTextWith(mr.r1, mr.c1, rect.x, rect.y, rect.w, rect.h, theme, style);
+              if (r !== merge.r1 || c !== merge.c1) continue;
+              const rect = this.rangeRect(merge);
+              const style = this.mergedPaintStyle(merge.r1, merge.c1);
+              this.paintTextWith(merge.r1, merge.c1, rect.x, rect.y, rect.w, rect.h, theme, style);
               continue;
             }
             const { x, y } = this.cellVP(r, c);
@@ -1466,25 +1599,33 @@ export class CanvasRenderer {
     this.ctx.restore();
   }
 
-  /** Excel: without wrap, text may spill into adjacent empty cells until a non-empty cell blocks it. */
+  /** Excel: without wrap, text may spill into adjacent empty cells until a non-empty cell blocks it.
+   * The spill is clipped to the visible grid area, so the scan stops at the last
+   * visible column (and at the pixel edge — zero-width hidden columns must not
+   * extend it). Scanning to the axis end would cost up to 16,383 merge/cell/style
+   * lookups per painted text cell. Clamped results are identical: every skipped
+   * column lies beyond the clip edges. */
   private textOverflowSpan(r: number, c: number, x: number, cw: number, align: 'left' | 'center' | 'right'): { left: number; right: number } {
     let left = x;
     let right = x + cw;
+    // Keep overflow inside the grid area (not over row headers)
+    const gridLeft = ROW_HEADER_WIDTH;
+    const gridRight = ROW_HEADER_WIDTH + this.gridW();
+    const vis = this.scroller.getVisibleRange();
     if (align === 'left' || align === 'center') {
       for (let nc = c + 1; nc < TOTAL_COLS; nc += 1) {
+        if (nc >= vis.endCol || right >= gridRight) break;
         if (!this.cellAllowsTextOverflow(r, nc)) break;
         right += this.scroller.getColWidth(nc);
       }
     }
     if (align === 'right' || align === 'center') {
       for (let nc = c - 1; nc >= 0; nc -= 1) {
+        if (nc < vis.startCol || left <= gridLeft) break;
         if (!this.cellAllowsTextOverflow(r, nc)) break;
         left -= this.scroller.getColWidth(nc);
       }
     }
-    // Keep overflow inside the grid area (not over row headers)
-    const gridLeft = ROW_HEADER_WIDTH;
-    const gridRight = ROW_HEADER_WIDTH + this.gridW();
     return { left: Math.max(gridLeft, left), right: Math.min(gridRight, right) };
   }
 
@@ -1904,7 +2045,35 @@ export class CanvasRenderer {
   private rectsIntersect(x: number, y: number, w: number, h: number, clip: Rect): boolean {
     return this.geom.rectsIntersect(x, y, w, h, clip);
   }
-  private cellStyle(r: number, c: number) { const cell = this.opts.store.getCell(r, c); return cell?.styleId === undefined ? undefined : this.opts.store.getStyle(cell.styleId); }
+  /** Style in effect at (r, c): cell's own > row default > column default
+   * (Excel axis semantics). Cached per frame — see the styleCache fields. */
+  private cellStyle(r: number, c: number): Style | undefined {
+    const key = r * TOTAL_COLS + c;
+    const hit = this.styleCache.get(key);
+    if (hit !== undefined || this.styleCache.has(key)) return hit;
+    const store = this.opts.store;
+    let style: Style | undefined;
+    const cell = store.getCell(r, c);
+    if (cell?.styleId !== undefined) style = store.getStyle(cell.styleId);
+    if (style === undefined) {
+      if (this.rowStyleCache.has(r)) style = this.rowStyleCache.get(r);
+      else {
+        const styleId = store.getRow(r)?.styleId;
+        style = styleId === undefined ? undefined : store.getStyle(styleId);
+        this.rowStyleCache.set(r, style);
+      }
+    }
+    if (style === undefined) {
+      if (this.colStyleCache.has(c)) style = this.colStyleCache.get(c);
+      else {
+        const styleId = store.getCol(c)?.styleId;
+        style = styleId === undefined ? undefined : store.getStyle(styleId);
+        this.colStyleCache.set(c, style);
+      }
+    }
+    this.styleCache.set(key, style);
+    return style;
+  }
   private zoom(): number { return (this.opts.zoom ?? 100) / 100; }
   private defaultRowHeight(): number { return ROW_HEIGHT * this.zoom(); }
   private defaultColWidth(): number { return COL_WIDTH * this.zoom(); }
@@ -1915,20 +2084,21 @@ export class CanvasRenderer {
 
   private syncSizesFromStore(): void {
     const z = this.zoom();
-    // Drop the previous sheet's cached heights before applying this sheet's meta.
-    for (let r = 0; r < TOTAL_ROWS; r += 1) this.scroller.setRowHeight(r, this.defaultRowHeight());
-    for (let c = 0; c < TOTAL_COLS; c += 1) this.scroller.setColWidth(c, this.defaultColWidth());
-    for (let r = 0; r < TOTAL_ROWS; r += 1) {
-      const meta = this.opts.store.getRow(r);
+    // Drop the previous sheet's cached sizes by resetting both axes to their
+    // defaults in O(axis length) (one fill each), then apply ONLY the entries
+    // that carry row/column meta. The address space is 1,048,576 × 16,384 —
+    // walking it per index would cost over a million calls per sheet switch
+    // or zoom step, so it is never enumerated here.
+    this.scroller.resetAxes();
+    for (const [r, meta] of this.opts.store.getRowEntries()) {
       // Excel collapses AutoFilter-hidden rows to zero height so lower rows shift up.
-      if (meta?.hide === true) this.scroller.setRowHeight(r, 0);
-      else if (meta?.height !== undefined) this.scroller.setRowHeight(r, meta.height * z);
+      if (meta.hide === true) this.scroller.setRowHeight(r, 0);
+      else if (meta.height !== undefined) this.scroller.setRowHeight(r, meta.height * z);
     }
-    for (let c = 0; c < TOTAL_COLS; c += 1) {
-      const meta = this.opts.store.getCol(c);
+    for (const [c, meta] of this.opts.store.getColEntries()) {
       // Hidden columns collapse to zero width, mirroring hidden rows.
-      if (meta?.hide === true) this.scroller.setColWidth(c, 0);
-      else if (meta?.width !== undefined) this.scroller.setColWidth(c, meta.width * z);
+      if (meta.hide === true) this.scroller.setColWidth(c, 0);
+      else if (meta.width !== undefined) this.scroller.setColWidth(c, meta.width * z);
     }
   }
 
@@ -1951,9 +2121,43 @@ export class CanvasRenderer {
     if (e.type === 'sheet' && e.action === 'activate') {
       this.highlightMatches = [];
       this.highlightCurrent = -1;
-      this.syncSizesFromStore();
     }
+    // A replaced workbook shares nothing with the one before it — not even
+    // the view positions of sheet ids it happens to reuse.
+    if (e.type === 'workbook' && e.action === 'replace') {
+      this.sheetViews.clear();
+      this.viewedSheetId = undefined;
+    }
+    if (e.type === 'sheet' && e.action === 'delete') this.sheetViews.delete(e.sheetId);
+    // The active sheet changed — activated, added, copied, or the active
+    // one deleted (none of which is announced as "activate" in every case).
+    if (active !== this.viewedSheetId) this.switchViewTo(active);
     this.invalidateAll();
+  }
+
+  /**
+   * Excel: every sheet keeps its own view. The sheet being left keeps its
+   * scroll position; the sheet entered returns to where it was left, or to
+   * the top-left when it was never scrolled. Its row heights and column
+   * widths are re-read first, as they used to be on `activate` alone.
+   */
+  private switchViewTo(sheetId: string): void {
+    const z = this.zoom();
+    if (this.viewedSheetId !== undefined) {
+      this.sheetViews.set(this.viewedSheetId, { top: this.scroller.scrollTop, left: this.scroller.scrollLeft, zoom: z });
+    }
+    this.syncSizesFromStore();
+    const saved = this.sheetViews.get(sheetId);
+    const top = saved === undefined ? 0 : (saved.top * z) / saved.zoom;
+    const left = saved === undefined ? 0 : (saved.left * z) / saved.zoom;
+    this.restoredView = saved === undefined ? undefined : { top, left, until: performance.now() + RESTORED_VIEW_HOLD_MS };
+    this.scroller.setScroll(top, left);
+    this.viewedSheetId = sheetId;
+    // The sheet's own selection follows in the next re-sync.
+    this.restoringSelection = true;
+    this.revealTarget = undefined;
+    // Another sheet's pixels: the previous frame's snapshot is of no use.
+    this.blitValid = false;
   }
 }
 

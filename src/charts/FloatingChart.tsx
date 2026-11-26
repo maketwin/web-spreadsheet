@@ -4,7 +4,9 @@ import { Chart, registerables, type ChartData } from 'chart.js';
 Chart.register(...registerables);
 import type { Store } from '../store/Store';
 import type { CanvasRenderer } from '../renderer/CanvasRenderer';
-import { COL_HEADER_HEIGHT, ROW_HEADER_WIDTH, TOTAL_COLS, TOTAL_ROWS, readCanvasTheme } from '../renderer/coordinate';
+import { COL_HEADER_HEIGHT, ROW_HEADER_WIDTH, TOTAL_COLS, TOTAL_ROWS } from '../util/gridSize';
+import { parseInternalRange } from '../util/rangeNotation';
+import { readCanvasTheme } from '../renderer/coordinate';
 import { normalizeAnchor } from './geometry';
 import { CHART_MIN_H, CHART_MIN_W, type ChartAnchor, type ChartSpec } from './types';
 
@@ -291,10 +293,11 @@ export function commitAnchor(renderer: CanvasRenderer, rect: Rect): ChartAnchor 
 
 /** Panel-era charts carry no anchor — park them below/right of their data range. */
 function legacyAnchor(spec: ChartSpec): ChartAnchor {
-  const parts = spec.range.split(':');
-  const end = parts[1]?.split(',').map(Number) ?? [0, 0];
-  const r = Math.min((end[0] ?? 0) + 1, TOTAL_ROWS - 14);
-  const c = Math.min((end[1] ?? 0) + 1, TOTAL_COLS - 9);
+  // A range that does not parse (never produced by the app) parks at (1,1),
+  // the same spot the old missing-end fallback used.
+  const end = parseInternalRange(spec.range);
+  const r = Math.min((end === null ? 0 : end.r2) + 1, TOTAL_ROWS - 14);
+  const c = Math.min((end === null ? 0 : end.c2) + 1, TOTAL_COLS - 9);
   return {
     from: { r, c, offX: 0, offY: 0 },
     to: { r: r + 13, c: c + 8, offX: 0, offY: 0 },
@@ -302,7 +305,9 @@ function legacyAnchor(spec: ChartSpec): ChartAnchor {
 }
 
 function readChartData(store: Store, spec: ChartSpec): ChartData {
-  const { r1, c1, r2, c2 } = parseRangeKey(spec.range);
+  // spec.range is app-written "r1,c1:r2,c2"; an unparsable range degenerates
+  // to the empty (0,0) chart instead of NaN corners that render nothing.
+  const { r1, c1, r2, c2 } = parseInternalRange(spec.range) ?? { r1: 0, c1: 0, r2: 0, c2: 0 };
   const labels: string[] = [];
   const datasets: ChartData['datasets'] = [];
 
@@ -347,11 +352,4 @@ function cssToken(name: string, fallback: string): string {
   if (typeof document === 'undefined') return fallback;
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return value !== '' ? value : fallback;
-}
-
-function parseRangeKey(range: string): { readonly r1: number; readonly c1: number; readonly r2: number; readonly c2: number } {
-  const parts = range.split(':');
-  const start = parts[0]?.split(',').map(Number) ?? [0, 0];
-  const end = parts[1]?.split(',').map(Number) ?? start;
-  return { r1: start[0] ?? 0, c1: start[1] ?? 0, r2: end[0] ?? 0, c2: end[1] ?? 0 };
 }
