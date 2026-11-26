@@ -57,6 +57,9 @@ function sameRange(a: RangeAddress, b: RangeAddress): boolean {
  * - on a content cell already at its run's edge → the first content cell of the next run;
  * - on an empty cell → the first content cell in that direction;
  * - nothing in that direction → the grid edge.
+ * Content positions along the axis come from one sparse sweep over the stored
+ * cells, so crossing an empty stretch of the Excel-sized grid costs what is
+ * stored near the path — not the addresses in between.
  */
 export function edgeJump(
   store: Store,
@@ -70,7 +73,7 @@ export function edgeJump(
   let c = from.c;
   if (dr !== 0) {
     if (hasContent(store, r, c)) {
-      while (r + dr >= 0 && r + dr < totalRows && hasContent(store, r + dr, c)) r += dr;
+      r = runEnd(store, r, c, dr, true, totalRows, totalCols);
       if (r === from.r) r = scanToContent(store, r, dr, c, true, totalRows, totalCols);
     } else {
       r = scanToContent(store, r, dr, c, true, totalRows, totalCols);
@@ -78,7 +81,7 @@ export function edgeJump(
   }
   if (dc !== 0) {
     if (hasContent(store, r, c)) {
-      while (c + dc >= 0 && c + dc < totalCols && hasContent(store, r, c + dc)) c += dc;
+      c = runEnd(store, r, c, dc, false, totalRows, totalCols);
       if (c === from.c) c = scanToContent(store, c, dc, r, false, totalRows, totalCols);
     } else {
       c = scanToContent(store, c, dc, r, false, totalRows, totalCols);
@@ -89,14 +92,47 @@ export function edgeJump(
 
 /** Advance from `start` by `step` until a content cell or the grid edge. */
 function scanToContent(store: Store, start: number, step: number, other: number, rowAxis: boolean, totalRows: number, totalCols: number): number {
-  const limit = rowAxis ? totalRows : totalCols;
-  let i = start + step;
-  while (i >= 0 && i < limit) {
-    const has = rowAxis ? hasContent(store, i, other) : hasContent(store, other, i);
-    if (has) return i;
-    i += step;
+  const line = contentLine(store, other, rowAxis, start + step, step > 0 ? totalRows - 1 : 0, totalRows, totalCols);
+  const next = step > 0 ? line[0] : line[line.length - 1];
+  return next === undefined ? (step > 0 ? totalRows - 1 : 0) : next;
+}
+
+/**
+ * The last cell of the contiguous content run starting at `pos` along the
+ * axis (the cell itself must hold content). Equivalent to stepping cell by
+ * cell while the neighbour holds content, but via stored positions.
+ */
+function runEnd(store: Store, r: number, c: number, step: number, rowAxis: boolean, totalRows: number, totalCols: number): number {
+  const pos = rowAxis ? r : c;
+  const line = contentLine(store, rowAxis ? c : r, rowAxis, step > 0 ? pos + 1 : 0, step > 0 ? (rowAxis ? totalRows : totalCols) - 1 : pos - 1, totalRows, totalCols);
+  let end = pos;
+  if (step > 0) {
+    for (const next of line) {
+      if (next !== end + 1) break;
+      end = next;
+    }
+  } else {
+    for (let i = line.length - 1; i >= 0; i -= 1) {
+      const next = line[i]!;
+      if (next !== end - 1) break;
+      end = next;
+    }
   }
-  return step > 0 ? limit - 1 : 0;
+  return end;
+}
+
+/** Sorted content coordinates along one axis line (row `fixed` or column `fixed`), from the stored cells between `lo` and `hi` (inclusive, ordered). */
+function contentLine(store: Store, fixed: number, rowAxis: boolean, lo: number, hi: number, totalRows: number, totalCols: number): number[] {
+  const [from, to] = lo <= hi ? [lo, hi] : [hi, lo];
+  const out: number[] = [];
+  if (from > to) return out;
+  const rect = rowAxis
+    ? { r1: from, c1: Math.min(fixed, totalCols - 1), r2: to, c2: Math.max(0, fixed) }
+    : { r1: Math.min(fixed, totalRows - 1), c1: from, r2: Math.max(0, fixed), c2: to };
+  store.forEachCellInRect(rect, (r, c, cell) => {
+    if (cell.text !== '' || cell.formula !== undefined) out.push(rowAxis ? r : c);
+  });
+  return out.sort((a, b) => a - b);
 }
 
 /**

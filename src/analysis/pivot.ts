@@ -1,6 +1,6 @@
 import type { Store } from '../store/Store';
 import { num2alpha } from '../util/alphabet';
-import { parseRange } from '../util/cell';
+import { parseRange } from '../util/rangeNotation';
 
 /**
  * 数据透视表（基础版）：对选区按第一列分组，其余数值列求和，结果写入新的
@@ -24,12 +24,29 @@ export function buildPivotToNewSheet(store: Store, activeSheetId: string, rangeS
   const { r1, c1, r2, c2 } = parsed;
   if (r2 - r1 < 1 || c2 - c1 < 1) return null;
 
-  // 分组：首列文本 → 各数据列的和
+  // 分组：首列文本 → 各数据列的和。只遍历已存储的单元格——标签取自
+  // 首列的存储单元格，数值取自其余列；两者都按行升序聚合，与旧的
+  // 逐行逐列扫描结果完全一致（跳过空标签行，忽略非数值）。
+  const labels = new Map<number, string>();
+  store.forEachCellInRect({ r1: r1 + 1, c1, r2, c2: c1 }, (r, _c, cell) => {
+    if (cell.text !== undefined && cell.text !== '') labels.set(r, cell.text);
+  }, activeSheetId);
+  const valuesByRow = new Map<number, Map<number, number>>();
+  if (c2 > c1) {
+    store.forEachCellInRect({ r1: r1 + 1, c1: c1 + 1, r2, c2 }, (r, c, cell) => {
+      if (typeof cell.value !== 'number' || !labels.has(r)) return;
+      let row = valuesByRow.get(r);
+      if (row === undefined) {
+        row = new Map<number, number>();
+        valuesByRow.set(r, row);
+      }
+      row.set(c, (row.get(c) ?? 0) + cell.value);
+    }, activeSheetId);
+  }
   const order: string[] = [];
   const sums = new Map<string, number[]>();
-  for (let r = r1 + 1; r <= r2; r += 1) {
-    const labelCell = store.getCell(r, c1, activeSheetId);
-    const label = labelCell?.text ?? '';
+  for (const r of [...labels.keys()].sort((a, b) => a - b)) {
+    const label = labels.get(r) ?? '';
     if (label === '') continue;
     let row = sums.get(label);
     if (row === undefined) {
@@ -37,9 +54,10 @@ export function buildPivotToNewSheet(store: Store, activeSheetId: string, rangeS
       sums.set(label, row);
       order.push(label);
     }
-    for (let c = c1 + 1; c <= c2; c += 1) {
-      const v = store.getCell(r, c, activeSheetId)?.value;
-      if (typeof v === 'number') row[c - c1 - 1]! += v;
+    const values = valuesByRow.get(r);
+    if (values === undefined) continue;
+    for (const [c, v] of values) {
+      if (c > c1 && c <= c2) row[c - c1 - 1]! += v;
     }
   }
   if (order.length === 0) return null;

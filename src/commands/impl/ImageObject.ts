@@ -14,6 +14,8 @@ export class AddImageCommand extends Command<AddImageArgs> {
   public readonly imageId = `image-${++imageCounter}`;
   private execSheetId: string | undefined;
 
+  public override kind(): 'addImage' { return 'addImage'; }
+
   public execute(store: Store): void {
     const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = sid;
@@ -33,6 +35,8 @@ export interface RemoveImageArgs {
 export class RemoveImageCommand extends Command<RemoveImageArgs> {
   private old: ImageSpec | undefined;
   private execSheetId: string | undefined;
+
+  public override kind(): 'removeImage' { return 'removeImage'; }
 
   public execute(store: Store): void {
     const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
@@ -62,6 +66,8 @@ export class SetImageAnchorCommand extends Command<SetImageAnchorArgs> {
   private oldAnchor: ImageSpec['anchor'] | undefined;
   private oldSpec: ImageSpec | undefined;
   private execSheetId: string | undefined;
+
+  public override kind(): 'setImageAnchor' { return 'setImageAnchor'; }
 
   public execute(store: Store): void {
     const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();

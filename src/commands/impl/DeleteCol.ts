@@ -1,13 +1,12 @@
 import { Command } from '../Command';
-import { TOTAL_COLS } from '../../util/gridSize';
-import { isSpillShadow } from '../../util/spillShadow';
-import { captureSheet, parseKey, restoreSheet, type SheetSnapshot } from './sheetSnapshot';
+import { captureFeatures, captureMetaBand, RestoreStructuralMoveCommand, type StructuralMoveUndo } from './sheetSnapshot';
 import { replaceMerges, shiftMergesForDelete } from '../../util/merge';
 import { shiftSheetFormulas } from './shiftFormulas';
 import { shiftSheetChartAnchors } from '../../charts/anchorShift';
 import { shiftSheetSparklines } from '../../sparkline/shift';
 
 import type { Store } from '../../store/Store';
+import type { Cell } from '../../types';
 
 export interface DeleteColArgs {
   readonly c: number;
@@ -16,63 +15,52 @@ export interface DeleteColArgs {
   readonly sheetId?: string;
 }
 
+/** Delete `count` whole columns starting at `c` — the column counterpart of DeleteRow. */
 export class DeleteColCommand extends Command<DeleteColArgs> {
-  private oldSheet: SheetSnapshot | undefined;
+  private undoData: StructuralMoveUndo | undefined;
   private execSheetId: string | undefined;
 
+  public override kind(): 'deleteCol' { return 'deleteCol'; }
+
   public override structuralKind(): 'deleteCol' { return 'deleteCol'; }
+
+  /** Retained payload: taken cells + rewritten formulas + metadata band + features. */
+  public override historyWeight(): number {
+    const undo = this.undoData;
+    if (undo === undefined) return 0;
+    return undo.removed.length + undo.rewrites.length + undo.metaBand.length + undo.features.merges.length + 2;
+  }
 
   public execute(store: Store): void {
     const target = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = target;
     const count = normalizeCount(this.args.count);
     const start = this.args.c;
-    // Only columns at/after `start` move, so the undo snapshot covers just that band.
-    this.oldSheet = captureSheet(store, target, { axis: 'col', from: start });
-    store.getCells(target).forEach(([key]) => {
-      const [r, c] = parseKey(key);
-      if (c >= start && c < start + count) store.setCell(r, c, undefined, target);
-    });
-    shiftCellsLeft(store, start, count, target);
-    for (let c = start; c < TOTAL_COLS; c += 1) store.setCol(c, store.getCol(c + count, target), target);
+    const features = captureFeatures(store, target);
+    const metaBand = captureMetaBand(store, 'col', start, target);
+    const removed = store.deleteCols(start, count, target);
+    // Only columns carrying metadata are touched (each emits at most 2 events):
+    // move left-to-right, then clear the origin. Columns without any stay silent.
+    const cols = store.getColEntries(target).filter(([c]) => c >= start).sort((a, b) => a[0] - b[0]);
+    for (const [c, meta] of cols) {
+      if (c >= start + count) store.setCol(c - count, meta, target);
+      store.setCol(c, undefined, target);
+    }
     replaceMerges(store, shiftMergesForDelete(store.getMerges(target), start, start + count - 1, 'col'), target);
-    shiftSheetFormulas(store, 'col', start, -count, target);
+    const rewrites = shiftSheetFormulas(store, 'col', start, -count, target);
+    // Rewrite records arrive at post-shift coordinates; undo needs ORIGINAL
+    // ones (a surviving formula sat `count` left before the delete).
+    for (const entry of rewrites) {
+      if (entry[0] === target && entry[2] >= start + count) (entry as unknown as [string, number, number, Cell])[2] += count;
+    }
     shiftSheetChartAnchors(store, 'delete', 'col', start, count, target);
     shiftSheetSparklines(store, 'delete', 'col', start, count, target);
+    this.undoData = { axis: 'col', kind: 'delete', sheetId: target, spans: [[start, count]], removed, rewrites, metaBand, features };
   }
 
   public getUndo(): Command {
-    return new RestoreSheetCommand(this.oldSheet, this.execSheetId);
+    return new RestoreStructuralMoveCommand(this.undoData, this);
   }
-}
-
-interface RestoreSheetArgs {
-  readonly snapshot: SheetSnapshot | undefined;
-  readonly sheetId?: string;
-}
-
-class RestoreSheetCommand extends Command<RestoreSheetArgs> {
-  public constructor(snapshot: SheetSnapshot | undefined, sheetId?: string) {
-    super({ snapshot, ...(sheetId !== undefined ? { sheetId } : {}) });
-  }
-
-  public execute(store: Store): void {
-    if (this.args.snapshot !== undefined) restoreSheet(store, this.args.snapshot, this.args.sheetId);
-  }
-
-  public getUndo(): Command {
-    return new DeleteColCommand({ c: 0, ...(this.args.sheetId !== undefined ? { sheetId: this.args.sheetId } : {}) });
-  }
-}
-
-function shiftCellsLeft(store: Store, start: number, count: number, target: string): void {
-  const cells = store.getCells(target).map(([key, cell]) => [...parseKey(key), cell] as const);
-  cells.filter(([, c]) => c >= start + count).sort((a, b) => a[1] - b[1]).forEach(([r, c, cell]) => {
-    store.setCell(r, c, undefined, target);
-    // Spill shadows never travel — the shifted anchor re-spills fresh here.
-    if (isSpillShadow(cell)) return;
-    store.setCell(r, c - count, cell, target);
-  });
 }
 
 function normalizeCount(count: number | undefined): number {

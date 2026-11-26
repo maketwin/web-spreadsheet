@@ -23,6 +23,16 @@ export class SetRangeValues extends Command<SetRangeValuesArgs> {
    * so undo/redo restore to the right sheet even if the user has switched since. */
   private execSheetId: string | undefined;
 
+  public override kind(): 'setRangeValues' { return 'setRangeValues'; }
+
+  /** Retained payload: the before matrix's existing cells plus the written patches. */
+  public override historyWeight(): number {
+    let n = 0;
+    for (const row of this.oldValues) for (const cell of row) if (cell !== undefined) n += 1;
+    for (const row of this.args.values) for (const patch of row) if (patch !== undefined) n += 1;
+    return n;
+  }
+
   public execute(store: Store): void {
     const { r1, c1, r2, c2, values, sheetId } = this.args;
     // First run without an explicit sheetId targets the active sheet and
@@ -41,7 +51,14 @@ export class SetRangeValues extends Command<SetRangeValuesArgs> {
         const newValue = valueRow?.[c - c1];
         row.push(oldCell);
 
-        if (newValue !== undefined) store.setCell(r, c, nextCell(oldCell, newValue), target);
+        if (newValue !== undefined) {
+          const next = nextCell(oldCell, newValue);
+          // A clear that merges to an empty, unstyled cell removes the stored
+          // cell instead of leaving a `{ text: '' }` ghost behind: ghosts
+          // inflate getCellCount(), stretch the used range (Ctrl+End) and
+          // count as data in limitToData.
+          store.setCell(r, c, isGhostCell(next) ? undefined : next, target);
+        }
       }
       this.oldValues.push(row);
     }
@@ -99,6 +116,24 @@ function nextCell(oldCell: Cell | undefined, newValue: CellPatch): Cell {
   if (clears('hyperlink')) delete merged.hyperlink;
   setRichText(merged);
   return merged;
+}
+
+/** True for the empty, unstyled cell a clear patch merges to on a blank
+ * position. Deliberately conservative: anything still carrying content or
+ * format — a value, formula, own style, rich runs, hyperlink, comment, spill
+ * shadow, or paste-ephemeral style (formats-only paste leaves these) — is a
+ * real cell and stays stored. */
+function isGhostCell(cell: Cell): boolean {
+  return cell.text === ''
+    && cell.value === undefined
+    && cell.formula === undefined
+    && cell.styleId === undefined
+    && cell.type === undefined
+    && cell.richText === undefined
+    && cell.hyperlink === undefined
+    && cell.comment === undefined
+    && cell.spillOf === undefined
+    && cell.pasteStyle === undefined;
 }
 
 type CellMatrix = Array<Array<Cell | undefined>>;

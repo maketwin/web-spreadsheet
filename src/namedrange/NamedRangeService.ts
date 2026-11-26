@@ -1,19 +1,7 @@
 import type { Store } from '../store/Store';
 import type { NamedRangeDef } from './types';
 import { xy2expr } from '../util/alphabet';
-
-/** Parse internal range format "r1,c1:r2,c2" into coordinates. */
-function parseInternalRange(range: string): { r1: number; c1: number; r2: number; c2: number } | undefined {
-  const parts = range.split(':');
-  const startParts = parts[0]?.split(',').map(Number);
-  const endParts = parts[1]?.split(',').map(Number);
-  if (startParts === undefined || startParts.length < 2) return undefined;
-  const r1 = startParts[0] ?? 0;
-  const c1 = startParts[1] ?? 0;
-  const r2 = endParts?.[0] ?? r1;
-  const c2 = endParts?.[1] ?? c1;
-  return { r1, c1, r2, c2 };
-}
+import { parseInternalRange } from '../util/rangeNotation';
 
 /** Service for managing named ranges. */
 export class NamedRangeService {
@@ -35,7 +23,7 @@ export class NamedRangeService {
     const def = this.lookup(store, name, sheetId);
     if (def === undefined) return undefined;
     const coords = parseInternalRange(def.range);
-    if (coords === undefined) return undefined;
+    if (coords === null) return undefined;
     return `${xy2expr(coords.c1, coords.r1)}:${xy2expr(coords.c2, coords.r2)}`;
   }
 
@@ -50,7 +38,7 @@ export class NamedRangeService {
     let result = formula;
     for (const [name, def] of ranges) {
       const coords = parseInternalRange(def.range);
-      if (coords === undefined) continue;
+      if (coords === null) continue;
       const rangeStr = `${coords.r1},${coords.c1}:${coords.r2},${coords.c2}`;
       const regex = new RegExp(`\\b${escapeRegex(name)}\\b`, 'g');
       result = result.replace(regex, rangeStr);

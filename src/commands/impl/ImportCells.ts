@@ -1,4 +1,5 @@
 import { Command } from '../Command';
+import { TOTAL_COLS } from '../../util/gridSize';
 
 import type { Store } from '../../store/Store';
 import type { Cell } from '../../types';
@@ -14,18 +15,21 @@ export class ImportCellsCommand extends Command<ImportedCells> {
   private before: readonly (readonly [number, number, Cell | undefined])[] = [];
   private execSheetId: string | undefined;
 
+  public override kind(): 'importCells' { return 'importCells'; }
+
+  /** Retained payload: one before entry per imported/overwritten cell. */
+  public override historyWeight(): number {
+    return this.before.length;
+  }
+
   public execute(store: Store): void {
     const sid = this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = sid;
-    const before = new Map<string, readonly [number, number, Cell | undefined]>();
-    for (const [key, cell] of store.getCells(sid)) {
-      const [r, c] = key.split(',');
-      const row = Number.parseInt(r ?? '0', 10);
-      const col = Number.parseInt(c ?? '0', 10);
-      before.set(key, [row, col, cell]);
-    }
+    // Numeric keys over the stored cells — no "r,c" strings per cell.
+    const before = new Map<number, readonly [number, number, Cell | undefined]>();
+    store.forEachCell((r, c, cell) => before.set(r * TOTAL_COLS + c, [r, c, cell]), sid);
     for (const [r, c] of this.args) {
-      const key = `${r},${c}`;
+      const key = r * TOTAL_COLS + c;
       if (!before.has(key)) before.set(key, [r, c, undefined]);
     }
     this.before = [...before.values()];

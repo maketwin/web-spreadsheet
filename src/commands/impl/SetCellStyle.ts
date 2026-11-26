@@ -24,16 +24,22 @@ export class SetCellStyleCommand extends Command<SetCellStyleArgs> {
     this.usage = usage;
   }
 
+  public override kind(): 'setCellStyle' { return 'setCellStyle'; }
+
   public execute(store: Store): void {
     const target = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = target;
     const oldCell = store.getCell(this.args.r, this.args.c, target);
-    const oldStyle = oldCell?.styleId === undefined ? undefined : store.getStyle(oldCell.styleId, target);
-    const nextStyle = { ...oldStyle, ...this.args.style };
+    // Undo restores the cell's OWN style entry; the merge base is the style in
+    // EFFECT (own > row default > column default), so styling a cell inside a
+    // bold column with italic yields bold+italic — Excel semantics.
+    const oldOwnStyle = oldCell?.styleId === undefined ? undefined : store.getStyle(oldCell.styleId, target);
+    const effective = store.getCellStyle(this.args.r, this.args.c, oldCell, target);
+    const nextStyle = { ...effective, ...this.args.style };
     const usage = this.usage ?? StyleUsage.capture(store, target);
     const styleId = usage.forCell(this.args.r, this.args.c, oldCell?.styleId);
     this.oldCell = oldCell;
-    this.oldStyle = oldStyle;
+    this.oldStyle = oldOwnStyle;
     store.setStyle(styleId, nextStyle, target);
     store.setCell(this.args.r, this.args.c, { ...oldCell, text: oldCell?.text ?? '', styleId }, target);
     usage.reassign(oldCell?.styleId, styleId);

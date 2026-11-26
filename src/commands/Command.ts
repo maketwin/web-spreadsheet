@@ -4,10 +4,25 @@ import type { Store } from '../store/Store';
 export type StructuralKind = 'insertRow' | 'deleteRow' | 'insertCol' | 'deleteCol';
 
 export abstract class Command<TArgs = unknown> {
-  protected readonly args: TArgs;
+  /** Command arguments. Public (readonly) so the platform can sample them by type. */
+  public readonly args: TArgs;
 
   public constructor(args: TArgs) {
     this.args = args;
+  }
+
+  /**
+   * The stable identity of this command — invariant under minification, where
+   * a class name is not an identity. Declared by the command itself so tools
+   * can classify commands without importing their classes.
+   *
+   * These names are part of the persisted timeline / repro-bundle format once
+   * recorded (see src/commands/replayRegistry.ts): they may only be added to,
+   * never renamed. Returns null when a command has no stable identity (the
+   * CompositeCommand container).
+   */
+  public kind(): string | null {
+    return null;
   }
 
   /**
@@ -30,6 +45,17 @@ export abstract class Command<TArgs = unknown> {
   /** True when execute() changed nothing — CommandManager keeps it out of the undo history. */
   public isNoOp(): boolean {
     return false;
+  }
+
+  /**
+   * Estimate of the cells whose undo/redo payload this command keeps in
+   * memory; default 0 = negligible. CommandManager runs its retained-cells
+   * memory budget on this (see MAX_HISTORY_RETAINED_CELLS). Overrides must
+   * count the payload actually retained after execute() — the snapshots the
+   * command holds in its own fields — never the selection area.
+   */
+  public historyWeight(): number {
+    return 0;
   }
 
   public describe(): string {

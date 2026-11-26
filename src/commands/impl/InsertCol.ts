@@ -1,13 +1,13 @@
 import { Command } from '../Command';
 import { TOTAL_COLS } from '../../util/gridSize';
-import { isSpillShadow } from '../../util/spillShadow';
-import { captureSheet, parseKey, restoreSheet, type SheetSnapshot } from './sheetSnapshot';
+import { captureFeatures, captureMetaBand, RestoreStructuralMoveCommand, type StructuralMoveUndo } from './sheetSnapshot';
 import { replaceMerges, shiftMergesForInsert } from '../../util/merge';
 import { shiftSheetFormulas } from './shiftFormulas';
 import { shiftSheetChartAnchors } from '../../charts/anchorShift';
 import { shiftSheetSparklines } from '../../sparkline/shift';
 
 import type { Store } from '../../store/Store';
+import type { Cell } from '../../types';
 
 export interface InsertColArgs {
   readonly c: number;
@@ -17,57 +17,52 @@ export interface InsertColArgs {
   readonly sheetId?: string;
 }
 
+/** Insert whole columns left of `c` — the column counterpart of InsertRow. */
 export class InsertColCommand extends Command<InsertColArgs> {
-  private oldSheet: SheetSnapshot | undefined;
+  private undoData: StructuralMoveUndo | undefined;
   private execSheetId: string | undefined;
 
+  public override kind(): 'insertCol' { return 'insertCol'; }
+
   public override structuralKind(): 'insertCol' { return 'insertCol'; }
+
+  /** Retained payload: dropped cells + rewritten formulas + metadata band + features. */
+  public override historyWeight(): number {
+    const undo = this.undoData;
+    if (undo === undefined) return 0;
+    return undo.removed.length + undo.rewrites.length + undo.metaBand.length + undo.features.merges.length + 2;
+  }
 
   public execute(store: Store): void {
     const target = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = target;
     const count = normalizeCount(this.args.count);
     const start = this.args.position === 'right' ? this.args.c + 1 : this.args.c;
-    // Only columns at/after `start` move, so the undo snapshot covers just that band.
-    this.oldSheet = captureSheet(store, target, { axis: 'col', from: start });
-    const cells = store.getCells(target).map(([key, cell]) => [...parseKey(key), cell] as const);
-    cells.filter(([, c]) => c >= start).sort((a, b) => b[1] - a[1]).forEach(([r, c, cell]) => {
-      store.setCell(r, c, undefined, target);
-      // Cells pushed past the grid edge are dropped (the grid is fixed-size).
-      // Spill shadows never travel — the shifted anchor re-spills fresh here.
-      if (c + count < TOTAL_COLS && !isSpillShadow(cell)) store.setCell(r, c + count, cell, target);
-    });
-    for (let c = TOTAL_COLS - 1; c >= start; c -= 1) {
-      if (c + count < TOTAL_COLS) store.setCol(c + count, store.getCol(c, target), target);
+    const features = captureFeatures(store, target);
+    const metaBand = captureMetaBand(store, 'col', start, target);
+    const removed = store.insertCols(start, count, target);
+    // Only columns carrying metadata are touched (each emits at most 2 events):
+    // shift right-to-left, then clear the origin. Columns without any stay silent.
+    const cols = store.getColEntries(target).filter(([c]) => c >= start).sort((a, b) => b[0] - a[0]);
+    for (const [c, meta] of cols) {
+      // Metadata pushed past the grid edge is dropped (the grid is fixed-size).
+      if (c + count < TOTAL_COLS) store.setCol(c + count, meta, target);
       store.setCol(c, undefined, target);
     }
     replaceMerges(store, shiftMergesForInsert(store.getMerges(target), start, count, 'col'), target);
-    shiftSheetFormulas(store, 'col', start, count, target);
+    const rewrites = shiftSheetFormulas(store, 'col', start, count, target);
+    // Rewrite records arrive at post-shift coordinates; undo needs ORIGINAL
+    // ones (a moved formula sat `count` left, unmoved ones stay put).
+    for (const entry of rewrites) {
+      if (entry[0] === target && entry[2] >= start) (entry as unknown as [string, number, number, Cell])[2] -= count;
+    }
     shiftSheetChartAnchors(store, 'insert', 'col', start, count, target);
     shiftSheetSparklines(store, 'insert', 'col', start, count, target);
+    this.undoData = { axis: 'col', kind: 'insert', sheetId: target, spans: [[start, count]], removed, rewrites, metaBand, features };
   }
 
   public getUndo(): Command {
-    return new RestoreSheetCommand(this.oldSheet, this.execSheetId);
-  }
-}
-
-interface RestoreSheetArgs {
-  readonly snapshot: SheetSnapshot | undefined;
-  readonly sheetId?: string;
-}
-
-class RestoreSheetCommand extends Command<RestoreSheetArgs> {
-  public constructor(snapshot: SheetSnapshot | undefined, sheetId?: string) {
-    super({ snapshot, ...(sheetId !== undefined ? { sheetId } : {}) });
-  }
-
-  public execute(store: Store): void {
-    if (this.args.snapshot !== undefined) restoreSheet(store, this.args.snapshot, this.args.sheetId);
-  }
-
-  public getUndo(): Command {
-    return new InsertColCommand({ c: 0, ...(this.args.sheetId !== undefined ? { sheetId: this.args.sheetId } : {}) });
+    return new RestoreStructuralMoveCommand(this.undoData, this);
   }
 }
 

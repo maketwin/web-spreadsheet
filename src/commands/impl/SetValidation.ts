@@ -13,6 +13,8 @@ export class SetValidationCommand extends Command<SetValidationArgs> {
   private oldRule: ValidationRule | undefined;
   private execSheetId: string | undefined;
 
+  public override kind(): 'setValidation' { return 'setValidation'; }
+
   public execute(store: Store): void {
     const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = sid;

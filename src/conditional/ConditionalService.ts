@@ -2,7 +2,9 @@ import type { Store } from '../store/Store';
 import type { Cell, Style } from '../types';
 import { evaluate, EXCEL_ERRORS } from '../formula/evaluator';
 import { FormulaParser } from '../formula/parser';
-import { shiftFormula } from '../util/formulaRefs';
+import { shiftFormula } from '../formula/refRewrite';
+import { TOTAL_COLS, TOTAL_ROWS } from '../util/gridSize';
+import { parseInternalRange } from '../util/rangeNotation';
 import type { ConditionalOverlay, ConditionalRule } from './ConditionalRule';
 
 /**
@@ -12,6 +14,13 @@ import type { ConditionalOverlay, ConditionalRule } from './ConditionalRule';
  * without ever thrashing it.
  */
 export const MAX_CACHED_RULE_FORMULAS = 40_000;
+
+/**
+ * Size limit of the per-cell overlay cache, same whole-clear policy as the
+ * AST cache above. A fixed grid holds 26,000 cells, so the default keeps
+ * every overlay of one sheet plus headroom for cross-sheet reads.
+ */
+export const MAX_CACHED_OVERLAYS = 200_000;
 
 export class ConditionalService {
   private parser = new FormulaParser();
@@ -26,12 +35,26 @@ export class ConditionalService {
   private iconStats = new Map<string, { min: number; max: number }>();
   private iconStatsStore: Store | null = null;
   private iconStatsRevision = -1;
+  /**
+   * The renderer asks for the same cell's overlay three times per paint (fill,
+   * merged style, icon padding) and every repaint repeats that — cache the
+   * finished overlay per sheet and r * TOTAL_COLS + c, dropping the whole
+   * cache whenever the store's revision moves past the one it was filled at
+   * (no subscription needed: every event delivery bumps it).
+   */
+  private overlays = new Map<string, Map<number, ConditionalOverlay>>();
+  private overlayCount = 0;
+  private overlayStore: Store | null = null;
+  private overlayRevision = -1;
 
   /** Cap override for tests; production services use MAX_CACHED_RULE_FORMULAS. */
   private readonly maxCachedFormulas: number;
+  /** Cap override for tests; production services use MAX_CACHED_OVERLAYS. */
+  private readonly maxCachedOverlays: number;
 
-  public constructor(maxCachedFormulas: number = MAX_CACHED_RULE_FORMULAS) {
+  public constructor(maxCachedFormulas: number = MAX_CACHED_RULE_FORMULAS, maxCachedOverlays: number = MAX_CACHED_OVERLAYS) {
     this.maxCachedFormulas = maxCachedFormulas;
+    this.maxCachedOverlays = maxCachedOverlays;
   }
 
   private parseCached(formula: string): ReturnType<FormulaParser['parse']> {
@@ -44,8 +67,46 @@ export class ConditionalService {
     return this.astCache.get(formula) ?? null;
   }
 
-  /** Compute the conditional overlay for a cell at (r, c) on `sheetId` (default: active sheet). */
+  /**
+   * Compute the conditional overlay for a cell at (r, c) on `sheetId`
+   * (default: active sheet). Repeats within one store revision return the
+   * same cached object — callers must treat returned overlays as immutable.
+   */
   computeOverlay(store: Store, r: number, c: number, sheetId?: string): ConditionalOverlay {
+    const sheet = sheetId ?? store.getActiveSheetId();
+    // Off-grid coordinates would alias another row's slot (c outside
+    // 0..TOTAL_COLS-1) — compute them directly instead of caching.
+    if (r < 0 || r >= TOTAL_ROWS || c < 0 || c >= TOTAL_COLS) {
+      return this.computeUncached(store, r, c, sheet);
+    }
+    if (this.overlayStore !== store || this.overlayRevision !== store.revision) {
+      this.overlayStore = store;
+      this.overlayRevision = store.revision;
+      this.overlays.clear();
+      this.overlayCount = 0;
+    }
+    const index = r * TOTAL_COLS + c;
+    const hit = this.overlays.get(sheet)?.get(index);
+    if (hit !== undefined) return hit;
+    const overlay = this.computeUncached(store, r, c, sheet);
+    // One entry per painted cell — clear in one go instead of evicting
+    // entry by entry (mirrors the AST cache).
+    if (this.overlayCount >= this.maxCachedOverlays) {
+      this.overlays.clear();
+      this.overlayCount = 0;
+    }
+    let sheetEntries = this.overlays.get(sheet);
+    if (sheetEntries === undefined) {
+      sheetEntries = new Map();
+      this.overlays.set(sheet, sheetEntries);
+    }
+    sheetEntries.set(index, overlay);
+    this.overlayCount += 1;
+    return overlay;
+  }
+
+  /** The rule walk: parse the range keys, evaluate every rule covering the cell. */
+  private computeUncached(store: Store, r: number, c: number, sheetId: string): ConditionalOverlay {
     const rules = store.getConditionalRules(sheetId);
     let style: Partial<Style> | undefined;
     let dataBar: ConditionalOverlay['dataBar'];
@@ -53,7 +114,7 @@ export class ConditionalService {
 
     // Excel: a rule only paints cells inside the range it was created for.
     for (const [key, ruleList] of rules) {
-      const range = parseRangeKey(key);
+      const range = parseInternalRange(key);
       if (range === null) continue;
       if (r < range.r1 || r > range.r2 || c < range.c1 || c > range.c2) continue;
       for (const rule of ruleList) {
@@ -88,14 +149,15 @@ export class ConditionalService {
     if (hit !== undefined) return hit;
     let min = Number.POSITIVE_INFINITY;
     let max = Number.NEGATIVE_INFINITY;
-    for (let rr = range.r1; rr <= range.r2; rr += 1) {
-      for (let cc = range.c1; cc <= range.c2; cc += 1) {
-        const n = cellNumericValue(store.getCell(rr, cc, sheetId));
-        if (n === null) continue;
-        if (n < min) min = n;
-        if (n > max) max = n;
-      }
-    }
+    // Walk the STORED cells of the rule range only. Rule ranges are routinely
+    // whole columns/rows (1,048,576 addresses); per-address getCell walks
+    // would cost millions of empty lookups on every revision bump.
+    store.forEachCellInRect(range, (_rr, _cc, cell) => {
+      const n = cellNumericValue(cell);
+      if (n === null) return;
+      if (n < min) min = n;
+      if (n > max) max = n;
+    }, sheetId);
     if (min > max) return null;
     const stats = { min, max };
     this.iconStats.set(cacheKey, stats);
@@ -176,19 +238,6 @@ export class ConditionalService {
 function barRatio(value: number, min: number, max: number): number {
   if (!(max > min)) return clamp01(value >= max ? 1 : 0);
   return clamp01((value - min) / (max - min));
-}
-
-/** Parse the `r1,c1:r2,c2` range key SetConditionalFormat stores rules under. */
-function parseRangeKey(key: string): { r1: number; c1: number; r2: number; c2: number } | null {
-  const [lo, hi] = key.split(':');
-  if (lo === undefined || hi === undefined) return null;
-  const nums = [...lo.split(','), ...hi.split(',')].map(Number);
-  if (nums.length !== 4 || nums.some((n) => !Number.isInteger(n))) return null;
-  const r1 = nums[0] ?? 0;
-  const c1 = nums[1] ?? 0;
-  const r2 = nums[2] ?? 0;
-  const c2 = nums[3] ?? 0;
-  return { r1: Math.min(r1, r2), c1: Math.min(c1, c2), r2: Math.max(r1, r2), c2: Math.max(c1, c2) };
 }
 
 function cellNumericValue(cell: Cell | undefined): number | null {

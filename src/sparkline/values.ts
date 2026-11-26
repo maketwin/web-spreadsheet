@@ -1,10 +1,17 @@
 import type { Store } from '../store/Store';
+import { parseInternalRange } from '../util/rangeNotation';
 
 /**
  * Parse the internal range key "r,c:r,c" used by chart and sparkline specs.
- * Normalizes reversed endpoints like the A1 parser does.
+ * Normalizes reversed endpoints like the A1 parser does. Public API: valid
+ * keys parse through the shared {@link parseInternalRange}; unparsable keys
+ * keep the historical lenient fallback (lenient `Number` coercion, so e.g.
+ * floats/whitespace still coerce and junk degrades to 0/NaN corners) rather
+ * than changing shape on existing callers.
  */
 export function parseInternalRangeKey(range: string): { r1: number; c1: number; r2: number; c2: number } {
+  const parsed = parseInternalRange(range);
+  if (parsed !== null) return parsed;
   const parts = range.split(':');
   const start = parts[0]?.split(',').map(Number) ?? [0, 0];
   const end = parts[1]?.split(',').map(Number) ?? start;

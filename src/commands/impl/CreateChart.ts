@@ -20,6 +20,8 @@ export class CreateChartCommand extends Command<CreateChartArgs> {
   private oldChart: ChartSpec | undefined;
   private execSheetId: string | undefined;
 
+  public override kind(): 'createChart' { return 'createChart'; }
+
   public execute(store: Store): void {
     const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = sid;

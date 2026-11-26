@@ -1,5 +1,7 @@
 import { Command } from '../Command';
+import { SetAxisStyleCommand, axisSelectionOf } from './SetAxisStyle';
 import { StyleUsage } from './styleIdentity';
+import { effectiveRange, withinMaterializationCap } from './effectiveRange';
 import type { Store } from '../../store/Store';
 import type { RangeAddress } from '../../selection/Range';
 import type { Cell, Style } from '../../types';
@@ -21,22 +23,45 @@ interface CellSnapshot {
 export class SetNumberFormatCommand extends Command<SetNumberFormatArgs> {
   private oldSnapshots: readonly CellSnapshot[] = [];
   private execSheetId: string | undefined;
+  /** Set when the selection turned out to be a whole-axis format write. */
+  private axisCommand: SetAxisStyleCommand | undefined;
+
+  public override kind(): 'setNumberFormat' { return 'setNumberFormat'; }
 
   public execute(store: Store): void {
     const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = sid;
+    // Excel: a whole-column / whole-row selection writes the axis default
+    // format — one meta per column/row, no cells materialized (whole sheet =
+    // column defaults for all 16,384 columns; see axisSelectionOf).
+    const axis = axisSelectionOf(this.args);
+    if (axis !== null) {
+      const axisCmd = new SetAxisStyleCommand({ axis: axis.axis, from: axis.from, to: axis.to, style: { numberFormat: this.args.numberFormat }, sheetId: sid });
+      axisCmd.execute.bind(axisCmd)(store);
+      this.axisCommand = axisCmd;
+      this.oldSnapshots = [];
+      return;
+    }
     const snaps: CellSnapshot[] = [];
     const usage = StyleUsage.capture(store, sid);
-    for (let r = this.args.r1; r <= this.args.r2; r += 1) {
-      for (let c = this.args.c1; c <= this.args.c2; c += 1) {
-        snaps.push(snapshot(store, r, c, sid));
-        applyFormat(store, r, c, this.args.numberFormat, sid, usage);
+    const each = (r: number, c: number): void => {
+      snaps.push(snapshot(store, r, c, sid));
+      applyFormat(store, r, c, this.args.numberFormat, sid, usage);
+    };
+    const eff = effectiveRange(store, this.args, sid);
+    if (withinMaterializationCap(eff)) {
+      for (let r = eff.r1; r <= eff.r2; r += 1) {
+        for (let c = eff.c1; c <= eff.c2; c += 1) each(r, c);
       }
+    } else {
+      // Past the cap only cells that exist are touched; blanks are not created.
+      store.forEachCellInRect(eff, (r, c) => each(r, c), sid);
     }
     this.oldSnapshots = snaps;
   }
 
   public getUndo(): Command {
+    if (this.axisCommand !== undefined) return this.axisCommand.getUndo();
     return new RestoreNumberFormat({ snapshots: this.oldSnapshots, ...(this.execSheetId !== undefined ? { sheetId: this.execSheetId } : {}) });
   }
 }
@@ -72,7 +97,10 @@ function applyFormat(store: Store, r: number, c: number, numberFormat: NonNullab
   let cell = store.getCell(r, c, sheetId);
   if (cell === undefined) cell = { text: '' };
   const styleId = usage.forCell(r, c, cell.styleId);
-  const existing = store.getStyle(styleId, sheetId);
+  // The merge base is the style in effect (own > row default > column
+  // default): formatting one cell of a percent column keeps the percent
+  // format unless the new one replaces it.
+  const existing = store.getCellStyle(r, c, cell, sheetId);
   store.setStyle(styleId, { ...existing, numberFormat }, sheetId);
   store.setCell(r, c, { ...cell, styleId }, sheetId);
   usage.reassign(cell.styleId, styleId);

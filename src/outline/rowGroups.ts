@@ -1,3 +1,4 @@
+import { MAX_MATERIALIZED_CELLS } from '../util/limits';
 import type { RowGroupDef } from '../store/SheetData';
 import type { Store } from '../store/Store';
 
@@ -15,6 +16,29 @@ import type { Store } from '../store/Store';
  *  selection, so a collapsed group stays reachable via its visible neighbours. */
 function intersectingGroups(groups: readonly RowGroupDef[], r1: number, r2: number): RowGroupDef[] {
   return groups.filter((g) => g.start <= r2 && g.end >= r1);
+}
+
+/**
+ * Rows of one group to write the hide flag on: every row of a group that fits
+ * the materialization cap (unchanged behavior for ordinary groups); for a
+ * group spanning a huge band only the rows that exist — stored cells or row
+ * metadata — plus the group's first row, so collapsing never creates a
+ * million row records for empty addresses.
+ */
+function rowsToTouch(store: Store, start: number, end: number): number[] {
+  if (end - start + 1 <= MAX_MATERIALIZED_CELLS) {
+    const all: number[] = [];
+    for (let r = start; r <= end; r += 1) all.push(r);
+    return all;
+  }
+  const set = new Set<number>([start]);
+  for (const [r] of store.getRowEntries()) {
+    if (r >= start && r <= end) set.add(r);
+  }
+  store.forEachCell((r) => {
+    if (r >= start && r <= end) set.add(r);
+  });
+  return [...set].sort((a, b) => a - b);
 }
 
 export function applyGroupRows(store: Store, r1: number, r2: number): void {
@@ -45,7 +69,7 @@ export function applyCollapseGroup(store: Store, r1: number, r2: number): boolea
   // formula recalc and rendering must not see thousands of half-updated states.
   store.batch(() => {
     for (const target of targets) {
-      for (let r0 = target.start; r0 <= target.end; r0 += 1) {
+      for (const r0 of rowsToTouch(store, target.start, target.end)) {
         const meta = store.getRow(r0);
         store.setRow(r0, { ...meta, hide: true });
       }
@@ -60,7 +84,7 @@ export function applyExpandGroup(store: Store, r1: number, r2: number): boolean 
   if (targets.length === 0) return false;
   store.batch(() => {
     for (const target of targets) {
-      for (let r0 = target.start; r0 <= target.end; r0 += 1) {
+      for (const r0 of rowsToTouch(store, target.start, target.end)) {
         const meta = store.getRow(r0);
         // 注意：展开会取消组内所有行的隐藏标记——包括被筛选器隐藏的行（Excel 同样如此）。
         store.setRow(r0, { ...meta, hide: false });

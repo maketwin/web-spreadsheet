@@ -22,7 +22,10 @@ export function rangeSelection(range: RangeAddress, anchor?: Selection['anchor']
     kind: isSingle ? 'cell' : 'range',
     range: normalized,
     anchor: anchor ?? { r: normalized.r1, c: normalized.c1 },
-    active: active ?? { r: normalized.r2, c: normalized.c2 },
+    // Without an explicit active cell the range starts at its top-left, as in
+    // Excel's name box. The viewport follows the active cell, so a range
+    // typed there (`A:A`) must not drag the view to its last row.
+    active: active ?? { r: normalized.r1, c: normalized.c1 },
   };
 }
 

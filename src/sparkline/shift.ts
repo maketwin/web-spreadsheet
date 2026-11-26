@@ -1,4 +1,4 @@
-import { shiftInternalRange } from '../util/cell';
+import { shiftInternalRange } from '../util/rangeNotation';
 import { TOTAL_COLS, TOTAL_ROWS } from '../util/gridSize';
 
 import type { Store } from '../store/Store';

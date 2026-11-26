@@ -1,7 +1,7 @@
 import type { Command } from './Command';
 import type { RangeAddress } from '../selection/Range';
 import { num2alpha } from '../util/alphabet';
-import { CompositeCommand } from '../util/rangeValues';
+import { CompositeCommand } from './rangeValues';
 
 /**
  * Excel F4: repeat the last command re-targeted at the current selection.

@@ -18,6 +18,8 @@ export class SetSparklineCommand extends Command<SetSparklineArgs> {
   private oldSparkline: SparklineSpec | undefined;
   private execSheetId: string | undefined;
 
+  public override kind(): 'setSparkline' { return 'setSparkline'; }
+
   public execute(store: Store): void {
     const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = sid;

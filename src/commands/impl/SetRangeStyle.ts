@@ -1,6 +1,8 @@
 import { Command } from '../Command';
 import { SetCellStyleCommand } from './SetCellStyle';
+import { SetAxisStyleCommand, axisSelectionOf } from './SetAxisStyle';
 import { StyleUsage } from './styleIdentity';
+import { effectiveRange, withinMaterializationCap } from './effectiveRange';
 
 import type { Store } from '../../store/Store';
 import type { RangeAddress } from '../../selection/Range';
@@ -23,22 +25,46 @@ interface CellStyleSnapshot {
 export class SetRangeStyleCommand extends Command<SetRangeStyleArgs> {
   private oldCells: CellStyleSnapshot[] = [];
   private execSheetId: string | undefined;
+  /** Set when the selection turned out to be a whole-axis format write. */
+  private axisCommand: SetAxisStyleCommand | undefined;
+
+  public override kind(): 'setRangeStyle' { return 'setRangeStyle'; }
 
   public execute(store: Store): void {
     this.oldCells = [];
+    this.axisCommand = undefined;
     const target = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = target;
+    // Excel: a whole-column / whole-row / whole-sheet selection formats the
+    // axis itself (O(selection width), one meta per column/row) instead of
+    // materializing cells — the format also shows on blank and future cells.
+    const axis = axisSelectionOf(this.args);
+    if (axis !== null) {
+      const axisCmd = new SetAxisStyleCommand({ axis: axis.axis, from: axis.from, to: axis.to, style: this.args.style, sheetId: target });
+      axisCmd.execute.bind(axisCmd)(store);
+      this.axisCommand = axisCmd;
+      return;
+    }
+    // Bounded selections walk only the used part of the sheet past the
+    // materialization cap; blank cells are not created there.
+    const eff = effectiveRange(store, this.args, target);
     const usage = StyleUsage.capture(store, target);
-    for (let r = this.args.r1; r <= this.args.r2; r += 1) {
-      for (let c = this.args.c1; c <= this.args.c2; c += 1) {
-        this.capture(store, r, c, target);
-        const apply = new SetCellStyleCommand({ r, c, style: this.args.style, sheetId: target }, usage);
-        apply.execute.bind(apply)(store);
+    const each = (r: number, c: number): void => {
+      this.capture(store, r, c, target);
+      const apply = new SetCellStyleCommand({ r, c, style: this.args.style, sheetId: target }, usage);
+      apply.execute.bind(apply)(store);
+    };
+    if (withinMaterializationCap(eff)) {
+      for (let r = eff.r1; r <= eff.r2; r += 1) {
+        for (let c = eff.c1; c <= eff.c2; c += 1) each(r, c);
       }
+    } else {
+      store.forEachCellInRect(eff, (r, c) => each(r, c), target);
     }
   }
 
   public getUndo(): Command {
+    if (this.axisCommand !== undefined) return this.axisCommand.getUndo();
     return new RestoreRangeStyle({ snapshots: this.oldCells, ...(this.execSheetId !== undefined ? { sheetId: this.execSheetId } : {}) });
   }
 

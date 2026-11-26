@@ -14,8 +14,11 @@ export interface SetMergeArgs {
 }
 
 interface MergeSnapshot {
+  /** Stored cells inside the target at snapshot time (sparse — no blank entries). */
   readonly cells: ReadonlyArray<readonly [number, number, Cell | undefined]>;
   readonly merges: readonly string[];
+  /** The snapshot's rectangle: undo drops every merge touching it. */
+  readonly target: RangeAddress;
 }
 
 /**
@@ -28,6 +31,13 @@ export class SetMerge extends Command<SetMergeArgs> {
   private before: MergeSnapshot | undefined;
   private noop = false;
   private execSheetId: string | undefined;
+
+  public override kind(): 'setMerge' { return 'setMerge'; }
+
+  /** Retained payload: the sparse cell snapshot inside the merged area. */
+  public override historyWeight(): number {
+    return this.before?.cells.length ?? 0;
+  }
 
   public execute(store: Store): void {
     const target = Range.normalize(parseMerge(this.args.range));
@@ -67,6 +77,13 @@ export class SetMergeAcross extends Command<SetMergeAcrossArgs> {
   private before: MergeSnapshot | undefined;
   private noop = false;
   private execSheetId: string | undefined;
+
+  public override kind(): 'setMergeAcross' { return 'setMergeAcross'; }
+
+  /** Retained payload: the sparse cell snapshot inside the merged area. */
+  public override historyWeight(): number {
+    return this.before?.cells.length ?? 0;
+  }
 
   public execute(store: Store): void {
     const target = Range.normalize(parseMerge(this.args.range));
@@ -119,17 +136,15 @@ function applyMerge(store: Store, target: RangeAddress, sheetId?: string): void 
   });
 }
 
-/** Snapshot the cells in the area plus all merges intersecting it. */
+/** Snapshot the stored cells in the area plus all merges intersecting it.
+ * Sparse by design: merging A1:A1048576 must not allocate a million blank
+ * snapshot entries — only the cells that exist can be cleared or restored. */
 function snapshotArea(store: Store, target: RangeAddress, sheetId?: string): MergeSnapshot {
   const sid = sheetId ?? store.getActiveSheetId();
   const cells: Array<readonly [number, number, Cell | undefined]> = [];
-  for (let r = target.r1; r <= target.r2; r += 1) {
-    for (let c = target.c1; c <= target.c2; c += 1) {
-      cells.push([r, c, store.getCell(r, c, sid)]);
-    }
-  }
+  store.forEachCellInRect(target, (r, c, cell) => cells.push([r, c, cell]), sid);
   const merges = store.getMerges(sid).filter((m) => rangesIntersect(parseMerge(m), target));
-  return { cells, merges };
+  return { cells, merges, target };
 }
 
 interface RestoreMergeStateArgs {
@@ -147,11 +162,13 @@ class RestoreMergeState extends Command<RestoreMergeStateArgs> {
     if (snapshot === undefined) return;
     const sid = this.args.sheetId ?? store.getActiveSheetId();
     store.batch(() => {
-      // Remove merges created by the command, restore prior merges and cells.
-      snapshot.cells.forEach(([r, c]) => {
-        const merge = store.getMergeAt(r, c, sid);
-        if (merge !== undefined) store.removeMerge(merge, sid);
-      });
+      // Remove merges created by the command (everything touching the
+      // snapshot's rectangle — the sparse snapshot may have no stored cell
+      // in a freshly created merge, so positions alone cannot find it),
+      // restore prior merges and cells.
+      for (const m of store.getMerges(sid)) {
+        if (rangesIntersect(parseMerge(m), snapshot.target)) store.removeMerge(m, sid);
+      }
       snapshot.merges.forEach((m) => {
         if (!store.getMerges(sid).includes(m)) store.addMerge(m, sid);
       });
@@ -177,6 +194,8 @@ export interface ApplyMergeChangesArgs {
  */
 export class ApplyMergeChanges extends Command<ApplyMergeChangesArgs> {
   private execSheetId: string | undefined;
+
+  public override kind(): 'applyMergeChanges' { return 'applyMergeChanges'; }
 
   public execute(store: Store): void {
     const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();

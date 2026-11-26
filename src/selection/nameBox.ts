@@ -1,5 +1,6 @@
 import { NamedRangeService } from '../namedrange/NamedRangeService';
-import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
+import { TOTAL_COLS, TOTAL_ROWS } from '../util/gridSize';
+import { parseInternalRange } from '../util/rangeNotation';
 import { alpha2num } from '../util/alphabet';
 import type { RangeAddress } from './Range';
 import type { Store } from '../store/Store';
@@ -87,10 +88,9 @@ export function parseNameBoxInput(store: Store, input: string): NameBoxTarget | 
   if (bang >= 0) return null; // refs after "Sheet!" must parse; names carry no sheet prefix
   const def = new NamedRangeService().lookup(store, text);
   if (def === undefined) return null;
-  const coords = def.range.split(':');
-  const start = coords[0]?.split(',').map(Number);
-  const end = coords[1]?.split(',').map(Number) ?? start;
-  if (start === undefined || start.length < 2) return null;
-  const range = { r1: start[0] ?? 0, c1: start[1] ?? 0, r2: end?.[0] ?? (start[0] ?? 0), c2: end?.[1] ?? (start[1] ?? 0) };
-  return { sheetId: def.sheetId ?? null, range: clampRange(range) };
+  // A stored range that does not parse (never produced by the app) resolves
+  // to nothing instead of a NaN selection.
+  const coords = parseInternalRange(def.range);
+  if (coords === null) return null;
+  return { sheetId: def.sheetId ?? null, range: clampRange(coords) };
 }

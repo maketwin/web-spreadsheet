@@ -1,7 +1,7 @@
 import type { Store } from '../store/Store';
-import type { AutoFilterCriteria, AutoFilterState, CellValue, FilterCondition } from '../types';
-import { displayTextOf } from '../util/cell';
-import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
+import type { AutoFilterCriteria, AutoFilterState, Cell, CellValue, FilterCondition } from '../types';
+import { displayTextOf } from '../format/displayText';
+import { TOTAL_COLS, TOTAL_ROWS } from '../util/gridSize';
 import { compareExcelValues, sortRowsInPlace } from './sortRows';
 
 const BLANK_LABEL = '(空白)';
@@ -17,35 +17,52 @@ export interface FilterItem {
 export class FilterService {
   public constructor(private readonly store: Store) {}
 
-  /** Get unique non-empty display values in a column within a range. */
+  /** Get unique non-empty display values in a column within a range. Walks the stored cells only. */
   public getFilterValues(r1: number, c: number, r2: number): string[] {
     const seen = new Set<string>();
-    for (let r = r1; r <= r2; r += 1) {
-      const text = this.textAt(r, c);
+    this.store.forEachCellInRect({ r1, c1: c, r2, c2: c }, (row, col, cell) => {
+      const text = this.textOfCell(row, col, cell);
       if (text !== '') seen.add(text);
-    }
+    });
     return [...seen].sort(compareExcelValues);
   }
 
-  /** Get unique values plus Excel's blank entry, with criteria selection state. */
+  /** Get unique values plus Excel's blank entry, with criteria selection state. Rows without stored cells in the involved columns are handled arithmetically, so the cost tracks the stored cells, not the filter range's row count. */
   public getFilterItems(column: number): FilterItem[] {
     const filter = this.store.getAutoFilter();
     if (filter === undefined) return [];
     const { r1, r2 } = filter.range;
     if (column < filter.range.c1 || column > filter.range.c2) return [];
+    const firstDataRow = r1 + 1;
 
     // Excel derives the checklist from rows visible under every *other* column
     // filter. The current column is ignored so hidden values can be re-selected.
     const otherCriteria = Object.entries(filter.criteria)
       .filter(([rawColumn]) => Number(rawColumn) !== column)
       .map(([rawColumn, criteria]) => ({ column: Number(rawColumn), criteria }));
+    const involved = [column, ...otherCriteria.map((entry) => entry.column)];
+    const cellRows = new Map<number, Map<number, Cell>>();
+    if (r2 >= firstDataRow) {
+      this.store.forEachCellInRect({ r1: firstDataRow, c1: Math.min(...involved), r2, c2: Math.max(...involved) }, (r, c, cell) => {
+        let row = cellRows.get(r);
+        if (row === undefined) { row = new Map(); cellRows.set(r, row); }
+        row.set(c, cell);
+      });
+    }
     const counts = new Map<string, number>();
     let blankCount = 0;
-    for (let r = r1 + 1; r <= r2; r += 1) {
-      const matchesOtherFilters = otherCriteria.every(({ column: otherColumn, criteria }) =>
-        FilterService.matchesCriteria(this.textAt(r, otherColumn), criteria));
+    // Rows with no stored cell in any involved column read as blanks in all of
+    // them — one arithmetic bucket instead of one iteration per row.
+    const blankMatchesOthers = otherCriteria.every(({ criteria }) => FilterService.matchesCriteria('', criteria));
+    if (blankMatchesOthers) blankCount += Math.max(0, r2 - firstDataRow + 1) - cellRows.size;
+    for (const [r, row] of cellRows) {
+      const matchesOtherFilters = otherCriteria.every(({ column: otherColumn, criteria }) => {
+        const cell = row.get(otherColumn);
+        return FilterService.matchesCriteria(cell === undefined ? '' : this.textOfCell(r, otherColumn, cell), criteria);
+      });
       if (!matchesOtherFilters) continue;
-      const text = this.textAt(r, column);
+      const cell = row.get(column);
+      const text = cell === undefined ? '' : this.textOfCell(r, column, cell);
       if (text === '') blankCount += 1;
       else counts.set(text, (counts.get(text) ?? 0) + 1);
     }
@@ -131,15 +148,15 @@ export class FilterService {
     this.applyFilters();
   }
 
-  /** Hide rows where any filtered column does not match its checked values. */
+  /** Hide rows where any filtered column does not match its checked values. Only rows of the filter range inside the used region (plus rows carrying metadata) are visited — never the address space. */
   public applyFilters(): void {
     const filter = this.store.getAutoFilter();
     if (filter === undefined) return;
+    const criteriaEntries = Object.entries(filter.criteria).map(([rawColumn, criteria]) => ({ column: Number(rawColumn), criteria }));
     this.store.batch(() => {
-      for (let r = filter.range.r1 + 1; r <= filter.range.r2; r += 1) {
+      for (const r of this.visitableRows(filter.range.r1 + 1, filter.range.r2)) {
         let visible = true;
-        for (const [rawColumn, criteria] of Object.entries(filter.criteria)) {
-          const column = Number(rawColumn);
+        for (const { column, criteria } of criteriaEntries) {
           if (!FilterService.matchesCriteria(this.textAt(r, column), criteria, this.store.getCell(r, column)?.value)) { visible = false; break; }
         }
         const meta = this.store.getRow(r);
@@ -166,10 +183,10 @@ export class FilterService {
     return criteria.selected.some((value) => value.toLowerCase() === lower);
   }
 
-  /** Hide rows where column `c` value is not in `allowedValues`. */
+  /** Hide rows where column `c` value is not in `allowedValues`. Visits the used part of the range only. */
   public filterColumn(r1: number, c: number, r2: number, allowedValues: readonly string[]): void {
     const allowed = new Set(allowedValues.map((value) => value.toLowerCase()));
-    for (let r = r1; r <= r2; r += 1) {
+    for (const r of this.visitableRows(r1, r2)) {
       const text = this.textAt(r, c);
       const shouldHide = text !== '' && !allowed.has(text.toLowerCase());
       const meta = this.store.getRow(r);
@@ -252,16 +269,20 @@ export class FilterService {
    * Excel CurrentRegion: grow the rectangle from the anchor in all four
    * directions until a completely blank row/column (or the sheet edge)
    * borders it. Iterate to a fixed point because widening the rectangle can
-   * let it grow further along the other axis.
+   * let it grow further along the other axis. Data presence comes from one
+   * sparse sweep per round over the stored cells, so the cost tracks what is
+   * stored — never the grid the rectangle could grow into.
    */
   public inferDataRegion(anchor: { readonly r1: number; readonly c1: number; readonly r2: number; readonly c2: number }): { readonly r1: number; readonly c1: number; readonly r2: number; readonly c2: number } {
     let { r1, c1, r2, c2 } = anchor;
     for (let round = 0; round < 8; round += 1) {
       let changed = false;
-      while (r1 > 0 && this.rowHasData(r1 - 1, c1, c2)) { r1 -= 1; changed = true; }
-      while (r2 + 1 < TOTAL_ROWS && this.rowHasData(r2 + 1, c1, c2)) { r2 += 1; changed = true; }
-      while (c1 > 0 && this.columnHasData(c1 - 1, r1, r2)) { c1 -= 1; changed = true; }
-      while (c2 + 1 < TOTAL_COLS && this.columnHasData(c2 + 1, r1, r2)) { c2 += 1; changed = true; }
+      const rows = this.dataRowsInSpan(c1, c2);
+      const cols = this.dataColsInSpan(r1, r2);
+      while (r1 > 0 && rows.has(r1 - 1)) { r1 -= 1; changed = true; }
+      while (r2 + 1 < TOTAL_ROWS && rows.has(r2 + 1)) { r2 += 1; changed = true; }
+      while (c1 > 0 && cols.has(c1 - 1)) { c1 -= 1; changed = true; }
+      while (c2 + 1 < TOTAL_COLS && cols.has(c2 + 1)) { c2 += 1; changed = true; }
       if (!changed) break;
     }
     return { r1, c1, r2, c2 };
@@ -271,38 +292,67 @@ export class FilterService {
   private textAt(r: number, c: number): string {
     const cell = this.store.getCell(r, c);
     if (cell === undefined) return '';
-    return displayTextOf(cell, cell.styleId === undefined ? undefined : this.store.getStyle(cell.styleId));
+    return this.textOfCell(r, c, cell);
   }
 
-  private rowHasData(row: number, from: number, to: number): boolean {
-    for (let c = from; c <= to; c += 1) if (this.hasData(row, c)) return true;
-    return false;
+  private textOfCell(r: number, c: number, cell: Cell): string {
+    return displayTextOf(cell, this.store.getCellStyle(r, c, cell));
   }
 
-  private columnHasData(column: number, from: number, to: number): boolean {
-    for (let r = from; r <= to; r += 1) if (this.hasData(r, column)) return true;
-    return false;
+  private hasDataCell(cell: Cell): boolean {
+    return cell.text !== '' || cell.formula !== undefined;
   }
 
-  private hasData(r: number, c: number): boolean {
-    const cell = this.store.getCell(r, c);
-    return cell !== undefined && (cell.text !== '' || cell.formula !== undefined);
+  /** Rows holding data (`hasData`) anywhere in columns c1..c2, from one sparse sweep. */
+  private dataRowsInSpan(c1: number, c2: number): Set<number> {
+    const rows = new Set<number>();
+    this.store.forEachCellInRect({ r1: 0, c1, r2: TOTAL_ROWS - 1, c2 }, (r, _c, cell) => {
+      if (this.hasDataCell(cell)) rows.add(r);
+    });
+    return rows;
+  }
+
+  /** Columns holding data (`hasData`) anywhere in rows r1..r2, from one sparse sweep. */
+  private dataColsInSpan(r1: number, r2: number): Set<number> {
+    const cols = new Set<number>();
+    this.store.forEachCellInRect({ r1, c1: 0, r2, c2: TOTAL_COLS - 1 }, (_r, c, cell) => {
+      if (this.hasDataCell(cell)) cols.add(c);
+    });
+    return cols;
+  }
+
+  /**
+   * The rows of [from..to] an apply/clear pass must write: the used region's
+   * rows (an empty row inside the data block still hides like Excel's) plus
+   * any row carrying metadata (its hide flag must be reset). Everything past
+   * the used bounds has neither content nor metadata — writing it would be a
+   * no-op spread over the address space.
+   */
+  private visitableRows(from: number, to: number): number[] {
+    const bounds = this.store.getUsedBounds();
+    const lastRow = bounds === undefined ? from - 1 : Math.min(to, bounds.r2);
+    const rows: number[] = [];
+    for (let r = from; r <= lastRow; r += 1) rows.push(r);
+    for (const [r] of this.store.getRowEntries()) {
+      if (r >= from && r <= to && r > lastRow) rows.push(r);
+    }
+    return rows;
   }
 
   /** First row with any data between columns c1..c2; 0 when the columns are empty. */
   private firstDataRowInColumns(c1: number, c2: number): number {
-    for (let r = 0; r < TOTAL_ROWS; r += 1) {
-      for (let c = c1; c <= c2; c += 1) {
-        if (this.hasData(r, c)) return r;
-      }
-    }
-    return 0;
+    let first = -1;
+    this.store.forEachCellInRect({ r1: 0, c1, r2: TOTAL_ROWS - 1, c2 }, (r, _c, cell) => {
+      if (this.hasDataCell(cell) && (first === -1 || r < first)) first = r;
+    });
+    return first === -1 ? 0 : first;
   }
 
   private unhideRows(from: number, to: number): void {
-    for (let r = from; r <= to; r += 1) {
-      const meta = this.store.getRow(r);
-      if (meta?.hide === true) this.store.setRow(r, { ...meta, hide: false });
+    // Hide flags live on row metadata: walk the metadata entries, not the range.
+    for (const [r, meta] of this.store.getRowEntries()) {
+      if (r < from || r > to) continue;
+      if (meta.hide === true) this.store.setRow(r, { ...meta, hide: false });
     }
   }
 }

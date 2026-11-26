@@ -1,5 +1,6 @@
 import { Command } from '../Command';
 import { StyleUsage } from './styleIdentity';
+import { effectiveRange, withinMaterializationCap } from './effectiveRange';
 import type { Store } from '../../store/Store';
 import type { Cell, Style } from '../../types';
 
@@ -37,6 +38,8 @@ export class ApplyTableStyleCommand extends Command<ApplyTableStyleArgs> {
   private snapshots: Snapshot[] = [];
   private execSheetId: string | undefined;
 
+  public override kind(): 'applyTableStyle' { return 'applyTableStyle'; }
+
   public execute(store: Store): void {
     this.snapshots = [];
     const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
@@ -44,20 +47,30 @@ export class ApplyTableStyleCommand extends Command<ApplyTableStyleArgs> {
     const preset = TABLE_PRESETS[this.args.preset];
     if (preset === undefined) return;
     const usage = StyleUsage.capture(store, sid);
-    for (let r = this.args.r1; r <= this.args.r2; r += 1) {
-      for (let c = this.args.c1; c <= this.args.c2; c += 1) {
-        this.snapshots.push(this.capture(store, r, c, sid));
-        const style: Partial<Style> = r === this.args.r1
-          ? { bgcolor: preset.headerBg, color: '#FFFFFF', bold: true }
-          : ((r - this.args.r1) % 2 === 0 ? { bgcolor: preset.band } : {});
-        const oldCell = store.getCell(r, c, sid);
-        const oldStyle = oldCell?.styleId === undefined ? undefined : store.getStyle(oldCell.styleId, sid);
-        const nextStyle = { ...oldStyle, ...style };
-        const styleId = usage.forCell(r, c, oldCell?.styleId);
-        store.setStyle(styleId, nextStyle, sid);
-        store.setCell(r, c, { ...oldCell, text: oldCell?.text ?? '', styleId }, sid);
-        usage.reassign(oldCell?.styleId, styleId);
+    // Header row and banding key off the effective range: on selections that
+    // reach past the data, the table lands on the used part of the sheet.
+    const eff = effectiveRange(store, this.args, sid);
+    const each = (r: number, c: number): void => {
+      this.snapshots.push(this.capture(store, r, c, sid));
+      const style: Partial<Style> = r === eff.r1
+        ? { bgcolor: preset.headerBg, color: '#FFFFFF', bold: true }
+        : ((r - eff.r1) % 2 === 0 ? { bgcolor: preset.band } : {});
+      const oldCell = store.getCell(r, c, sid);
+      // Merge onto the style in EFFECT (own > row default > column default):
+      // a table over a bold column keeps bold under the band fill.
+      const effective = store.getCellStyle(r, c, oldCell, sid);
+      const nextStyle = { ...effective, ...style };
+      const styleId = usage.forCell(r, c, oldCell?.styleId);
+      store.setStyle(styleId, nextStyle, sid);
+      store.setCell(r, c, { ...oldCell, text: oldCell?.text ?? '', styleId }, sid);
+      usage.reassign(oldCell?.styleId, styleId);
+    };
+    if (withinMaterializationCap(eff)) {
+      for (let r = eff.r1; r <= eff.r2; r += 1) {
+        for (let c = eff.c1; c <= eff.c2; c += 1) each(r, c);
       }
+    } else {
+      store.forEachCellInRect(eff, (r, c) => each(r, c), sid);
     }
   }
 

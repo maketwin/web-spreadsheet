@@ -13,6 +13,8 @@ export class RemoveChartCommand extends Command<RemoveChartArgs> {
   private oldChart: ChartSpec | undefined;
   private execSheetId: string | undefined;
 
+  public override kind(): 'removeChart' { return 'removeChart'; }
+
   public execute(store: Store): void {
     const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = sid;

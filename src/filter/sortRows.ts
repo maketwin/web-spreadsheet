@@ -1,6 +1,6 @@
 import type { Store } from '../store/Store';
 import type { Cell } from '../types';
-import { remapFormulaRows } from '../util/cell';
+import { remapFormulaRows } from '../formula/refRewrite';
 import { remapRefsForMovedRows, type OutsideRewrite } from '../formula/rowMoveRefs';
 
 export type { OutsideRewrite } from '../formula/rowMoveRefs';

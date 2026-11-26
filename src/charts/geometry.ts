@@ -1,4 +1,4 @@
-import { COL_HEADER_HEIGHT, ROW_HEADER_WIDTH } from '../renderer/coordinate';
+import { COL_HEADER_HEIGHT, ROW_HEADER_WIDTH } from '../util/gridSize';
 import type { ChartAnchor, ChartAnchorEdge } from './types';
 
 /**

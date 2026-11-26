@@ -20,6 +20,8 @@ export class SetCellText extends Command<SetCellTextArgs> {
   /** Sheet the last execute() ran against — undo/redo re-target it even after a switch. */
   private execSheetId: string | undefined;
 
+  public override kind(): 'setCellText' { return 'setCellText'; }
+
   public execute(store: Store): void {
     const { r, c, text, richText } = this.args;
     const target = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();

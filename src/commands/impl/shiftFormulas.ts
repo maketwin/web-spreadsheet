@@ -1,8 +1,10 @@
-import { formulaText, shiftAxis, shiftFormulaCols, shiftFormulaRows, shiftInternalRange } from '../../util/cell';
+import { formulaText } from '../../util/cell';
+import { parseInternalRange, shiftAxis, shiftInternalRange } from '../../util/rangeNotation';
+import { shiftFormulaCols, shiftFormulaRows } from '../../formula/refRewrite';
 import { TOTAL_COLS } from '../../util/gridSize';
 
 import type { Store } from '../../store/Store';
-import type { AutoFilterCriteria } from '../../types';
+import type { AutoFilterCriteria, Cell } from '../../types';
 
 /**
  * Excel inserts/deletes rewrite references workbook-wide after the active
@@ -10,30 +12,47 @@ import type { AutoFilterCriteria } from '../../types';
  * formulas shift, and `Target!A5`-scoped refs shift in every sheet's
  * formulas. Recalculation follows from the emitted cell events.
  *
+ * Returns the rewrite list — `[sheetId, r, c, previousCell]` at the NEW
+ * coordinates with the pre-rewrite cell object — for the command's undo
+ * (O(number of rewritten formulas), never a band snapshot).
+ *
  * Non-formula structures move too, Excel-style: named ranges (on any sheet,
  * when they refer to the target sheet), and the target sheet's conditional
  * formats, validation rules, and autofilter range. A structure whose range
  * is fully deleted is removed, matching Excel dropping the definition.
  */
-export function shiftSheetFormulas(store: Store, axis: 'row' | 'col', start: number, count: number, sheetId?: string): void {
+export function shiftSheetFormulas(store: Store, axis: 'row' | 'col', start: number, count: number, sheetId?: string): Array<readonly [string, number, number, Cell]> {
   const targetId = sheetId ?? store.getActiveSheetId();
   const targetName = store.getSheets().find((sheet) => sheet.id === targetId)?.name;
-  if (targetName === undefined) return;
+  if (targetName === undefined) {
+    shiftSheetStructures(store, targetId, axis, start, count);
+    return [];
+  }
+  const undo: Array<readonly [string, number, number, Cell]> = [];
   for (const { id } of store.getSheets()) {
+    // A sheet that never held a formula cell has nothing to rewrite: the
+    // million-cell sweep is skipped on one field read (see SheetData's latch).
+    if (!store.hasEverHadFormula(id)) continue;
     const scopedOnly = id !== targetId;
     const scope = { sheetName: targetName, scopedOnly };
-    for (const [key, cell] of store.getCells(id)) {
+    // Collect first, write after: setCell mutates the map forEachCell walks.
+    const rewrites: Array<readonly [number, number, Cell, string]> = [];
+    store.forEachCell((r, c, cell) => {
       const formula = formulaText(cell);
-      if (formula === undefined) continue;
+      if (formula === undefined) return;
       const next = axis === 'row'
         ? shiftFormulaRows(formula, start, count, scope)
         : shiftFormulaCols(formula, start, count, scope);
-      if (next === formula) continue;
-      const [r, c] = key.split(',').map(Number);
-      store.setCell(r ?? 0, c ?? 0, { ...cell, formula: next }, id);
+      if (next === formula) return;
+      rewrites.push([r, c, cell, next]);
+    }, id);
+    for (const [r, c, cell, next] of rewrites) {
+      store.setCell(r, c, { ...cell, formula: next }, id);
+      undo.push([id, r, c, cell]);
     }
   }
   shiftSheetStructures(store, targetId, axis, start, count);
+  return undo;
 }
 
 /** Named ranges / conditional formats / validation / autofilter follow the moved rows or cols. */
@@ -76,7 +95,10 @@ function shiftAutoFilter(store: Store, sheetId: string, axis: 'row' | 'col', sta
     store.setAutoFilter(undefined, sheetId);
     return;
   }
-  const [lo, hi] = next.split(':').map((part) => part.split(',').map(Number));
+  // next comes from shiftInternalRange over "${r1},${c1}:${r2},${c2}" above —
+  // always well-formed, so the parse only fails for data that could not have
+  // been produced by the app; fall back to the grid origin.
+  const shifted = parseInternalRange(next) ?? { r1: 0, c1: 0, r2: 0, c2: 0 };
   // Filter criteria are keyed by column: re-key through a column shift and
   // drop criteria whose column was deleted (Excel clears that filter).
   let criteria = af.criteria;
@@ -88,5 +110,5 @@ function shiftAutoFilter(store: Store, sheetId: string, axis: 'row' | 'col', sta
     }
     criteria = moved;
   }
-  store.setAutoFilter({ range: { r1: lo?.[0] ?? 0, c1: lo?.[1] ?? 0, r2: hi?.[0] ?? 0, c2: hi?.[1] ?? 0 }, criteria }, sheetId);
+  store.setAutoFilter({ range: { r1: shifted.r1, c1: shifted.c1, r2: shifted.r2, c2: shifted.c2 }, criteria }, sheetId);
 }

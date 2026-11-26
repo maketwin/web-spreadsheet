@@ -13,6 +13,8 @@ export class SetConditionalFormatCommand extends Command<SetConditionalFormatArg
   private oldRules: ConditionalRule[] | undefined;
   private execSheetId: string | undefined;
 
+  public override kind(): 'setConditionalFormat' { return 'setConditionalFormat'; }
+
   public execute(store: Store): void {
     const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = sid;
@@ -70,6 +72,8 @@ export interface SetSheetConditionalRulesArgs {
 export class SetSheetConditionalRulesCommand extends Command<SetSheetConditionalRulesArgs> {
   private oldEntries: Array<readonly [string, ConditionalRule[]]> | undefined;
   private execSheetId: string | undefined;
+
+  public override kind(): 'setSheetConditionalRules' { return 'setSheetConditionalRules'; }
 
   public execute(store: Store): void {
     const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();

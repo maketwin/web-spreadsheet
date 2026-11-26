@@ -14,6 +14,8 @@ export class SetColWidth extends Command<SetColWidthArgs> {
   private oldMeta: ColMeta | undefined;
   private execSheetId: string | undefined;
 
+  public override kind(): 'setColWidth' { return 'setColWidth'; }
+
   public execute(store: Store): void {
     const target = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = target;

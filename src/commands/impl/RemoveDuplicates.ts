@@ -1,12 +1,13 @@
 import { Command } from '../Command';
-import { TOTAL_ROWS } from '../../util/gridSize';
-import { captureSheet, parseKey, restoreSheet, type SheetSnapshot } from './sheetSnapshot';
+import { captureFeatures, captureMetaBand, RestoreStructuralMoveCommand, sameRowGroups, type StructuralMoveUndo } from './sheetSnapshot';
 import { replaceMerges, shiftMergesForDelete } from '../../util/merge';
+import { shiftRowGroupsForDelete } from '../../outline/rowGroupShift';
 import { shiftSheetFormulas } from './shiftFormulas';
 import { shiftSheetChartAnchors } from '../../charts/anchorShift';
 import { shiftSheetSparklines } from '../../sparkline/shift';
-import { buildRowKeys, findDuplicateRows } from '../../data/removeDuplicates';
+import { findDuplicateRows } from '../../data/removeDuplicates';
 import type { Store } from '../../store/Store';
+import type { Cell } from '../../types';
 
 export interface RemoveDuplicatesArgs {
   readonly r1: number;
@@ -21,23 +22,45 @@ export interface RemoveDuplicatesArgs {
 }
 
 /**
- * Excel 删除重复项: delete whole worksheet rows for duplicate keys
- * (first occurrence kept). One undo restores the full sheet snapshot.
+ * Excel 删除重复项: delete whole worksheet rows for duplicate keys (first
+ * occurrence kept). Contiguous duplicate rows collapse into one span, and
+ * every span goes through `Store.deleteRows` bottom-up — one `structure`
+ * event per span, spill shadows dropped exactly like DeleteRow, cells moved
+ * as one piece. Undo carries no sheet snapshot: the taken cells, the
+ * rewritten formulas (kept at their ORIGINAL coordinates as spans delete
+ * above them), the metadata band and the small features.
+ *
+ * Only rows that hold at least one stored cell take part: the address space
+ * is not data, so a whole-column dedupe must not "delete" a million empty
+ * rows below the table. Keys come from the selected columns exactly as
+ * before, so a row that exists but is empty in the key columns still counts
+ * as an empty-key row.
  */
 export class RemoveDuplicatesCommand extends Command<RemoveDuplicatesArgs> {
-  private oldSheet: SheetSnapshot | undefined;
+  private undoData: StructuralMoveUndo | undefined;
   private removed = 0;
   private execSheetId: string | undefined;
+
+  public override kind(): 'removeDuplicates' { return 'removeDuplicates'; }
+
+  /** Retained payload: taken cells + rewritten formulas + metadata band + features. */
+  public override historyWeight(): number {
+    const undo = this.undoData;
+    if (undo === undefined) return 0;
+    return undo.removed.length + undo.rewrites.length + undo.metaBand.length + undo.features.merges.length + 2;
+  }
 
   public execute(store: Store): void {
     const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = sid;
-    this.oldSheet = captureSheet(store, sid);
     const { r1, c1, r2, c2, columns, hasHeader } = this.args;
     if (columns.length === 0 || r2 < r1 || c2 < c1) {
       this.removed = 0;
+      this.undoData = { axis: 'row', kind: 'delete', sheetId: sid, spans: [], removed: [], rewrites: [], metaBand: [], features: captureFeatures(store, sid) };
       return;
     }
+    const features = captureFeatures(store, sid);
+    const metaBand = captureMetaBand(store, 'row', r1, sid);
     const getText = (r: number, c: number): string => {
       const cell = store.getCell(r, c, sid);
       if (cell?.value !== undefined && cell.value !== null && typeof cell.value !== 'object') {
@@ -45,59 +68,73 @@ export class RemoveDuplicatesCommand extends Command<RemoveDuplicatesArgs> {
       }
       return cell?.text ?? '';
     };
-    const keys = buildRowKeys(getText, { r1, c1, r2, c2 }, columns);
+    // The stored rows inside the span, ascending.
+    const seen = new Set<number>();
+    const dataRows: number[] = [];
+    store.forEachCell((r) => {
+      if (r >= r1 && r <= r2 && !seen.has(r)) {
+        seen.add(r);
+        dataRows.push(r);
+      }
+    }, sid);
+    dataRows.sort((a, b) => a - b);
+    const keys = dataRows.map((r) => columns.map((ci) => getText(r, c1 + ci)));
     const dupRel = findDuplicateRows(keys, { hasHeader });
-    const absRows = dupRel.map((i) => r1 + i).sort((a, b) => b - a);
-    this.removed = absRows.length;
-    for (const r of absRows) deleteOneRow(store, r, sid);
+    const toDelete = dupRel.map((i) => dataRows[i]!).sort((a, b) => a - b);
+    this.removed = toDelete.length;
+    // Group into contiguous spans, delete bottom-up (highest first), so each
+    // span's original start stays valid when its turn comes.
+    const spans: Array<readonly [number, number]> = [];
+    for (const r of toDelete) {
+      const last = spans[spans.length - 1];
+      if (last !== undefined && r === last[1] + 1) spans[spans.length - 1] = [last[0], r];
+      else spans.push([r, r]);
+    }
+    const removedCells: Array<readonly [number, Cell]> = [];
+    const rewrites: Array<readonly [string, number, number, Cell]> = [];
+    for (const [from, to] of [...spans].reverse()) {
+      const count = to - from + 1;
+      const taken = store.deleteRows(from, count, sid);
+      // Rewrites recorded for lower spans sit at coordinates that just moved
+      // up: keep them at their ORIGINAL coordinates (undo puts cells back
+      // there after the bands are re-inserted).
+      for (const entry of rewrites) {
+        if (entry[0] === sid && entry[1] >= from + count) (entry as unknown as [string, number, number, Cell])[1] += count;
+      }
+      const spanRewrites = shiftSheetFormulas(store, 'row', from, -count, sid);
+      rewrites.push(...spanRewrites);
+      removedCells.push(...taken);
+      // Row metadata of the region moves like DeleteRow's (only rows with
+      // metadata; each write emits at most 2 events).
+      const rows = store.getRowEntries(sid).filter(([r]) => r >= from).sort((a, b) => a[0] - b[0]);
+      for (const [r, meta] of rows) {
+        if (r >= from + count) store.setRow(r - count, meta, sid);
+        store.setRow(r, undefined, sid);
+      }
+      replaceMerges(store, shiftMergesForDelete(store.getMerges(sid), from, to, 'row'), sid);
+      const groups = store.getRowGroups(sid);
+      const nextGroups = shiftRowGroupsForDelete(groups, from, to);
+      if (!sameRowGroups(nextGroups, groups)) store.setRowGroups(nextGroups, sid);
+      shiftSheetChartAnchors(store, 'delete', 'row', from, count, sid);
+      shiftSheetSparklines(store, 'delete', 'row', from, count, sid);
+    }
+    this.undoData = {
+      axis: 'row',
+      kind: 'delete',
+      sheetId: sid,
+      spans: spans.map(([from, to]) => [from, to - from + 1] as const), // [start, count], not the inclusive [from, to]
+      removed: removedCells,
+      rewrites,
+      metaBand,
+      features,
+    };
   }
 
   public getUndo(): Command {
-    return new RestoreSheetCommand(this.oldSheet, this.execSheetId);
+    return new RestoreStructuralMoveCommand(this.undoData, this);
   }
 
   public removedCount(): number {
     return this.removed;
   }
-}
-
-interface RestoreSheetArgs {
-  readonly snapshot: SheetSnapshot | undefined;
-  readonly sheetId?: string;
-}
-
-class RestoreSheetCommand extends Command<RestoreSheetArgs> {
-  public constructor(snapshot: SheetSnapshot | undefined, sheetId?: string) {
-    super({ snapshot, ...(sheetId !== undefined ? { sheetId } : {}) });
-  }
-
-  public execute(store: Store): void {
-    if (this.args.snapshot !== undefined) restoreSheet(store, this.args.snapshot, this.args.sheetId);
-  }
-
-  public getUndo(): Command {
-    return new RemoveDuplicatesCommand({ r1: 0, c1: 0, r2: 0, c2: 0, columns: [0], hasHeader: false, ...(this.args.sheetId !== undefined ? { sheetId: this.args.sheetId } : {}) });
-  }
-}
-
-function deleteOneRow(store: Store, start: number, sid: string): void {
-  const count = 1;
-  store.getCells(sid).forEach(([key]) => {
-    const [r, c] = parseKey(key);
-    if (r >= start && r < start + count) store.setCell(r, c, undefined, sid);
-  });
-  shiftCellsUp(store, start, count, sid);
-  for (let r = start; r < TOTAL_ROWS; r += 1) store.setRow(r, store.getRow(r + count, sid), sid);
-  replaceMerges(store, shiftMergesForDelete(store.getMerges(sid), start, start + count - 1, 'row'), sid);
-  shiftSheetFormulas(store, 'row', start, -count, sid);
-  shiftSheetChartAnchors(store, 'delete', 'row', start, count, sid);
-  shiftSheetSparklines(store, 'delete', 'row', start, count, sid);
-}
-
-function shiftCellsUp(store: Store, start: number, count: number, sid: string): void {
-  const cells = store.getCells(sid).map(([key, cell]) => [...parseKey(key), cell] as const);
-  cells.filter(([r]) => r >= start + count).sort((a, b) => a[0] - b[0]).forEach(([r, c, cell]) => {
-    store.setCell(r, c, undefined, sid);
-    store.setCell(r - count, c, cell, sid);
-  });
 }

@@ -14,6 +14,8 @@ export class SetRowHeight extends Command<SetRowHeightArgs> {
   private oldMeta: RowMeta | undefined;
   private execSheetId: string | undefined;
 
+  public override kind(): 'setRowHeight' { return 'setRowHeight'; }
+
   public execute(store: Store): void {
     const target = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = target;

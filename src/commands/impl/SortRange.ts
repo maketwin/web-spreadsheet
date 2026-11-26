@@ -26,6 +26,13 @@ export class SortRangeCommand extends Command<SortRangeArgs> {
   private after: CellSnapshot = [];
   private applied: SortRangeArgs = this.args;
 
+  public override kind(): 'sortRange' { return 'sortRange'; }
+
+  /** Retained payload: the pre-sort and post-sort sparse snapshots (entries each). */
+  public override historyWeight(): number {
+    return this.before.length + this.after.length;
+  }
+
   public execute(store: Store): void {
     const resolved = new FilterService(store).resolveSortRange(this.args);
     if (resolved === undefined) { this.applied = this.args; this.before = []; this.after = []; return; }
@@ -57,7 +64,7 @@ export class SortRangeCommand extends Command<SortRangeArgs> {
 class RestoreRangeCommand extends Command<RestoreArgs> {
   public execute(store: Store): void {
     // Batched so formula recalculation sees the fully restored state.
-    store.batch(() => restore(store, this.args.before));
+    restoreSorted(store, this.args.before, this.args.after);
   }
 
   public getUndo(): Command {
@@ -76,12 +83,12 @@ interface RestoreArgs {
  * columns (Excel "expand the selection") so formulas stay with their row
  * labels. Multi-column ranges are left as given.
  */
+/** Sparse snapshot: only the stored cells of the sorted range — sorting a
+ * whole column walks the stored cells, not the address space. */
 function snapshot(store: Store, range: RangeAddress): CellSnapshot {
   const sheetId = store.getActiveSheetId();
   const rows: Array<readonly [string, number, number, Cell | undefined]> = [];
-  for (let r = range.r1; r <= range.r2; r += 1) {
-    for (let c = range.c1; c <= range.c2; c += 1) rows.push([sheetId, r, c, store.getCell(r, c)]);
-  }
+  store.forEachCellInRect(range, (r, c, cell) => rows.push([sheetId, r, c, cell]), sheetId);
   return rows;
 }
 
@@ -92,4 +99,17 @@ function outsideAfter(store: Store, outside: readonly OutsideRewrite[]): CellSna
 
 function restore(store: Store, snapshotData: CellSnapshot): void {
   snapshotData.forEach(([sheetId, r, c, cell]) => store.setCell(r, c, cell === undefined ? undefined : { ...cell }, sheetId));
+}
+
+/** Undo of a sparse sort: restore every recorded pre-sort cell, then clear
+ * the positions the sort filled that had no cell before (a cell from a
+ * blank-source row can land on a position the pre-state left empty). The
+ * two position sets are disjoint, so no batch is needed here. */
+function restoreSorted(store: Store, before: CellSnapshot, after: CellSnapshot): void {
+  restore(store, before);
+  const beforePos = new Set(before.map(([sheetId, r, c]) => `${sheetId}:${r}:${c}`));
+  after.forEach(([sheetId, r, c]) => {
+    if (beforePos.has(`${sheetId}:${r}:${c}`)) return;
+    store.setCell(r, c, undefined, sheetId);
+  });
 }

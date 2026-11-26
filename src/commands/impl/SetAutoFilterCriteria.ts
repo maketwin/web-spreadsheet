@@ -20,6 +20,13 @@ export class SetAutoFilterCriteriaCommand extends Command<SetAutoFilterCriteriaA
   private newRows: RowSnapshot = [];
   private execSheetId: string | undefined;
 
+  public override kind(): 'setAutoFilterCriteria' { return 'setAutoFilterCriteria'; }
+
+  /** Retained payload: the pre- and post-state row snapshots (rows with metadata only). */
+  public override historyWeight(): number {
+    return this.oldRows.length + this.newRows.length;
+  }
+
   public execute(store: Store): void {
     const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = sid;
@@ -74,16 +81,21 @@ interface RestoreArgs {
 }
 
 function snapshotRows(store: Store, range: AutoFilterState['range'], sheetId?: string): RowSnapshot {
-  const rows: Array<readonly [number, RowMeta | undefined]> = [];
-  for (let r = range.r1 + 1; r <= range.r2; r += 1) rows.push([r, store.getRow(r, sheetId)]);
-  return rows;
+  const lo = range.r1 + 1;
+  const hi = range.r2;
+  // Only rows that carry metadata — never a row per address.
+  return store.getRowEntries(sheetId).filter(([r]) => r >= lo && r <= hi);
 }
 
 function restore(store: Store, filter: AutoFilterState | undefined, rows: RowSnapshot, sheetId?: string): void {
   const old = store.getAutoFilter(sheetId);
-  if (old !== undefined) for (let r = old.range.r1 + 1; r <= old.range.r2; r += 1) {
-    const meta = store.getRow(r, sheetId);
-    if (meta?.hide === true) store.setRow(r, { ...meta, hide: false }, sheetId);
+  if (old !== undefined) {
+    const lo = old.range.r1 + 1;
+    const hi = old.range.r2;
+    for (const [r, meta] of store.getRowEntries(sheetId)) {
+      if (r < lo || r > hi) continue;
+      if (meta.hide === true) store.setRow(r, { ...meta, hide: false }, sheetId);
+    }
   }
   store.setAutoFilter(filter, sheetId);
   rows.forEach(([r, meta]) => store.setRow(r, meta, sheetId));

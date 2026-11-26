@@ -18,6 +18,13 @@ export class SetAutoFilterCommand extends Command<SetAutoFilterArgs> {
   private newRows: RowSnapshot = [];
   private execSheetId: string | undefined;
 
+  public override kind(): 'setAutoFilter' { return 'setAutoFilter'; }
+
+  /** Retained payload: the pre- and post-state row snapshots (rows with metadata only). */
+  public override historyWeight(): number {
+    return this.oldRows.length + this.newRows.length;
+  }
+
   public execute(store: Store): void {
     const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = sid;
@@ -74,16 +81,18 @@ interface RestoreAutoFilterArgs {
 
 function snapshotRows(store: Store, sheetId?: string): RowSnapshot {
   const filter = store.getAutoFilter(sheetId);
-  const rows: Array<readonly [number, RowMeta | undefined]> = [];
-  if (filter === undefined) return rows;
-  for (let r = filter.range.r1 + 1; r <= filter.range.r2; r += 1) rows.push([r, store.getRow(r, sheetId)]);
-  return rows;
+  if (filter === undefined) return [];
+  // Only rows that carry metadata — a million-row filter range records its
+  // hidden rows, not its address space.
+  const lo = filter.range.r1 + 1;
+  const hi = filter.range.r2;
+  return store.getRowEntries(sheetId).filter(([r]) => r >= lo && r <= hi);
 }
 
 function unhideRows(store: Store, from: number, to: number, sheetId?: string): void {
-  for (let r = from; r <= to; r += 1) {
-    const meta = store.getRow(r, sheetId);
-    if (meta?.hide === true) store.setRow(r, { ...meta, hide: false }, sheetId);
+  for (const [r, meta] of store.getRowEntries(sheetId)) {
+    if (r < from || r > to) continue;
+    if (meta.hide === true) store.setRow(r, { ...meta, hide: false }, sheetId);
   }
 }
 

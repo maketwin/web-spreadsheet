@@ -3,7 +3,8 @@ import type { Store } from '../store/Store';
 import type { FormulaValue } from '../formula/types';
 import { evaluate } from '../formula/evaluator';
 import { FormulaParser } from '../formula/parser';
-import { shiftFormula } from '../util/formulaRefs';
+import { shiftFormula } from '../formula/refRewrite';
+import { parseInternalRange } from '../util/rangeNotation';
 import type { ValidationRule } from './types';
 
 /** Result of validating a value against a rule. */
@@ -117,7 +118,7 @@ export class DataValidationService {
   private ruleOrigin(formula: string, context: ValidationContext): { r1: number; c1: number } | null {
     for (const [key, stored] of context.store.getValidationRules(context.sheetId)) {
       if (stored.type !== 'custom' || stored.formula !== formula) continue;
-      const range = parseRuleRange(key);
+      const range = parseInternalRange(key);
       if (range === null) continue;
       if (context.r < range.r1 || context.r > range.r2 || context.c < range.c1 || context.c > range.c2) continue;
       return { r1: range.r1, c1: range.c1 };
@@ -133,19 +134,6 @@ export class DataValidationService {
     if (d < min || d > max) return { valid: false, message: `请输入 ${minDate} 到 ${maxDate} 之间的日期` };
     return { valid: true };
   }
-}
-
-/** Parse the `r1,c1:r2,c2` range key SetValidationCommand stores rules under. */
-function parseRuleRange(key: string): { r1: number; c1: number; r2: number; c2: number } | null {
-  const [lo, hi] = key.split(':');
-  if (lo === undefined || hi === undefined) return null;
-  const nums = [...lo.split(','), ...hi.split(',')].map(Number);
-  if (nums.length !== 4 || nums.some((n) => !Number.isInteger(n))) return null;
-  const r1 = nums[0] ?? 0;
-  const c1 = nums[1] ?? 0;
-  const r2 = nums[2] ?? 0;
-  const c2 = nums[3] ?? 0;
-  return { r1: Math.min(r1, r2), c1: Math.min(c1, c2), r2: Math.max(r1, r2), c2: Math.max(c1, c2) };
 }
 
 /** The candidate as Excel types it: numeric text becomes a number, empty is blank. */

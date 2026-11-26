@@ -2,11 +2,12 @@ import { Command } from '../Command';
 import { nextSeriesValues } from '../../fill/series';
 import { mergeToString, parseMerge, rangeContains, rangesIntersect } from '../../util/merge';
 import { isSpillShadow } from '../../util/spillShadow';
+import { MAX_MATERIALIZED_CELLS } from '../../util/limits';
 import type { Store } from '../../store/Store';
 import type { RangeAddress } from '../../selection/Range';
 import type { Cell } from '../../types';
 import { isRich } from '../../util/richText';
-import { shiftFormula } from '../../util/formulaRefs';
+import { shiftFormula } from '../../formula/refRewrite';
 
 export interface FillRangeArgs {
   /**
@@ -24,13 +25,45 @@ export interface FillRangeArgs {
   readonly sheetId?: string;
 }
 
+/**
+ * The fill target is clamped to the materialization cap (anchored at the
+ * target's top-left, vertical first — fills are usually downward). A
+ * double-click fill alongside a million-row column then writes 250k cells,
+ * not a million; undo only restores the clamped area the fill touched.
+ */
+function clampTarget(target: RangeAddress): RangeAddress {
+  const cols = target.c2 - target.c1 + 1;
+  const rows = target.r2 - target.r1 + 1;
+  if (rows * cols <= MAX_MATERIALIZED_CELLS) return target;
+  const maxRows = Math.max(1, Math.floor(MAX_MATERIALIZED_CELLS / cols));
+  let clamped = target;
+  if (rows > maxRows) clamped = { ...clamped, r2: clamped.r1 + maxRows - 1 };
+  const rows2 = clamped.r2 - clamped.r1 + 1;
+  const maxCols = Math.max(1, Math.floor(MAX_MATERIALIZED_CELLS / rows2));
+  const cols2 = clamped.c2 - clamped.c1 + 1;
+  if (cols2 > maxCols) clamped = { ...clamped, c2: clamped.c1 + maxCols - 1 };
+  return clamped;
+}
+
 export class FillRangeCommand extends Command<FillRangeArgs> {
   private oldCells: Array<{ r: number; c: number; cell: ReturnType<Store['getCell']> }> = [];
   private oldMerges: readonly string[] = [];
+  private clampedTarget: RangeAddress | undefined;
   private execSheetId: string | undefined;
 
+  public override kind(): 'fillRange' { return 'fillRange'; }
+
+  /** Retained payload: the before walk over the clamped target. It is dense —
+   * one entry per target cell — so it already counts every filled cell; the
+   * undo command reuses the very same array. */
+  public override historyWeight(): number {
+    return this.oldCells.length;
+  }
+
   public execute(store: Store): void {
-    const { source, target } = this.args;
+    const { source } = this.args;
+    const target = clampTarget(this.args.target);
+    this.clampedTarget = target;
     const sid = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = sid;
     this.saveOldCells(store, target, sid);
@@ -46,7 +79,7 @@ export class FillRangeCommand extends Command<FillRangeArgs> {
   }
 
   public getUndo(): Command {
-    return new RestoreFillRange({ cells: this.oldCells, merges: this.oldMerges, target: this.args.target, fill: this.args, ...(this.execSheetId !== undefined ? { sheetId: this.execSheetId } : {}) });
+    return new RestoreFillRange({ cells: this.oldCells, merges: this.oldMerges, target: this.clampedTarget ?? this.args.target, fill: this.args, ...(this.execSheetId !== undefined ? { sheetId: this.execSheetId } : {}) });
   }
 
   /**
@@ -190,4 +223,4 @@ class RestoreFillRange extends Command<RestoreFillRangeArgs> {
   }
 }
 
-export { shiftFormula } from '../../util/formulaRefs';
+export { shiftFormula } from '../../formula/refRewrite';

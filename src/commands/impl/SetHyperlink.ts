@@ -16,6 +16,8 @@ export class SetHyperlinkCommand extends Command<SetHyperlinkArgs> {
   private old: Cell | undefined;
   private execSheetId: string | undefined;
 
+  public override kind(): 'setHyperlink' { return 'setHyperlink'; }
+
   public execute(store: Store): void {
     const target = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = target;

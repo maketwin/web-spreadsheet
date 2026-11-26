@@ -2,7 +2,7 @@ import type { CellAddress } from '../renderer/coordinate';
 import type { Store, SheetInfo } from '../store/Store';
 import type { CommandManager } from '../commands/CommandManager';
 import type { CellPatch } from '../commands/impl/SetRangeValues';
-import { CompositeCommand, executeRange } from '../util/rangeValues';
+import { CompositeCommand, executeRange } from '../commands/rangeValues';
 import { SetRangeValues } from '../commands/impl/SetRangeValues';
 import { formulaText } from '../util/cell';
 import { flattenRuns, isRich, replaceInRuns } from '../util/richText';

@@ -16,6 +16,8 @@ export class SetCellCommentCommand extends Command<SetCellCommentArgs> {
   private old: Cell | undefined;
   private execSheetId: string | undefined;
 
+  public override kind(): 'setCellComment' { return 'setCellComment'; }
+
   public execute(store: Store): void {
     const target = this.args.sheetId ?? this.execSheetId ?? store.getActiveSheetId();
     this.execSheetId = target;
