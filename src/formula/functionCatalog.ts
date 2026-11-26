@@ -1,4 +1,4 @@
-import { registry } from './registry';
+import { registry, type FunctionRegistry } from './registry';
 
 /** Formula AutoComplete metadata: signature shown in the parameter tooltip and
  * a short zh description in the suggestion list. */
@@ -29,6 +29,7 @@ const DOCS: ReadonlyArray<readonly [string, string, string]> = [
   ['AVERAGEIFS', 'AVERAGEIFS(avg_range, crit_range1, crit1, …)', '按多条件求平均'],
   ['COUNT', 'COUNT(value1, …)', '统计数字个数'],
   ['COUNTA', 'COUNTA(value1, …)', '统计非空个数'],
+  ['COUNTBLANK', 'COUNTBLANK(range)', '统计空白单元格个数'],
   ['COUNTIF', 'COUNTIF(range, criteria)', '按条件计数'],
   ['COUNTIFS', 'COUNTIFS(crit_range1, crit1, …)', '按多条件计数'],
   ['MAX', 'MAX(number1, …)', '最大值'],
@@ -82,6 +83,8 @@ const DOCS: ReadonlyArray<readonly [string, string, string]> = [
   ['MONTH', 'MONTH(date)', '取月份'],
   ['DAY', 'DAY(date)', '取日'],
   ['HOUR', 'HOUR(time)', '取小时'],
+  ['MINUTE', 'MINUTE(time)', '取分钟'],
+  ['SECOND', 'SECOND(time)', '取秒'],
   ['DATEDIF', 'DATEDIF(start, end, unit)', '日期间隔（Y/M/D 等）'],
   // 查找引用
   ['VLOOKUP', 'VLOOKUP(lookup, table, col_index, [range_lookup])', '在首列查找，返回同行指定列'],
@@ -104,7 +107,9 @@ const DOCS: ReadonlyArray<readonly [string, string, string]> = [
   // 信息
   ['ISBLANK', 'ISBLANK(value)', '是否为空'],
   ['ISERROR', 'ISERROR(value)', '是否为错误值'],
+  ['ISERR', 'ISERR(value)', '是否为错误值（不含 #N/A）'],
   ['ISNA', 'ISNA(value)', '是否为 #N/A'],
+  ['NA', 'NA()', '返回 #N/A'],
   ['ISNUMBER', 'ISNUMBER(value)', '是否为数值'],
   ['ISTEXT', 'ISTEXT(value)', '是否为文本'],
 ];
@@ -116,9 +121,9 @@ export const FUNCTION_CATALOG: ReadonlyMap<string, FunctionDoc> = new Map(
 );
 
 /** Names offered by formula AutoComplete: catalog entries that actually evaluate. */
-export function autoCompleteNames(): string[] {
+export function autoCompleteNames(table: FunctionRegistry = registry): string[] {
   const names = new Set<string>(FUNCTION_CATALOG.keys());
-  return [...names].filter((name) => registry.has(name) || SPECIAL_FORM.has(name)).sort();
+  return [...names].filter((name) => table.has(name) || SPECIAL_FORM.has(name)).sort();
 }
 
 const SPECIAL_FORM = new Set([

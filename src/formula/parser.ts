@@ -1,4 +1,30 @@
+import { TOTAL_COLS, TOTAL_ROWS } from '../util/gridSize';
 import type { AstNode } from './types';
+
+/**
+ * One half of a whole-column / whole-row range (`A`, `$C`, `3`, `$5`): column
+ * letters and/or a row number, at least one of the two. Full cells parse via
+ * {@link FormulaParser.parseCell}; this is only for the missing-dimension ends.
+ */
+function parseRangeHalf(token: string): { col: number | undefined; row: number | undefined } | null {
+  const match = token.match(/^\$?([A-Za-z]{1,3})?\$?([1-9]\d*)?$/u);
+  const col = match?.[1];
+  const row = match?.[2];
+  if (col === undefined && row === undefined) return null;
+  return { col: col !== undefined ? columnToIndex(col) : undefined, row: row !== undefined ? Number(row) - 1 : undefined };
+}
+
+/**
+ * One dimension of a range built from two reference halves. Both defined:
+ * the span between them. One defined: open toward the end that lacks it
+ * (`B2:B` → rows 2…end). Neither: the whole grid (`A:A` rows).
+ */
+function spanDimension(a: number | undefined, b: number | undefined, max: number, fromFirst: boolean): [number, number] {
+  if (a !== undefined && b !== undefined) return [Math.min(a, b), Math.max(a, b)];
+  if (a !== undefined) return fromFirst ? [a, max] : [0, a];
+  if (b !== undefined) return fromFirst ? [0, b] : [b, max];
+  return [0, max];
+}
 
 /** True when the whole expression is wrapped in one balanced pair of parens. */
 function isWrappedInParens(expr: string): boolean {
@@ -175,11 +201,22 @@ export class FormulaParser {
     if (start === undefined || end === undefined) return null;
     const startCell = this.parseCell(start.trim(), scoped.sheetName);
     const endCell = this.parseCell(end.trim(), scoped.sheetName);
-    if (!startCell || !endCell) return null;
-
-    const range: Extract<AstNode, { type: 'range' }> = { type: 'range', x1: startCell.x, y1: startCell.y, x2: endCell.x, y2: endCell.y };
-    if (scoped.sheetName !== undefined) return { ...range, sheetName: scoped.sheetName };
-    return range;
+    if (startCell !== null && endCell !== null) {
+      const range: Extract<AstNode, { type: 'range' }> = { type: 'range', x1: startCell.x, y1: startCell.y, x2: endCell.x, y2: endCell.y };
+      if (scoped.sheetName !== undefined) return { ...range, sheetName: scoped.sheetName };
+      return range;
+    }
+    // Excel whole-column / whole-row / open-ended references: A:A, A:C, 3:5,
+    // $A:$A, B2:B, B1:1 — a dimension missing on one end opens toward that
+    // edge (B2:B → B2:B1048576), missing on both ends it spans the grid.
+    const from = parseRangeHalf(start.trim());
+    const to = parseRangeHalf(end.trim());
+    if (from === null || to === null) return null;
+    const [x1, x2] = spanDimension(from.col, to.col, TOTAL_COLS - 1, true);
+    const [y1, y2] = spanDimension(from.row, to.row, TOTAL_ROWS - 1, true);
+    const normalized: Extract<AstNode, { type: 'range' }> = { type: 'range', x1, y1, x2, y2 };
+    if (scoped.sheetName !== undefined) return { ...normalized, sheetName: scoped.sheetName };
+    return normalized;
   }
 
   private parseCell(expr: string, sheetName?: string): Extract<AstNode, { type: 'cell' }> | null {

@@ -1,6 +1,8 @@
-import { isExcelError, isMatrix, matrix, type MatrixValue } from './types';
+import { EXCEL_ERRORS, isExcelError, isMatrix, isSparseRange, matrix, type MatrixValue, type SparseRangeValue } from './types';
+import { MAX_DENSE_RANGE_CELLS } from '../util/limits';
 import { FormulaParser } from './parser';
-import { registry } from './registry';
+import { halvesToRect, parseRefHalf } from './precedents';
+import { registry, type FunctionContext, type FunctionRegistry } from './registry';
 import type { AstNode, CellResolver, FormulaArgument, FormulaValue } from './types';
 
 /** The Excel error literals; the table itself lives in types.ts (the single source). */
@@ -52,6 +54,32 @@ export interface EvalContext {
   readonly isRowHidden?: (row: number, sheetName?: string) => boolean;
   /** The cell the formula lives in — ROW()/COLUMN() without args (Excel). */
   readonly currentCell?: { readonly r: number; readonly c: number };
+  /** The sheet `currentCell` sits on; the engine passes the evaluated formula's own sheet. */
+  readonly sheetId?: string;
+  /**
+   * Called when the evaluation reaches a call to a volatile function
+   * (FunctionSpec.volatile). The engine uses it to remember which formulas
+   * must re-evaluate on every recalculation pass that has other work.
+   */
+  readonly onVolatileCall?: () => void;
+  /**
+   * Function table to resolve names against; the shared `registry` when
+   * omitted. The formula engine passes its own, so an engine with a private
+   * table never sees another engine's functions.
+   */
+  readonly registry?: FunctionRegistry;
+  /**
+   * Calls `fn(x, y)` for every stored cell of the rectangle, on the sheet
+   * named by the reference. Absent for bare evaluate() calls (conditional
+   * formats, validation rules), which keep the address-by-address behavior.
+   * Never walks empty addresses: a range over a million-row column costs its
+   * stored cells, not its area.
+   */
+  readonly forEachStoredCell?: (
+    rect: { x1: number; y1: number; x2: number; y2: number },
+    sheetName: string | undefined,
+    fn: (x: number, y: number) => void,
+  ) => void;
 }
 
 export function evaluate(
@@ -68,7 +96,7 @@ export function evaluate(
     case 'cell':
       return resolve(node.x, node.y, node.sheetName);
     case 'range':
-      return evaluateRange(node, resolve);
+      return evaluateRange(node, resolve, ctx);
     case 'func':
       return evaluateFunction(node, resolve, resolveName, ctx);
     case 'binary':
@@ -80,17 +108,98 @@ export function evaluate(
   }
 }
 
-function evaluateRange(node: Extract<AstNode, { type: 'range' }>, resolve: CellResolver): readonly FormulaValue[] {
-  const values: FormulaValue[] = [];
+/**
+ * A range reference as a value. Up to {@link MAX_DENSE_RANGE_CELLS} it is the
+ * row-major dense list it always was (blanks as `null`) — but with a stored-
+ * cell walk available only the stored cells are resolved, each written into
+ * its position. Above that ceiling the dense list is not allocated: the value
+ * is a {@link SparseRangeValue} the aggregates consume cell by cell. Without
+ * a walk (bare evaluate calls) the address loop stays, so conditional-format
+ * and validation rules behave exactly as before.
+ */
+function evaluateRange(node: Extract<AstNode, { type: 'range' }>, resolve: CellResolver, ctx?: EvalContext): FormulaArgument {
   const x1 = Math.min(node.x1, node.x2);
   const x2 = Math.max(node.x1, node.x2);
   const y1 = Math.min(node.y1, node.y2);
   const y2 = Math.max(node.y1, node.y2);
-
-  for (let y = y1; y <= y2; y += 1) {
-    for (let x = x1; x <= x2; x += 1) values.push(resolve(x, y, node.sheetName));
+  const cols = x2 - x1 + 1;
+  const area = (y2 - y1 + 1) * cols;
+  const walk = ctx?.forEachStoredCell;
+  if (walk === undefined) {
+    const values: FormulaValue[] = [];
+    for (let y = y1; y <= y2; y += 1) {
+      for (let x = x1; x <= x2; x += 1) values.push(resolve(x, y, node.sheetName));
+    }
+    return values;
   }
+  // A reference to a sheet that does not exist resolves '#REF!' at every
+  // address; the walk would visit none of them, so probe the first one.
+  if (node.sheetName !== undefined && resolve(x1, y1, node.sheetName) === '#REF!') return '#REF!';
+  if (area > MAX_DENSE_RANGE_CELLS) return makeSparseRange(x1, y1, x2, y2, node.sheetName, resolve, walk);
+  const values: FormulaValue[] = new Array(area).fill(null);
+  walk({ x1, y1, x2, y2 }, node.sheetName, (x, y) => {
+    values[(y - y1) * cols + (x - x1)] = resolve(x, y, node.sheetName);
+  });
   return values;
+}
+
+/** The sparse stand-in for a rectangle too large to materialise. */
+function makeSparseRange(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  sheetName: string | undefined,
+  resolve: CellResolver,
+  walk: NonNullable<EvalContext['forEachStoredCell']>,
+): SparseRangeValue {
+  const rows = y2 - y1 + 1;
+  const cols = x2 - x1 + 1;
+  return {
+    __sparse: true,
+    left: x1,
+    top: y1,
+    rows,
+    cols,
+    area: rows * cols,
+    forEachStored: (fn) => {
+      walk({ x1, y1, x2, y2 }, sheetName, (x, y) => fn(resolve(x, y, sheetName), y, x));
+    },
+  };
+}
+
+/**
+ * Values of a rectangle address by address (INDIRECT / OFFSET results): the
+ * dense row-major list up to {@link MAX_DENSE_RANGE_CELLS}, a sparse range
+ * value above it. A reference to a missing sheet stays one '#REF!'.
+ */
+function rectValues(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  sheetName: string | undefined,
+  resolve: CellResolver,
+  ctx: EvalContext | undefined,
+): FormulaArgument {
+  const area = (y2 - y1 + 1) * (x2 - x1 + 1);
+  const walk = ctx?.forEachStoredCell;
+  if (walk === undefined || area <= MAX_DENSE_RANGE_CELLS) {
+    const values: FormulaValue[] = [];
+    for (let y = y1; y <= y2; y += 1) {
+      for (let x = x1; x <= x2; x += 1) values.push(resolve(x, y, sheetName));
+    }
+    return values;
+  }
+  if (sheetName !== undefined && resolve(x1, y1, sheetName) === '#REF!') return '#REF!';
+  return makeSparseRange(x1, y1, x2, y2, sheetName, resolve, walk);
+}
+
+/** Stored cells of a sparse range as the flat list the value-aggregates take. */
+function materializeStored(value: SparseRangeValue): FormulaValue[] {
+  const out: FormulaValue[] = [];
+  value.forEachStored((v) => { out.push(v); });
+  return out;
 }
 
 function evaluateFunction(
@@ -99,12 +208,17 @@ function evaluateFunction(
   resolveName?: NamedRangeResolver,
   ctx?: EvalContext,
 ): FormulaArgument {
-  const spec = registry.get(node.name);
+  const spec = (ctx?.registry ?? registry).get(node.name);
   const arity = spec === undefined ? LOCAL_ARITY[node.name] : spec;
   if (arity === undefined) return '#NAME?';
   // The declared arity is the contract: a call outside it is an error value,
   // never a silently wrong answer (=SUM() used to read as 0).
   if (node.args.length < arity.minArgs || node.args.length > arity.maxArgs) return '#VALUE!';
+
+  // A volatile call (FunctionSpec.volatile, e.g. NOW / TODAY) is reported to
+  // the engine at encounter, before its arguments evaluate, so the calling
+  // formula stays marked however its arguments turn out this pass.
+  if (spec?.volatile === true) ctx?.onVolatileCall?.();
 
   // Lookup / SUBTOTAL need 2-D ranges or row visibility — resolved here.
   if (node.name === 'VLOOKUP') return vlookup(node, resolve, resolveName, ctx);
@@ -132,11 +246,17 @@ function evaluateFunction(
   // UNIQUE / SORT / FILTER work on a table: a range reference keeps its
   // row/column extent for them (it reaches other functions as a flat list).
   const tabular = TABLE_ARG.has(node.name);
-  const args = node.args.map((arg) => {
+  let args = node.args.map((arg) => {
     const value = evaluate(arg, resolve, resolveName, ctx);
     const shape = tabular ? shapeOfOperand(arg, value, resolveName) : undefined;
     return shape === undefined || isMatrix(value) ? value : matrix(shape.rows, shape.cols, value as readonly FormulaValue[]);
   });
+  // A sparse range reaches the value-aggregates as the flat list of its
+  // stored cells — materialised before the error gate so the stored walk
+  // happens once per argument.
+  if (SPARSE_VALUES_OK.has(node.name)) {
+    args = args.map((arg) => (isSparseRange(arg) ? materializeStored(arg) : arg));
+  }
   // Excel: most functions propagate error args; IS* inspect them instead.
   if (!ERROR_INSPECTING.has(node.name)) {
     for (const arg of args) {
@@ -144,7 +264,19 @@ function evaluateFunction(
       if (err !== undefined) return err;
     }
   }
-  return spec === undefined ? '#NAME?' : guardNumeric(spec.evaluate(args));
+  // Everything that needs an index into a range or its full grid — INDEX,
+  // the lookups, UNIQUE/SORT/FILTER, matrix arithmetic — refuses a range
+  // too large to materialise ('#VALUE!') instead of walking the address space.
+  if (args.some(isSparseRange) && !SPARSE_SUPPORTS.has(node.name)) return '#VALUE!';
+  // Which cell/sheet the calling formula lives in. The engine path always
+  // supplies currentCell and sheetId; a bare evaluate() call (conditional-
+  // format / validation rules) supplies neither, so ctx-aware functions
+  // receive undefined there instead of invented coordinates.
+  const fnCtx: FunctionContext | undefined =
+    ctx?.currentCell === undefined || ctx.sheetId === undefined
+      ? undefined
+      : { cell: ctx.currentCell, sheetId: ctx.sheetId };
+  return spec === undefined ? '#NAME?' : guardNumeric(spec.evaluate(args, fnCtx));
 }
 
 /**
@@ -277,35 +409,35 @@ function switchFn(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolve
   return defaultArg !== undefined ? scalar(evaluate(defaultArg, resolve, resolveName, ctx)) : '#N/A';
 }
 
-/** Parse the text accepted by INDIRECT: [Sheet!]A1, [Sheet!]A1:B2 ([$] anchors
- * allowed; quoted sheet names with spaces supported). */
+/** Parse the text accepted by INDIRECT: [Sheet!]A1, [Sheet!]A1:B2, and the
+ * whole-column / whole-row forms ([Sheet!]A:B, [Sheet!]3:5) — [$] anchors
+ * allowed; quoted sheet names with spaces supported. */
 function parseIndirectRef(text: string): { sheetName?: string | undefined; x1: number; y1: number; x2: number; y2: number } | null {
-  const match = text.match(/^(?:(?:'((?:[^']|'')+)'|([A-Za-z0-9_\u4e00-\u9fff]+))!)?\$?([A-Za-z]{1,3})\$?([1-9]\d*)(?::\$?([A-Za-z]{1,3})\$?([1-9]\d*))?$/u);
-  if (match === null) return null;
-  const sheetName = match[1] !== undefined ? match[1].replace(/''/g, "'") : match[2];
-  const col = (token: string | undefined): number | null => {
-    if (token === undefined) return null;
-    let n = 0;
-    for (const ch of token.toUpperCase()) n = n * 26 + (ch.charCodeAt(0) - 64);
-    return n - 1;
-  };
-  const x1 = col(match[3]);
-  const y1 = Number(match[4]) - 1;
-  if (x1 === null) return null;
-  let x2 = x1;
-  let y2 = y1;
-  if (match[5] !== undefined && match[6] !== undefined) {
-    const end = col(match[5]);
-    if (end === null) return null;
-    x2 = end;
-    y2 = Number(match[6]) - 1;
+  const match = text.match(/^(?:(?:'((?:[^']|'')+)'|([A-Za-z0-9_\u4e00-\u9fff]+))!)?\s*([^:]+?)(?:\s*:\s*([^:]+?))?\s*$/u);
+  const sheetName = match?.[1] !== undefined ? match[1].replace(/''/g, "'") : match?.[2];
+  const startText = match?.[3];
+  if (startText === undefined) return null;
+  const from = parseRefHalf(startText.trim().replaceAll('$', ''));
+  if (from === null) return null;
+  const endText = match?.[4];
+  let rect;
+  if (endText === undefined) {
+    // A lone reference must name one whole cell.
+    if (from.col === undefined || from.row === undefined) return null;
+    rect = { r1: from.row, c1: from.col, r2: from.row, c2: from.col };
+  } else {
+    const to = parseRefHalf(endText.trim().replaceAll('$', ''));
+    if (to === null) return null;
+    const built = halvesToRect(from, to);
+    if (built === null) return null;
+    rect = built;
   }
-  return { sheetName, x1: Math.min(x1, x2), y1: Math.min(y1, y2), x2: Math.max(x1, x2), y2: Math.max(y1, y2) };
+  return { sheetName, x1: rect.c1, y1: rect.r1, x2: rect.c2, y2: rect.r2 };
 }
 
 /** Excel INDIRECT(ref_text, [a1]) — resolve a text reference against the sheet.
  * R1C1 style (a1 = FALSE) is not supported and yields '#REF!'. */
-function indirect(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver, resolveName?: NamedRangeResolver, ctx?: EvalContext): FormulaValue | readonly FormulaValue[] {
+function indirect(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver, resolveName?: NamedRangeResolver, ctx?: EvalContext): FormulaArgument {
   const textArg = node.args[0];
   if (textArg === undefined) return '#REF!';
   const text = scalar(evaluate(textArg, resolve, resolveName, ctx));
@@ -323,10 +455,9 @@ function indirect(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolve
     if (named === null) return '#REF!';
     return scalar(evaluate(named, resolve, resolveName, ctx));
   }
-  const values: FormulaValue[] = [];
-  for (let y = parsed.y1; y <= parsed.y2; y += 1) {
-    for (let x = parsed.x1; x <= parsed.x2; x += 1) values.push(resolve(x, y, parsed.sheetName));
-  }
+  const values = rectValues(parsed.x1, parsed.y1, parsed.x2, parsed.y2, parsed.sheetName, resolve, ctx);
+  if (isSparseRange(values)) return values;
+  if (!isFormulaList(values)) return values; // a '#REF!' from an unresolvable sheet
   const only = values[0];
   return values.length === 1 && only !== undefined ? only : values;
 }
@@ -334,7 +465,7 @@ function indirect(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolve
 /** Excel OFFSET(ref, rows, cols, [height], [width]) — shift a base reference
  * and optionally resize it; single-cell results yield the value, larger ones
  * the flattened row-major array. Out-of-sheet shifts yield '#REF!'. */
-function offset(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver, resolveName?: NamedRangeResolver, ctx?: EvalContext): FormulaValue | readonly FormulaValue[] {
+function offset(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver, resolveName?: NamedRangeResolver, ctx?: EvalContext): FormulaArgument {
   const [refArg, rowsArg, colsArg, heightArg, widthArg] = node.args;
   if (refArg === undefined || rowsArg === undefined || colsArg === undefined) return '#REF!';
   const ref = unwrapRef(refArg, resolveName);
@@ -375,18 +506,15 @@ function offset(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver,
   const y2 = y1 + height - 1;
   if (x1 < 0 || y1 < 0) return '#REF!';
   if (x1 === x2 && y1 === y2) return resolve(x1, y1, sheetName);
-  const values: FormulaValue[] = [];
-  for (let y = y1; y <= y2; y += 1) {
-    for (let x = x1; x <= x2; x += 1) values.push(resolve(x, y, sheetName));
-  }
-  return values;
+  return rectValues(x1, y1, x2, y2, sheetName, resolve, ctx);
 }
 
 function firstErrorIn(value: FormulaArgument): string | undefined {
   if (isFormulaList(value)) {
-    for (const entry of value) {
-      const err = errorValueOf(entry);
-      if (err !== undefined) return err;
+    // Index loop over what may be a million-entry dense range.
+    for (let i = 0; i < value.length; i += 1) {
+      const entry = value[i];
+      if (typeof entry === 'string' && EXCEL_ERRORS.has(entry)) return entry;
     }
     return undefined;
   }
@@ -398,6 +526,14 @@ function firstErrorIn(value: FormulaArgument): string | undefined {
       if (err !== undefined) return err;
     }
     return undefined;
+  }
+  if (isSparseRange(value)) {
+    // Same rule over stored cells only; blanks are never errors.
+    let found: string | undefined;
+    value.forEachStored((entry) => {
+      if (found === undefined) found = errorValueOf(entry);
+    });
+    return found;
   }
   return errorValueOf(value);
 }
@@ -434,6 +570,32 @@ function vlookup(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver
   const y2 = Math.max(table.y1, table.y2);
   if (!Number.isInteger(colIndex) || colIndex < 1 || colIndex > x2 - x1 + 1) return null;
   let approximateHit: FormulaValue = null;
+  // A table beyond the dense ceiling is walked stored cell by stored cell
+  // (whole-column lookups stay O(stored), not O(rows)); the walk is in row
+  // order, so the approximate scan sees the keys in the order the dense loop
+  // would.
+  const walk = ctx?.forEachStoredCell;
+  if ((y2 - y1 + 1) * (x2 - x1 + 1) > MAX_DENSE_RANGE_CELLS && walk !== undefined) {
+    if (table.sheetName !== undefined && resolve(x1, y1, table.sheetName) === '#REF!') return '#REF!';
+    const valueX = x1 + colIndex - 1;
+    let hit: FormulaValue | undefined;
+    let best: FormulaValue | undefined;
+    walk({ x1, y1, x2, y2 }, table.sheetName, (x, y) => {
+      if (x !== x1) return; // the key column decides; value cells are read per hit
+      const key = resolve(x, y, table.sheetName);
+      if (excelEquals(key, lookup)) {
+        if (hit === undefined) hit = resolve(valueX, y, table.sheetName);
+        return;
+      }
+      // Ascending keys: the last key ≤ the lookup is the approximate hit —
+      // the same answer the dense loop reaches before it breaks.
+      if (approximate && lookup !== null && key !== null && compare(key, lookup) <= 0) {
+        best = resolve(valueX, y, table.sheetName);
+      }
+    });
+    if (hit !== undefined) return hit;
+    return approximate ? (best ?? '#N/A') : '#N/A';
+  }
   for (let y = y1; y <= y2; y += 1) {
     const key = resolve(x1, y, table.sheetName);
     if (excelEquals(key, lookup)) return resolve(x1 + colIndex - 1, y, table.sheetName);
@@ -469,6 +631,27 @@ function hlookup(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver
   const y2 = Math.max(table.y1, table.y2);
   if (!Number.isInteger(rowIndex) || rowIndex < 1 || rowIndex > y2 - y1 + 1) return null;
   let approximateHit: FormulaValue = null;
+  // Same stored-cell walk as VLOOKUP for tables beyond the dense ceiling.
+  const walk = ctx?.forEachStoredCell;
+  if ((y2 - y1 + 1) * (x2 - x1 + 1) > MAX_DENSE_RANGE_CELLS && walk !== undefined) {
+    if (table.sheetName !== undefined && resolve(x1, y1, table.sheetName) === '#REF!') return '#REF!';
+    const valueY = y1 + rowIndex - 1;
+    let hit: FormulaValue | undefined;
+    let best: FormulaValue | undefined;
+    walk({ x1, y1, x2, y2 }, table.sheetName, (x, y) => {
+      if (y !== y1) return;
+      const key = resolve(x, y, table.sheetName);
+      if (excelEquals(key, lookup)) {
+        if (hit === undefined) hit = resolve(x, valueY, table.sheetName);
+        return;
+      }
+      if (approximate && lookup !== null && key !== null && compare(key, lookup) <= 0) {
+        best = resolve(x, valueY, table.sheetName);
+      }
+    });
+    if (hit !== undefined) return hit;
+    return approximate ? (best ?? '#N/A') : '#N/A';
+  }
   for (let x = x1; x <= x2; x += 1) {
     const key = resolve(x, y1, table.sheetName);
     if (excelEquals(key, lookup)) return resolve(x, y1 + rowIndex - 1, table.sheetName);
@@ -511,6 +694,9 @@ function xlookup(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolver
   const rx2 = Math.max(returnArr.x1, returnArr.x2);
   const ry1 = Math.min(returnArr.y1, returnArr.y2);
   const ry2 = Math.max(returnArr.y1, returnArr.y2);
+  // Indexed access on both arrays: beyond the dense ceiling there is no array.
+  if ((ly2 - ly1 + 1) * (lx2 - lx1 + 1) > MAX_DENSE_RANGE_CELLS) return '#VALUE!';
+  if ((ry2 - ry1 + 1) * (rx2 - rx1 + 1) > MAX_DENSE_RANGE_CELLS) return '#VALUE!';
 
   const lookupIsCol = lx1 === lx2;
   const lookupIsRow = ly1 === ly2;
@@ -628,6 +814,7 @@ function refValues(node: AstNode, resolve: CellResolver, resolveName: NamedRange
     const x2 = Math.max(ref.x1, ref.x2);
     const y1 = Math.min(ref.y1, ref.y2);
     const y2 = Math.max(ref.y1, ref.y2);
+    if ((y2 - y1 + 1) * (x2 - x1 + 1) > MAX_DENSE_RANGE_CELLS) return '#VALUE!'; // MATCH needs positions
     for (let y = y1; y <= y2; y += 1) {
       for (let x = x1; x <= x2; x += 1) values.push(resolve(x, y, ref.sheetName));
     }
@@ -671,6 +858,19 @@ function subtotal(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolve
       const x2 = Math.max(arg.x1, arg.x2);
       const y1 = Math.min(arg.y1, arg.y2);
       const y2 = Math.max(arg.y1, arg.y2);
+      const area = (y2 - y1 + 1) * (x2 - x1 + 1);
+      const walk = ctx?.forEachStoredCell;
+      // A range beyond the dense ceiling (SUBTOTAL(A:A, …)) is walked stored
+      // cell by stored cell — blank addresses add nothing to any of the 11
+      // operations, and the hidden-row test still runs per visited row.
+      if (area > MAX_DENSE_RANGE_CELLS && walk !== undefined) {
+        if (arg.sheetName !== undefined && resolve(x1, y1, arg.sheetName) === '#REF!') return '#REF!';
+        walk({ x1, y1, x2, y2 }, arg.sheetName, (x, y) => {
+          if (ctx?.isRowHidden?.(y, arg.sheetName) === true) return;
+          values.push(resolve(x, y, arg.sheetName));
+        });
+        continue;
+      }
       for (let y = y1; y <= y2; y += 1) {
         if (ctx?.isRowHidden?.(y, arg.sheetName) === true) continue;
         for (let x = x1; x <= x2; x += 1) values.push(resolve(x, y, arg.sheetName));
@@ -679,6 +879,7 @@ function subtotal(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolve
       const v = evaluate(arg, resolve, resolveName, ctx);
       if (isMatrix(v)) values.push(...v.data);
       else if (isFormulaList(v)) values.push(...v);
+      else if (isSparseRange(v)) v.forEachStored((entry) => values.push(entry));
       else values.push(v);
     }
   }
@@ -698,9 +899,9 @@ function subtotal(node: Extract<AstNode, { type: 'func' }>, resolve: CellResolve
     case 3: // COUNTA
       return values.filter((v) => v !== null && v !== undefined && v !== '').length;
     case 4: // MAX
-      return nums.length === 0 ? 0 : Math.max(...nums);
+      return nums.length === 0 ? 0 : nums.reduce((a, b) => Math.max(a, b));
     case 5: // MIN
-      return nums.length === 0 ? 0 : Math.min(...nums);
+      return nums.length === 0 ? 0 : nums.reduce((a, b) => Math.min(a, b));
     case 6: { // PRODUCT
       if (nums.length === 0) return 0;
       return nums.reduce((a, b) => a * b, 1);
@@ -743,6 +944,9 @@ function elementOf(value: FormulaArgument, shape: Shape | undefined, y: number, 
 function evaluateBinary(node: Extract<AstNode, { type: 'binary' }>, resolve: CellResolver, resolveName?: NamedRangeResolver, ctx?: EvalContext): FormulaArgument {
   const left = evaluate(node.left, resolve, resolveName, ctx);
   const right = evaluate(node.right, resolve, resolveName, ctx);
+  // Array math maps element-wise over a materialised grid; a range too large
+  // to materialise has no grid to map over.
+  if (isSparseRange(left) || isSparseRange(right)) return '#VALUE!';
   const leftShape = shapeOfOperand(node.left, left, resolveName);
   const rightShape = shapeOfOperand(node.right, right, resolveName);
   if (leftShape === undefined && rightShape === undefined) {
@@ -822,6 +1026,28 @@ const ERROR_INSPECTING: ReadonlySet<string> = new Set([
 /** Functions whose range arguments keep their two-dimensional extent. */
 const TABLE_ARG: ReadonlySet<string> = new Set(['UNIQUE', 'SORT', 'FILTER']);
 
+/** Sparse-capable functions that just flatten their arguments into one bag of values. */
+const SPARSE_VALUES_OK: ReadonlySet<string> = new Set([
+  'SUM', 'AVERAGE', 'MAX', 'MIN', 'COUNT', 'COUNTA', 'PRODUCT', 'MEDIAN',
+  'LARGE', 'SMALL', 'STDEV', 'STDEVP', 'STDEV.S', 'STDEV.P',
+  'TEXTJOIN', 'CONCAT', 'CONCATENATE', 'RANK', 'RANK.EQ',
+]);
+
+/**
+ * Functions that may receive a range too large to materialise: they read it
+ * as a bag of its stored cells (aggregates, where argument order among
+ * themselves is irrelevant), walk it positionally (the criteria family,
+ * which align a sum range to a criteria range by relative offset — COUNTIF
+ * needs the area to answer blank-matching criteria arithmetically), or
+ * consume the sparse value directly (COUNTBLANK, AND/OR, SUBTOTAL).
+ */
+const SPARSE_SUPPORTS: ReadonlySet<string> = new Set([
+  ...SPARSE_VALUES_OK,
+  'COUNTBLANK', 'AND', 'OR', 'COUNTIF',
+  'SUMIF', 'SUMIFS', 'COUNTIFS', 'AVERAGEIF', 'AVERAGEIFS', 'MAXIFS', 'MINIFS',
+  'SUMPRODUCT', 'SUBTOTAL',
+]);
+
 /** A cell/formula value that is itself an Excel error literal ('#DIV/0!', '#N/A', '#API!', …). */
 function errorValueOf(v: FormulaValue | undefined): string | undefined {
   return isExcelError(v) ? v : undefined;
@@ -866,6 +1092,7 @@ function textOf(v: FormulaValue): string {
 
 function evaluateUnary(node: Extract<AstNode, { type: 'unary' }>, resolve: CellResolver, resolveName?: NamedRangeResolver, ctx?: EvalContext): FormulaArgument {
   const value = evaluate(node.operand, resolve, resolveName, ctx);
+  if (isSparseRange(value)) return '#VALUE!';
   const shape = shapeOfOperand(node.operand, value, resolveName);
   if (shape === undefined) return unaryScalar(node.op, value as FormulaValue);
   // An array operand maps element-wise and keeps its shape, like the binary operators.
@@ -896,6 +1123,7 @@ function evaluateName(node: Extract<AstNode, { type: 'name' }>, resolve: CellRes
 }
 
 function scalar(value: FormulaArgument): FormulaValue {
+  if (isSparseRange(value)) return '#VALUE!'; // a range too large to materialise is not one value
   if (isFormulaList(value)) return value[0] ?? null;
   if (isMatrix(value)) return value.data[0] ?? null;
   return value;

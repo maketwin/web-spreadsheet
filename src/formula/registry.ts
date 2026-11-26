@@ -1,44 +1,85 @@
-import type { FormulaArgument, FormulaValue } from './types';
-import { isExcelError, isMatrix, matrix } from './types';
+import type { FormulaArgument, FormulaValue, SparseRangeValue } from './types';
+import { isExcelError, isMatrix, isSparseRange, matrix } from './types';
 import { formatCustom } from '../format/CustomFormat';
+
+/**
+ * Where the calling formula lives, handed to a function that declares the
+ * second `evaluate` parameter. The engine path always supplies it; a bare
+ * `evaluate()` call (conditional-format / validation rules) passes `undefined`
+ * there — functions must not assume coordinates that do not exist.
+ */
+export interface FunctionContext {
+  readonly cell: { readonly r: number; readonly c: number };
+  readonly sheetId: string;
+}
 
 export interface FunctionSpec {
   minArgs: number;
   maxArgs: number;
-  evaluate: (args: FormulaArgument[]) => FormulaArgument;
+  /**
+   * `ctx` names the cell/sheet the calling formula lives in, per
+   * {@link FunctionContext}. Declared optional so existing one-parameter
+   * implementations (and plugin specs) keep compiling unchanged.
+   */
+  evaluate: (args: FormulaArgument[], ctx?: FunctionContext) => FormulaArgument;
+  /**
+   * A volatile function (NOW / TODAY, or a data feed a host marks this way)
+   * depends on the wall clock or the world rather than on precedents, so the
+   * engine re-evaluates its cell on every recalculation pass that has other
+   * work. Detected at evaluation time through the context callback, so a name
+   * that turns volatile later is honored without re-parsing.
+   */
+  volatile?: boolean;
 }
 
-class FunctionRegistry {
-  private funcs = new Map<string, FunctionSpec>();
+export class FunctionRegistry {
+  private readonly funcs = new Map<string, FunctionSpec>();
+
+  /**
+   * `parent` is consulted for a name this table does not define. An engine's
+   * own table chains to the shared one (`registry`), so functions registered
+   * directly on the shared table stay visible everywhere, while what a plugin
+   * registers through `api.registerFunction` stays with that engine.
+   */
+  public constructor(private readonly parent?: FunctionRegistry) {}
 
   register(name: string, spec: FunctionSpec): void {
     this.funcs.set(name.toUpperCase(), spec);
   }
 
   get(name: string): FunctionSpec | undefined {
-    return this.funcs.get(name.toUpperCase());
+    return this.funcs.get(name.toUpperCase()) ?? this.parent?.get(name);
   }
 
-  /** Forgets a registration — what a plugin's undo does to a function it created. */
+  /**
+   * Forgets this table's own registration — what a plugin's undo does to a
+   * function it created. A definition inherited from the parent shows again.
+   */
   remove(name: string): void {
     this.funcs.delete(name.toUpperCase());
   }
 
   has(name: string): boolean {
+    return this.funcs.has(name.toUpperCase()) || (this.parent?.has(name) ?? false);
+  }
+
+  /** True when this table itself defines `name`; a parent's definition does not count. */
+  hasOwn(name: string): boolean {
     return this.funcs.has(name.toUpperCase());
   }
 
   list(): string[] {
-    return [...this.funcs.keys()];
+    return [...new Set([...this.funcs.keys(), ...(this.parent?.list() ?? [])])];
   }
 }
 
+/** The shared table: every built-in, plus whatever hosts register on it directly. */
 export const registry = new FunctionRegistry();
 
 registry.register('SUM', { minArgs: 1, maxArgs: 255, evaluate: (args) => sum(flatten(args)) });
 registry.register('AVERAGE', { minArgs: 1, maxArgs: 255, evaluate: (args) => average(flatten(args)) });
-registry.register('MAX', { minArgs: 1, maxArgs: 255, evaluate: (args) => { const n = numbers(args); return n.length === 0 ? 0 : Math.max(...n); } });
-registry.register('MIN', { minArgs: 1, maxArgs: 255, evaluate: (args) => { const n = numbers(args); return n.length === 0 ? 0 : Math.min(...n); } });
+registry.register('MAX', { minArgs: 1, maxArgs: 255, evaluate: (args) => { const n = numbers(args); return n.length === 0 ? 0 : extremeOf(n, Math.max); } });
+registry.register('MIN', { minArgs: 1, maxArgs: 255, evaluate: (args) => { const n = numbers(args); return n.length === 0 ? 0 : extremeOf(n, Math.min); } });
 registry.register('COUNT', { minArgs: 1, maxArgs: 255, evaluate: (args) => numbers(args).length });
 registry.register('COUNTA', { minArgs: 1, maxArgs: 255, evaluate: (args) => flatten(args).filter((v) => v != null && v !== '').length });
 registry.register('ROUND', { minArgs: 1, maxArgs: 2, evaluate: ([n, d]) => round(first(n), first(d)) });
@@ -58,8 +99,8 @@ registry.register('IF', { minArgs: 2, maxArgs: 3, evaluate: ([cond, t, f]) => {
   const c = first(cond);
   return (c === false || c === 0 || c === null || c === '') ? first(f) ?? null : first(t) ?? null;
 } });
-registry.register('AND', { minArgs: 1, maxArgs: 255, evaluate: (args) => flatten(args).every(Boolean) });
-registry.register('OR', { minArgs: 1, maxArgs: 255, evaluate: (args) => flatten(args).some(Boolean) });
+registry.register('AND', { minArgs: 1, maxArgs: 255, evaluate: (args) => logicalOf(args, true) });
+registry.register('OR', { minArgs: 1, maxArgs: 255, evaluate: (args) => logicalOf(args, false) });
 registry.register('NOT', { minArgs: 1, maxArgs: 1, evaluate: ([v]) => !first(v) });
 
 registry.register('CONCAT', { minArgs: 1, maxArgs: 255, evaluate: (args) => flatten(args).map(text).join('') });
@@ -106,8 +147,10 @@ registry.register('ISNA', { minArgs: 1, maxArgs: 1, evaluate: ([v]) => first(v) 
 
 // Dates are Excel serial numbers (1900 date system: serial 1 = 1899-12-31), the
 // same value an xlsx import leaves in a date cell — so they add and subtract.
-registry.register('NOW', { minArgs: 0, maxArgs: 0, evaluate: () => nowSerial(new Date()) });
-registry.register('TODAY', { minArgs: 0, maxArgs: 0, evaluate: () => todaySerial(new Date()) });
+// NOW / TODAY are volatile (Excel): every recalculation that has other work
+// re-evaluates them, so a sheet left open crosses midnight correctly.
+registry.register('NOW', { minArgs: 0, maxArgs: 0, volatile: true, evaluate: () => nowSerial(new Date()) });
+registry.register('TODAY', { minArgs: 0, maxArgs: 0, volatile: true, evaluate: () => todaySerial(new Date()) });
 registry.register('DATE', { minArgs: 3, maxArgs: 3, evaluate: ([y, m, d]) => dateOf(first(y), first(m), first(d)) });
 registry.register('TIME', { minArgs: 3, maxArgs: 3, evaluate: ([h, m, s]) => timeOf(first(h), first(m), first(s)) });
 registry.register('DATEDIF', { minArgs: 3, maxArgs: 3, evaluate: ([a, b, unit]) => dateDif(first(a), first(b), text(first(unit))) });
@@ -138,11 +181,138 @@ registry.register('RANK.EQ', { minArgs: 2, maxArgs: 3, evaluate: ([v, arr, order
 registry.register('RANK', { minArgs: 2, maxArgs: 3, evaluate: ([v, arr, order]) => rankEq(first(v), arr, first(order)) });
 registry.register('MAXIFS', { minArgs: 3, maxArgs: 255, evaluate: (args) => maxMinIfs(args, 'max') });
 registry.register('MINIFS', { minArgs: 3, maxArgs: 255, evaluate: (args) => maxMinIfs(args, 'min') });
+// Excel COUNTBLANK: never-stored addresses and empty-string cells both count;
+// over a sparse range the blank total is the area minus the stored non-blanks.
+registry.register('COUNTBLANK', { minArgs: 1, maxArgs: 1, evaluate: ([range]) => countBlank(range) });
+
+/** What a logical aggregate saw: how many values counted and how they read. */
+interface TruthyScan {
+  counted: number;
+  allTruthy: boolean;
+  anyTruthy: boolean;
+  error: string | undefined;
+}
+
+/**
+ * Excel AND/OR: blank cells and text inside range/array arguments are
+ * ignored; booleans and numbers (0 = FALSE) decide. A direct string argument
+ * coerces ("TRUE"/"FALSE", or a number); anything else is '#VALUE!'. Blank
+ * values are skipped, so over a sparse range the never-stored addresses take
+ * no part — if nothing counted at all, the answer is '#VALUE!' (Excel on an
+ * all-empty range).
+ */
+function scanTruthy(args: FormulaArgument[]): TruthyScan {
+  const scan: TruthyScan = { counted: 0, allTruthy: true, anyTruthy: false, error: undefined };
+  const countValue = (v: FormulaValue | undefined, fromList: boolean): void => {
+    if (scan.error !== undefined) return;
+    if (fromList) {
+      if (v === null || v === undefined || v === '') return; // blank: ignored
+      if (typeof v === 'boolean') {
+        scan.counted += 1;
+        if (v) scan.anyTruthy = true; else scan.allTruthy = false;
+        return;
+      }
+      if (typeof v === 'number') {
+        // Non-finite numbers never exist in Excel; a cell whose value is NaN
+        // resolves as its text instead (see the engine's resolveCell).
+        if (!Number.isFinite(v)) {
+          scan.counted += 1;
+          scan.allTruthy = false;
+          return;
+        }
+        scan.counted += 1;
+        if (v !== 0) scan.anyTruthy = true; else scan.allTruthy = false;
+        return;
+      }
+      if (typeof v === 'string') {
+        // A typed TRUE/FALSE can reach us as text (a host that stores only
+        // the text); it still counts as the logical it spells.
+        const upper = v.trim().toUpperCase();
+        if (upper === 'TRUE') {
+          scan.counted += 1;
+          scan.anyTruthy = true;
+          return;
+        }
+        if (upper === 'FALSE') {
+          scan.counted += 1;
+          scan.allTruthy = false;
+        }
+        return; // other text inside a range is ignored (Excel)
+      }
+      return;
+    }
+    if (v === null || v === undefined || v === '') return; // a blank reference is ignored
+    if (typeof v === 'boolean') {
+      scan.counted += 1;
+      if (v) scan.anyTruthy = true; else scan.allTruthy = false;
+      return;
+    }
+    if (typeof v === 'number') {
+      if (!Number.isFinite(v)) return;
+      scan.counted += 1;
+      if (v !== 0) scan.anyTruthy = true; else scan.allTruthy = false;
+      return;
+    }
+    if (v instanceof Date) return; // a raw Date is not a logical value
+    const upper = v.trim().toUpperCase();
+    if (upper === 'TRUE') { scan.counted += 1; scan.anyTruthy = true; return; }
+    if (upper === 'FALSE') { scan.counted += 1; scan.allTruthy = false; return; }
+    const n = numericOf(v);
+    if (n !== undefined) {
+      scan.counted += 1;
+      if (n !== 0) scan.anyTruthy = true; else scan.allTruthy = false;
+      return;
+    }
+    scan.error = '#VALUE!';
+  };
+  for (const arg of args) {
+    if (scan.error !== undefined) break;
+    if (isSparseRange(arg)) {
+      arg.forEachStored((v) => countValue(v, true));
+      continue;
+    }
+    if (Array.isArray(arg)) {
+      for (const v of arg) countValue(v, true);
+      continue;
+    }
+    if (isMatrix(arg)) {
+      for (const v of arg.data) countValue(v, true);
+      continue;
+    }
+    countValue(arg as FormulaValue, false);
+  }
+  return scan;
+}
+
+/** AND when `all`, OR otherwise; both answer '#VALUE!' with no logical value. */
+function logicalOf(args: FormulaArgument[], all: boolean): FormulaArgument {
+  const scan = scanTruthy(args);
+  if (scan.error !== undefined) return scan.error;
+  if (scan.counted === 0) return '#VALUE!';
+  return all ? scan.allTruthy : scan.anyTruthy;
+}
+
+/** Excel COUNTBLANK: missing addresses and '' cells are blank; values are not. */
+function countBlank(value: FormulaArgument | undefined): FormulaArgument {
+  if (isSparseRange(value)) {
+    let nonBlank = 0;
+    value.forEachStored((v) => { if (v !== null && v !== '') nonBlank += 1; });
+    return value.area - nonBlank;
+  }
+  return flatten(value === undefined ? [] : [value]).filter((v) => v === null || v === '').length;
+}
 
 function sum(values: FormulaValue[]): number {
   // Excel SUM ignores real text and empty cells inside ranges (errors already
-  // propagated at the evaluator level); numeric-looking text coerces.
-  return values.reduce<number>((total, value) => total + (numericOf(value) ?? 0), 0);
+  // propagated at the evaluator level); numeric-looking text coerces. Index
+  // loop: this runs over million-cell ranges.
+  let total = 0;
+  for (let i = 0; i < values.length; i += 1) {
+    const v = values[i];
+    if (typeof v === 'number') total += Number.isFinite(v) ? v : 0;
+    else total += numericOf(v) ?? 0;
+  }
+  return total;
 }
 
 function average(values: FormulaValue[]): FormulaArgument {
@@ -160,6 +330,13 @@ function numbers(values: FormulaArgument[]): number[] {
     const n = numericOf(v);
     return n === undefined ? [] : [n];
   });
+}
+
+/** MAX/MIN over a list that may hold a million range cells — `Math.max(…spread)` would blow the call stack. */
+function extremeOf(values: readonly number[], pick: (a: number, b: number) => number): number {
+  let best = values[0]!;
+  for (let i = 1; i < values.length; i += 1) best = pick(best, values[i]!);
+  return best;
 }
 
 function numericOf(v: FormulaValue | null | undefined): number | undefined {
@@ -183,9 +360,30 @@ function mod(a: FormulaValue | undefined, b: FormulaValue | undefined): FormulaA
 function flatten(values: FormulaArgument[]): FormulaValue[] {
   return values.flatMap((value) => {
     if (Array.isArray(value)) return value;
+    if (isSparseRange(value)) return materializeStored(value);
     if (typeof value === 'object' && value !== null && (value as { __matrix?: boolean }).__matrix === true) return [...(value as { data: readonly FormulaValue[] }).data];
     return [value as FormulaValue];
   });
+}
+
+/** Stored cells of a sparse range as a flat list (never its area in blanks). */
+function materializeStored(value: SparseRangeValue): FormulaValue[] {
+  const out: FormulaValue[] = [];
+  value.forEachStored((v) => { out.push(v); });
+  return out;
+}
+
+/**
+ * A sparse range argument as its stored values keyed by row-major offset from
+ * the range's top-left corner; undefined when the argument is not sparse.
+ * The IF-family aligns a sum/average range to its criteria range by this
+ * offset, exactly as dense code indexes both lists at `i`.
+ */
+function sparseMap(value: FormulaArgument | undefined): Map<number, FormulaValue> | undefined {
+  if (!isSparseRange(value)) return undefined;
+  const map = new Map<number, FormulaValue>();
+  value.forEachStored((v, y, x) => { map.set((y - value.top) * value.cols + (x - value.left), v); });
+  return map;
 }
 
 function first(value: FormulaArgument | undefined): FormulaValue | undefined {
@@ -233,11 +431,33 @@ function matchIndex(search: FormulaValue | undefined, value: FormulaArgument | u
 }
 
 function countIf(value: FormulaArgument | undefined, criteria: FormulaValue | undefined): number {
+  if (isSparseRange(value)) {
+    let counted = 0;
+    let walked = 0;
+    value.forEachStored((v) => {
+      walked += 1;
+      if (matchesCriteria(v, criteria)) counted += 1;
+    });
+    // Never-stored addresses are pure blanks; "" and "=" match them — the
+    // remainder is arithmetic, not another walk over the emptiness.
+    if (matchesBlank(criteria)) counted += value.area - walked;
+    return counted;
+  }
   const values = value === undefined ? [] : flatten([value]);
   return values.filter((entry) => matchesCriteria(entry, criteria)).length;
 }
 
 function sumIf(range: FormulaArgument | undefined, criteria: FormulaValue | undefined, sumRange: FormulaArgument | undefined): number {
+  if (isSparseRange(range) || isSparseRange(sumRange)) {
+    const group = criteriaGroup([range, sumRange ?? range], matchesBlank(criteria));
+    let total = 0;
+    for (const i of group.domainOffsets) {
+      if (!group.domainHas(i)) continue;
+      if (!matchesCriteria(group.at(0, i), criteria)) continue;
+      total += numericOf(group.at(1, i)) ?? 0;
+    }
+    return total;
+  }
   const keys = range === undefined ? [] : flatten([range]);
   const vals = sumRange === undefined ? keys : flatten([sumRange]);
   let total = 0;
@@ -250,6 +470,21 @@ function sumIf(range: FormulaArgument | undefined, criteria: FormulaValue | unde
 /** SUMIFS(sumRange, critRange1, crit1, …) */
 function sumIfs(args: FormulaArgument[]): number {
   if (args.length < 3 || args.length % 2 === 0) return 0;
+  const ranges: FormulaArgument[] = [args[0]!];
+  const crits: (FormulaValue | undefined)[] = [];
+  for (let i = 1; i + 1 < args.length; i += 2) {
+    ranges.push(args[i]!);
+    crits.push(first(args[i + 1]));
+  }
+  if (ranges.some(isSparseRange)) {
+    const group = criteriaGroup(ranges, crits.some(matchesBlank));
+    let total = 0;
+    for (const i of group.domainOffsets) {
+      if (!group.domainHas(i)) continue;
+      if (groupMatches(group, ranges.length, crits, 1, i)) total += numericOf(group.at(0, i)) ?? 0;
+    }
+    return total;
+  }
   const sumVals = flatten([args[0]!]);
   const pairs: { keys: FormulaValue[]; crit: FormulaValue | undefined }[] = [];
   for (let i = 1; i + 1 < args.length; i += 2) {
@@ -264,6 +499,26 @@ function sumIfs(args: FormulaArgument[]): number {
 
 function countIfs(args: FormulaArgument[]): number {
   if (args.length < 2 || args.length % 2 !== 0) return 0;
+  const ranges: FormulaArgument[] = [];
+  const crits: (FormulaValue | undefined)[] = [];
+  for (let i = 0; i + 1 < args.length; i += 2) {
+    ranges.push(args[i]!);
+    crits.push(first(args[i + 1]));
+  }
+  if (ranges.some(isSparseRange)) {
+    const blanksMatter = crits.some(matchesBlank);
+    const group = criteriaGroup(ranges, blanksMatter);
+    let count = 0;
+    for (const i of group.domainOffsets) {
+      if (!group.domainHas(i)) continue;
+      if (groupMatches(group, ranges.length, crits, 0, i)) count += 1;
+    }
+    // Positions absent from every criteria range are all blank at once; they
+    // match iff every criterion matches blanks (Excel). Only walkable
+    // arithmetically when the walk was the union of sparse members.
+    if (blanksMatter && group.fullySparse && group.domainArea !== undefined) count += group.domainArea - group.walkedCount;
+    return count;
+  }
   const pairs: { keys: FormulaValue[]; crit: FormulaValue | undefined }[] = [];
   for (let i = 0; i + 1 < args.length; i += 2) {
     pairs.push({ keys: flatten([args[i]!]), crit: first(args[i + 1]) });
@@ -276,8 +531,93 @@ function countIfs(args: FormulaArgument[]): number {
   return count;
 }
 
+/** Offsets 0..n-1, the dense domain of a criteria group. */
+function* upTo(n: number): Generator<number> {
+  for (let i = 0; i < n; i += 1) yield i;
+}
+
+/** True when the criterion matches a blank cell (`""`, `=`, omitted). */
+function matchesBlank(criteria: FormulaValue | undefined): boolean {
+  return matchesCriteria(null, criteria);
+}
+
+/** True when every criterion of the group matches at offset `i` (members `from`..). */
+function groupMatches(group: CriteriaGroup, memberCount: number, crits: readonly (FormulaValue | undefined)[], from: number, i: number): boolean {
+  for (let k = from; k < memberCount; k += 1) {
+    if (!matchesCriteria(group.at(k, i), crits[k - from])) return false;
+  }
+  return true;
+}
+
+/**
+ * An aligned criteria group (the SUMIFS family): member 0 is the range whose
+ * offsets the walk follows (the sum/average/value range, or the first
+ * criteria range for COUNTIFS), the rest line up by the same offset. A
+ * sparse member reads from its stored-values map; a dense member indexes
+ * like the original loops, missing positions reading as blanks.
+ *
+ * `blanksMatter` (some criterion matches a blank, i.e. `""` / `=`) widens
+ * the walk: positions missing from the first member can still be decided by
+ * the others, so the walk follows the union of every sparse member's stored
+ * offsets (or a dense member's full span, which is within the dense
+ * ceiling). What stays unwalked is then only the positions absent from
+ * every sparse member — all blank at once, countable arithmetically
+ * (`domainArea - walkedCount`) instead of looping over the emptiness.
+ */
+interface CriteriaGroup {
+  at: (k: number, i: number) => FormulaValue;
+  /** Offsets to visit, ascending. */
+  domainOffsets: Iterable<number>;
+  /** False when offset `i` is not visited (absent from every sparse member). */
+  domainHas: (i: number) => boolean;
+  /** Offsets the walk actually visits. */
+  walkedCount: number;
+  /** True when every member is a sparse range (the walk is the union). */
+  fullySparse: boolean;
+  /** Area of the first member when it is sparse; undefined for a dense domain. */
+  domainArea: number | undefined;
+}
+
+function criteriaGroup(members: readonly (FormulaArgument | undefined)[], blanksMatter: boolean): CriteriaGroup {
+  const maps = members.map((m) => sparseMap(m));
+  const denses = members.map((m, k) => (maps[k] === undefined ? flatten(m === undefined ? [] : [m]) : undefined));
+  const domainMap = maps[0];
+  const domainArea = isSparseRange(members[0]) ? (members[0] as SparseRangeValue).area : undefined;
+  const at = (k: number, i: number): FormulaValue => (maps[k] !== undefined ? maps[k]!.get(i) ?? null : denses[k]![i] ?? null);
+  const denseMember = denses.find((d) => d !== undefined);
+  if (domainMap === undefined || denseMember !== undefined) {
+    // A dense member pins the walk to its full span (within the dense
+    // ceiling): every position is visited, sparse members read by offset.
+    const len = (domainMap === undefined ? denses[0]! : denseMember!).length;
+    return { at, domainOffsets: upTo(len), domainHas: () => true, walkedCount: len, fullySparse: false, domainArea };
+  }
+  if (blanksMatter) {
+    const union = new Set<number>();
+    for (const m of maps) {
+      if (m === undefined) continue;
+      for (const k of m.keys()) union.add(k);
+    }
+    return { at, domainOffsets: union, domainHas: (i) => union.has(i), walkedCount: union.size, fullySparse: true, domainArea };
+  }
+  return { at, domainOffsets: domainMap.keys(), domainHas: (i) => domainMap.has(i), walkedCount: domainMap.size, fullySparse: true, domainArea };
+}
+
 
 function averageIf(range: FormulaArgument | undefined, criteria: FormulaValue | undefined, avgRange: FormulaArgument | undefined): FormulaArgument {
+  if (isSparseRange(range) || isSparseRange(avgRange)) {
+    const group = criteriaGroup([range, avgRange ?? range], matchesBlank(criteria));
+    let total = 0;
+    let count = 0;
+    for (const i of group.domainOffsets) {
+      if (!group.domainHas(i)) continue;
+      if (!matchesCriteria(group.at(0, i), criteria)) continue;
+      const n = numericOf(group.at(1, i));
+      if (n === undefined) continue;
+      total += n;
+      count += 1;
+    }
+    return count === 0 ? '#DIV/0!' : total / count;
+  }
   const keys = range === undefined ? [] : flatten([range]);
   const vals = avgRange === undefined ? keys : flatten([avgRange]);
   let total = 0;
@@ -295,6 +635,26 @@ function averageIf(range: FormulaArgument | undefined, criteria: FormulaValue | 
 
 function averageIfs(args: FormulaArgument[]): FormulaArgument {
   if (args.length < 3 || args.length % 2 === 0) return '#DIV/0!';
+  const ranges: FormulaArgument[] = [args[0]!];
+  const crits: (FormulaValue | undefined)[] = [];
+  for (let i = 1; i + 1 < args.length; i += 2) {
+    ranges.push(args[i]!);
+    crits.push(first(args[i + 1]));
+  }
+  if (ranges.some(isSparseRange)) {
+    const group = criteriaGroup(ranges, crits.some(matchesBlank));
+    let total = 0;
+    let count = 0;
+    for (const i of group.domainOffsets) {
+      if (!group.domainHas(i)) continue;
+      if (!groupMatches(group, ranges.length, crits, 1, i)) continue;
+      const n = numericOf(group.at(0, i));
+      if (n === undefined) continue;
+      total += n;
+      count += 1;
+    }
+    return count === 0 ? '#DIV/0!' : total / count;
+  }
   const avgVals = flatten([args[0]!]);
   const pairs: { keys: FormulaValue[]; crit: FormulaValue | undefined }[] = [];
   for (let i = 1; i + 1 < args.length; i += 2) {
@@ -651,6 +1011,20 @@ function replaceAt(s: string, start: number, numChars: number, rep: string): For
 
 /** SUMPRODUCT: element-wise product over equal-length lists; text/blank → 0, booleans → 1/0. */
 function sumProduct(args: FormulaArgument[]): FormulaArgument {
+  if (args.some(isSparseRange)) {
+    // Positional product over stored offsets; a position missing on one side
+    // reads as blank on that side, which contributes 0 — what a dense null
+    // contributed too.
+    const group = criteriaGroup(args, false);
+    let total = 0;
+    for (const i of group.domainOffsets) {
+      if (!group.domainHas(i)) continue;
+      let product = 1;
+      for (let k = 0; k < args.length; k += 1) product *= productTerm(group.at(k, i));
+      total += product;
+    }
+    return total;
+  }
   const lists = args.map((a) => flatten([a]).map(productTerm));
   const len = lists[0]?.length ?? 0;
   if (lists.some((l) => l.length !== len)) return '#VALUE!';
@@ -708,6 +1082,24 @@ function rankEq(value: FormulaValue | undefined, listV: FormulaArgument | undefi
 /** MAXIFS / MINIFS(range, critRange1, crit1, …) — 0 when nothing matches (Excel). */
 function maxMinIfs(args: FormulaArgument[], which: 'max' | 'min'): FormulaArgument {
   if (args.length < 3 || args.length % 2 === 0) return 0;
+  const ranges: FormulaArgument[] = [args[0]!];
+  const crits: (FormulaValue | undefined)[] = [];
+  for (let i = 1; i + 1 < args.length; i += 2) {
+    ranges.push(args[i]!);
+    crits.push(first(args[i + 1]));
+  }
+  if (ranges.some(isSparseRange)) {
+    const group = criteriaGroup(ranges, crits.some(matchesBlank));
+    let best: number | undefined;
+    for (const i of group.domainOffsets) {
+      if (!group.domainHas(i)) continue;
+      if (!groupMatches(group, ranges.length, crits, 1, i)) continue;
+      const n = numericOf(group.at(0, i));
+      if (n === undefined) continue;
+      best = best === undefined ? n : (which === 'max' ? Math.max(best, n) : Math.min(best, n));
+    }
+    return best ?? 0;
+  }
   const vals = flatten([args[0]!]);
   const pairs: { keys: FormulaValue[]; crit: FormulaValue | undefined }[] = [];
   for (let i = 1; i + 1 < args.length; i += 2) {
@@ -736,6 +1128,9 @@ function tableOf(value: FormulaArgument | undefined): Table {
   if (value === undefined) return { rows: 0, cols: 0, data: [] };
   if (isMatrix(value)) return value;
   if (isFormulaList(value)) return { rows: value.length, cols: 1, data: value };
+  // Unreachable through the evaluator (it refuses sparse ranges for the
+  // tabular functions); direct registry callers see the stored cells.
+  if (isSparseRange(value)) { const data = materializeStored(value); return { rows: data.length, cols: 1, data }; }
   return { rows: 1, cols: 1, data: [value] };
 }
 

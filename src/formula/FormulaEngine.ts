@@ -1,29 +1,52 @@
 import type { Store } from '../store/Store';
-import { dependenciesOfAst, formulaText, type NamedDepArea } from '../util/cell';
+import { cellIdCoords, formulaText } from '../util/cell';
+import { depsOfAst, type NamedDepArea } from './precedents';
 import type { Cell } from '../types';
-import { DependencyGraph } from './dependency';
+import { DependencyGraph, type RectRegistration } from './dependency';
 import { dateResultOf, evaluate, type DateResult } from './evaluator';
 import { FormulaParser } from './parser';
-import { isMatrix, type AstNode, type FormulaArgument, type FormulaValue, type MatrixValue } from './types';
+import { registry, type FunctionRegistry } from './registry';
+import { isMatrix, isSparseRange, type AstNode, type FormulaArgument, type FormulaValue, type MatrixValue } from './types';
 import { TOTAL_COLS, TOTAL_ROWS } from '../util/gridSize';
+import { parseInternalRange } from '../util/rangeNotation';
 import { formatValue } from '../format/NumberFormatter';
 import type { NamedRangeDef } from '../namedrange/types';
 
 /** Upper bound on recalculation passes per change set (a spill rewrite costs one extra pass). */
 const MAX_PASSES = 100;
 /**
- * Formulas kept parsed at once. Above what the grid holds (26,000 cells, and
- * relative references make every formula's text its own), so that a full
- * sheet never thrashes the cache; when a long editing session does fill it,
- * it is cleared wholesale.
+ * Functions that read only the cell their lookup lands on: a rectangle
+ * covering the formula's own cell is not a self-reference for them.
+ */
+const SCALAR_LOOKUP_FNS: ReadonlySet<string> = new Set(['INDEX', 'VLOOKUP', 'HLOOKUP', 'MATCH', 'XLOOKUP']);
+/**
+ * Formulas kept parsed at once. Relative references make every formula's
+ * text its own, so a sheet can hold more formulas than this (the grid is
+ * Excel-sized); when a long editing session fills the cache, it is cleared
+ * wholesale and refilled on demand.
  */
 const MAX_CACHED_FORMULAS = 40_000;
+
+export interface FormulaEngineOptions {
+  /**
+   * Function table formulas resolve against; the shared `registry` when
+   * omitted. Pass a private one — `new FunctionRegistry(registry)` — to keep
+   * what plugins register on this engine from leaking into other engines.
+   */
+  readonly registry?: FunctionRegistry;
+}
 
 export class FormulaEngine {
   private graph = new DependencyGraph();
   /** Cells currently being evaluated — used for circular-ref detection. */
   private readonly evalStack = new Set<string>();
   private formulas = new Map<string, string>();
+  /**
+   * The exact per-cell precedents each registration installed (what
+   * onNamedRangeChanged compares against — the graph holds rectangle-derived
+   * edges on top of these, so it cannot answer "what did I register").
+   */
+  private readonly registeredDeps = new Map<string, string[]>();
   private parser = new FormulaParser();
   /**
    * Dynamic-array spill bookkeeping: anchor scopedId -> expected extent
@@ -44,6 +67,16 @@ export class FormulaEngine {
   private readonly dirty = new Set<string>();
   /** Cells on a dependency ring; Excel (iteration off) shows them as 0. */
   private readonly circular = new Set<string>();
+  /**
+   * Formulas whose evaluation touched a volatile function
+   * (FunctionSpec.volatile, e.g. NOW / TODAY). They have no precedents, so
+   * nothing else wakes them: every drain that has other work re-evaluates
+   * them, Excel's volatility rule. Reported at evaluation time through the
+   * context callback, so a name that turns volatile later is honored without
+   * re-parsing. Cleared wherever the formula itself goes (unregister /
+   * reset / onSheetDeleted / reloadFromStore).
+   */
+  private readonly volatileFormulas = new Set<string>();
   private queue: string[] = [];
   private readonly changedCells: { readonly sheetId: string; readonly r: number; readonly c: number }[] = [];
   /** Last value seen per cell, so an in-place rewrite (a style change) propagates nothing. */
@@ -66,7 +99,12 @@ export class FormulaEngine {
   /** Kind of the first numeric cell the evaluation in progress read: null when it was not a date. */
   private firstNumberRead: DateResult | null | undefined;
 
-  constructor(private store: Store) {}
+  /** Function table every formula of this engine resolves against. */
+  public readonly registry: FunctionRegistry;
+
+  constructor(private store: Store, options?: FormulaEngineOptions) {
+    this.registry = options?.registry ?? registry;
+  }
 
   setActiveSheetId(_sheetId: string): void {
     /* reserved for sheet-scoped recalc control */
@@ -115,9 +153,9 @@ export class FormulaEngine {
     this.coalesce(() => {
       for (const [scopedId, formula] of [...this.formulas]) {
         const { sheetId } = parseScopedKey(scopedId);
-        const deps = this.depsOf(this.astOf(formula), [], sheetId);
-        const current = new Set(this.graph.getDependencies(scopedId));
-        if (deps.length === current.size && deps.every((d) => current.has(d))) continue;
+        const cells = this.depsOf(this.astOf(formula), [], sheetId).cells;
+        const current = this.registeredDeps.get(scopedId);
+        if (current !== undefined && cells.length === current.length && cells.every((d) => current.includes(d))) continue;
         this.register(scopedId, formula, [], sheetId);
       }
     });
@@ -138,20 +176,25 @@ export class FormulaEngine {
   reset(): void {
     this.graph.clear();
     this.formulas.clear();
+    this.registeredDeps.clear();
     this.spills.clear();
     this.dirty.clear();
     this.circular.clear();
     this.evalStack.clear();
     this.dateCells.clear();
+    this.volatileFormulas.clear();
     this.queue = [];
     this.changedCells.length = 0;
     this.seen.clear();
     this.shadowOwner.clear();
+    this.sheetsDirty = true;
   }
 
   /** Sheet removed: its formulas, dependency edges and spill bookkeeping go too. */
   onSheetDeleted(sheetId: string): void {
     const prefix = `${sheetId}:`;
+    this.sheetsDirty = true;
+    this.graph.clearSheetRects(sheetId);
     this.coalesce(() => {
       // The sheet is gone: its shadows cannot be cleared, only forgotten.
       for (const key of [...this.spills.keys()]) {
@@ -161,6 +204,149 @@ export class FormulaEngine {
         if (!key.startsWith(prefix)) continue;
         this.unregister(key);
         this.markDependents(key);
+      }
+    });
+  }
+
+  /** The sheet list changed (added / renamed / copied): name lookups rebuild lazily. */
+  onSheetsChanged(): void {
+    this.sheetsDirty = true;
+  }
+
+  /**
+   * Rows or columns of `sheetId` moved wholesale (insert: the half-plane at
+   * `start` moved `count` down/right; delete: the band [start, start+count)
+   * was removed and the rest moved up). The store already holds the final
+   * state when this runs. Registered formulas on the moving half-plane
+   * re-register at their new coordinates from the store's current cells
+   * (formulas inside a deleted band unregister; cells pushed off the grid
+   * drop their formulas); readers of the moved half-plane — per-cell
+   * dependencies into it (own-sheet `sheetId:r,c` keys and cross-sheet
+   * `SheetName:r,c` keys), rectangle dependencies reaching past `start`, and
+   * spill extents overlapping the band — are queued, then one pass drains.
+   */
+  public onStructureShift(sheetId: string, axis: 'row' | 'col', kind: 'insert' | 'delete', start: number, count: number): void {
+    const limit = axis === 'row' ? TOTAL_ROWS : TOTAL_COLS;
+    this.coalesce(() => {
+      // Phase 1 — unregister every formula at/after `start`, INCLUDING the
+      // ones inside a deleted band: a formula whose cell is gone must be off
+      // the books (registration, spill extent, graph edges) or the spill
+      // wake below would re-evaluate it at its old coordinates and write
+      // value + shadows back over deleted rows.
+      const moved: Array<{ readonly r: number; readonly c: number }> = [];
+      for (const id of [...this.formulas.keys()]) {
+        const { sheetId: sid, r, c } = parseScopedKey(id);
+        if (sid !== sheetId) continue;
+        const at = axis === 'row' ? r : c;
+        if (at < start) continue;
+        moved.push({ r, c });
+        this.unregister(id); // also retires the formula's spill extent
+      }
+      // Phase 2 — re-register from the store's final state at the new coordinates.
+      for (const { r, c } of moved) {
+        const at = axis === 'row' ? r : c;
+        const nextAt = kind === 'insert' ? at + count : at - count;
+        if (nextAt < start || nextAt >= limit) continue; // pushed off the grid: the cell is gone
+        const cell = axis === 'row' ? this.store.getCell(nextAt, c, sheetId) : this.store.getCell(r, nextAt, sheetId);
+        const formula = formulaText(cell);
+        if (formula === undefined) continue;
+        const key = axis === 'row' ? `${nextAt},${c}` : `${r},${nextAt}`;
+        this.register(scopedKey(key, sheetId), formula, [], sheetId);
+      }
+      // Phase 3 — wake readers of the moved half-plane.
+      const wake = new Set<string>();
+      const sheetName = this.sheetNameForId(sheetId);
+      for (const id of this.formulas.keys()) {
+        if (this.dirty.has(id)) continue;
+        for (const dep of this.graph.dependenciesOf(id) ?? []) {
+          const colon = dep.indexOf(':');
+          if (colon <= 0) continue;
+          const depSheet = dep.slice(0, colon);
+          if (depSheet !== sheetId && (sheetName === undefined || depSheet !== sheetName)) continue;
+          const coords = cellIdCoords(dep.slice(colon + 1));
+          if (coords === null) continue;
+          if ((axis === 'row' ? coords.r : coords.c) >= start) {
+            wake.add(id);
+            break;
+          }
+        }
+      }
+      for (const id of this.graph.rectDependentsFrom(sheetId, axis, start)) {
+        if (!this.dirty.has(id)) wake.add(id);
+      }
+      for (const [anchor, extent] of this.spills) {
+        const { sheetId: sid } = parseScopedKey(anchor);
+        if (sid !== sheetId) continue;
+        if ((axis === 'row' ? extent.r2 : extent.c2) >= start) wake.add(anchor);
+      }
+      for (const id of wake) {
+        if (this.dirty.has(id) || !this.formulas.has(id)) continue;
+        this.dirty.add(id);
+        this.queue.push(id);
+      }
+    });
+  }
+
+  /**
+   * The cells inside `rect` of `sheetId` were rewritten wholesale (a sparse
+   * clear, or the undo putting them back) — the store already holds the final
+   * state. The work is proportional to the formulas that live in or read the
+   * rectangle, never to the cells it holds: a cleared million-cell column
+   * must not cost one deferred entry per cell. Formulas registered inside
+   * re-sync against the store (a cleared one unregisters, a restored or
+   * reworded one registers again, an untouched one is queued because what it
+   * reads may have changed); readers of any address inside — per-cell
+   * dependencies (own-sheet and `SheetName:` keys), rectangle dependencies,
+   * spill extents — are queued, then one pass drains.
+   */
+  public onCellsReplaced(sheetId: string, rect: { r1: number; c1: number; r2: number; c2: number }): void {
+    const inside = (r: number, c: number): boolean => r >= rect.r1 && r <= rect.r2 && c >= rect.c1 && c <= rect.c2;
+    this.coalesce(() => {
+      const wake = new Set<string>();
+      for (const id of [...this.formulas.keys()]) {
+        const { sheetId: sid, r, c } = parseScopedKey(id);
+        if (sid !== sheetId || !inside(r, c)) continue;
+        const registered = this.formulas.get(id);
+        const formula = formulaText(this.store.getCell(r, c, sheetId));
+        if (formula === undefined) {
+          this.unregister(id); // the cell is gone, or no longer holds a formula
+        } else if (formula === registered) {
+          wake.add(id);
+        } else {
+          this.register(id, formula, [], sheetId);
+        }
+      }
+      const sheetName = this.sheetNameForId(sheetId);
+      for (const id of this.formulas.keys()) {
+        if (this.dirty.has(id)) continue;
+        for (const dep of this.graph.dependenciesOf(id) ?? []) {
+          const colon = dep.indexOf(':');
+          if (colon <= 0) continue;
+          const depSheet = dep.slice(0, colon);
+          if (depSheet !== sheetId && (sheetName === undefined || depSheet !== sheetName)) continue;
+          const coords = cellIdCoords(dep.slice(colon + 1));
+          if (coords === null) continue;
+          if (inside(coords.r, coords.c)) {
+            wake.add(id);
+            break;
+          }
+        }
+      }
+      for (const id of this.graph.rectDependentsIn(sheetId, rect)) {
+        if (!this.dirty.has(id)) wake.add(id);
+      }
+      // A spill spans from its anchor down/right to (r2, c2): re-evaluate the
+      // anchors whose range meets the rectangle (a cleared shadow comes back,
+      // a cleared anchor was unregistered above and took its extent along).
+      for (const [anchor, extent] of this.spills) {
+        const { sheetId: sid, r, c } = parseScopedKey(anchor);
+        if (sid !== sheetId) continue;
+        if (r <= rect.r2 && extent.r2 >= rect.r1 && c <= rect.c2 && extent.c2 >= rect.c1) wake.add(anchor);
+      }
+      for (const id of wake) {
+        if (this.dirty.has(id) || !this.formulas.has(id)) continue;
+        this.dirty.add(id);
+        this.queue.push(id);
       }
     });
   }
@@ -230,9 +416,41 @@ export class FormulaEngine {
   /** Install (or replace) one formula's registration and queue it for evaluation. */
   private register(scopedId: string, formula: string, dependsOn: readonly string[], sheetId: string): void {
     const ast = this.astOf(formula);
-    const scopedDeps = this.depsOf(ast, dependsOn, sheetId);
+    const deps = this.depsOf(ast, dependsOn, sheetId);
+    const here = parseScopedKey(scopedId);
+    // A formula landing inside an existing rectangle dependency becomes a
+    // precedent of the rectangle's owner: an exact edge added INCREMENTALLY
+    // (rebuilding the owner's dependency set would drop its rectangle
+    // registrations) so ring detection sees the pairing either way, plus a
+    // dirty mark (the owner must read the new formula's value).
+    for (const owner of this.graph.rectDependents(sheetId, here.r, here.c)) {
+      if (owner === scopedId || !this.formulas.has(owner)) continue;
+      const ring = this.graph.addDependency(owner, scopedId);
+      this.refreshCircular(owner, ring);
+      if (!this.dirty.has(owner)) {
+        this.dirty.add(owner);
+        this.queue.push(owner);
+      }
+    }
+    // Formulas already living inside this formula's own rectangles are exact
+    // precedents (per-cell edges) — ring detection, lifting and the queue
+    // order keep working on ordinary edges alone. A rectangle covering the
+    // formula's own cell is a self-edge for aggregate-style formulas (=SUM
+    // over a range containing its own cell is circular, as in Excel) — but
+    // not for the scalar lookups, which read only the cell they land on
+    // (=INDEX(A1:C1048576, 5, 2) in C1 answers B5's value).
+    const rectCells: string[] = [];
+    const scalarLookup = ast !== null && ast.type === 'func' && SCALAR_LOOKUP_FNS.has(ast.name);
+    for (const rect of deps.rects) {
+      if (!scalarLookup && rect.sheetId === sheetId && rect.r1 <= here.r && here.r <= rect.r2 && rect.c1 <= here.c && here.c <= rect.c2) rectCells.push(scopedId);
+      for (const id of this.graph.formulasInRect(rect.sheetId, rect.r1, rect.c1, rect.r2, rect.c2)) {
+        if (id !== scopedId) rectCells.push(id);
+      }
+    }
     // The ring check belongs here, where edges change — never per evaluation.
-    const createsCycle = this.graph.setDependencies(scopedId, scopedDeps);
+    const createsCycle = this.graph.setDependencies(scopedId, [...deps.cells, ...rectCells]);
+    this.graph.registerRects(scopedId, deps.rects);
+    this.registeredDeps.set(scopedId, deps.cells);
     this.formulas.set(scopedId, formula);
     this.refreshCircular(scopedId, createsCycle);
     this.dirty.add(scopedId);
@@ -255,10 +473,27 @@ export class FormulaEngine {
     return ast;
   }
 
-  /** The formula's precedents as graph keys: caller-supplied plus parsed (names expanded to their area). */
-  private depsOf(ast: AstNode | null, dependsOn: readonly string[], sheetId: string): string[] {
-    const fromAst = ast === null ? [] : dependenciesOfAst(ast, (name) => this.nameArea(name, sheetId));
-    return [...new Set([...dependsOn, ...fromAst])].map((d) => this.canonicalDep(scopeDep(d, sheetId)));
+  /**
+   * The formula's precedents: caller-supplied plus parsed, as exact per-cell
+   * keys and as rectangle registrations (parsed ranges above
+   * RANGE_DEP_CELLS, names expanded to their area). Rectangles resolve their
+   * sheet here, at registration time; a sheet that does not resolve watches
+   * nothing.
+   */
+  private depsOf(ast: AstNode | null, dependsOn: readonly string[], sheetId: string): { cells: string[]; rects: RectRegistration[] } {
+    const fromAst = ast === null ? { cells: [], rects: [] } : depsOfAst(ast, (name) => this.nameArea(name, sheetId));
+    const cells = [...new Set([...dependsOn, ...fromAst.cells])].map((d) => this.canonicalDep(scopeDep(d, sheetId)));
+    const rects: RectRegistration[] = [];
+    for (const rect of fromAst.rects) {
+      let sid = sheetId;
+      if (rect.sheetName !== undefined) {
+        const id = this.sheetIdForName(rect.sheetName);
+        if (id === undefined) continue;
+        sid = id;
+      }
+      rects.push({ sheetId: sid, r1: rect.r1, c1: rect.c1, r2: rect.r2, c2: rect.c2 });
+    }
+    return { cells, rects };
   }
 
   /**
@@ -290,9 +525,11 @@ export class FormulaEngine {
 
   private unregister(scopedId: string): void {
     this.graph.clearDependencies(scopedId);
+    this.registeredDeps.delete(scopedId);
     this.formulas.delete(scopedId);
     this.dirty.delete(scopedId);
     this.dateCells.delete(scopedId);
+    this.volatileFormulas.delete(scopedId);
     if (this.circular.delete(scopedId)) this.recheckRing();
     // A deleted/moved anchor takes its spill shadows with it.
     this.retireSpill(scopedId);
@@ -309,13 +546,19 @@ export class FormulaEngine {
 
   /** A cell holds a new value: its readers are stale and anchors spilling over it look again. */
   private propagate(sheetId: string, r: number, c: number): void {
-    const id = `${r},${c}`;
-    this.seen.set(scopedKey(id, sheetId), signatureOf(this.store.getCell(r, c, sheetId)));
+    const key = `${sheetId}:${r},${c}`;
+    this.seen.set(key, signatureOf(this.store.getCell(r, c, sheetId)));
     this.changedCells.push({ sheetId, r, c });
-    this.markDependents(scopedKey(id, sheetId));
+    this.markDependents(key);
     // Cross-sheet readers are keyed by sheet name.
     const sheetName = this.sheetNameForId(sheetId);
-    if (sheetName !== undefined) this.markDependents(`${sheetName}:${id}`);
+    if (sheetName !== undefined) this.markDependents(`${sheetName}:${r},${c}`);
+    // Readers of a rectangle over this cell (ranges too large for per-cell edges).
+    for (const owner of this.graph.rectDependents(sheetId, r, c)) {
+      if (this.dirty.has(owner) || !this.formulas.has(owner)) continue;
+      this.dirty.add(owner);
+      this.queue.push(owner);
+    }
   }
 
   private noteChange(sheetId: string, r: number, c: number): void {
@@ -351,7 +594,7 @@ export class FormulaEngine {
       dependents.set(id, []);
     }
     for (const id of indegree.keys()) {
-      for (const dep of this.graph.getDependencies(id)) {
+      for (const dep of this.graph.dependenciesOf(id) ?? []) {
         if (dep === id || !indegree.has(dep)) continue;
         indegree.set(id, (indegree.get(id) ?? 0) + 1);
         dependents.get(dep)?.push(id);
@@ -393,7 +636,18 @@ export class FormulaEngine {
       for (let pass = 0; this.changedCells.length > 0 || this.queue.length > 0; pass += 1) {
         const changed = this.changedCells.splice(0);
         for (const cell of changed) this.markSpillAnchors(cell);
-        if (pass === 0) this.orderQueue();
+        if (pass === 0) {
+          // The loop condition above means this drain has other work: the
+          // volatile formulas re-evaluate too (they have no precedents, so
+          // nothing else queues them). A drain with nothing to do never
+          // enters the loop, so a no-op rewrite stirs nothing.
+          for (const id of this.volatileFormulas) {
+            if (this.dirty.has(id) || !this.formulas.has(id)) continue;
+            this.dirty.add(id);
+            this.queue.push(id);
+          }
+          this.orderQueue();
+        }
         for (let i = 0; i < this.queue.length; i += 1) {
           const id = this.queue[i];
           if (id === undefined || !this.dirty.has(id)) continue;
@@ -445,6 +699,9 @@ export class FormulaEngine {
             (name) => this.resolveNamedRange(name, sheetId),
             {
               currentCell: { r, c },
+              sheetId,
+              registry: this.registry,
+              onVolatileCall: () => { this.volatileFormulas.add(scopedId); },
               isRowHidden: (row, sheetName) => {
                 let sid = sheetId;
                 if (sheetName !== undefined) {
@@ -453,6 +710,26 @@ export class FormulaEngine {
                   sid = id;
                 }
                 return this.store.getRow(row, sid)?.hide === true;
+              },
+              forEachStoredCell: (rect, sheetName, fn) => {
+                let sid = sheetId;
+                if (sheetName !== undefined) {
+                  const id = this.sheetIdForName(sheetName);
+                  if (id === undefined) return; // a sheet that does not resolve holds nothing
+                  sid = id;
+                }
+                const carrier = this.walkCarrier;
+                this.store.forEachCellInRect({ r1: rect.y1, c1: rect.x1, r2: rect.y2, c2: rect.x2 }, (r, c, cell) => {
+                  // The walk already fetched this cell; resolveCell picks it up
+                  // one-shot instead of hitting the store again. The carrier is
+                  // mutated in place — one allocation per evaluation, not per cell.
+                  carrier.sid = sid;
+                  carrier.x = c;
+                  carrier.y = r;
+                  carrier.cell = cell;
+                  fn(c, r);
+                }, sid);
+                this.walkCarrier.cell = undefined;
               },
             },
           );
@@ -489,51 +766,86 @@ export class FormulaEngine {
   /** Unscoped references resolve against the formula's own sheet, not the active one. */
   private resolveCell(x: number, y: number, sheetName: string | undefined, formulaSheetId: string): FormulaValue {
     let sheetId = formulaSheetId;
-    let cell = sheetName === undefined
-      ? this.store.getCell(y, x, formulaSheetId)
-      : undefined;
     if (sheetName !== undefined) {
       const id = this.sheetIdForName(sheetName);
       if (id === undefined) return '#REF!';
       sheetId = id;
-      cell = this.store.getCell(y, x, id);
+    }
+    const carrier = this.walkCarrier;
+    let cell: Cell | undefined;
+    if (carrier.cell !== undefined && carrier.x === x && carrier.y === y && carrier.sid === sheetId) {
+      cell = carrier.cell;
+      carrier.cell = undefined;
+    } else {
+      cell = this.store.getCell(y, x, sheetId);
     }
     if (cell === undefined) return null;
-    // If this cell has a live formula, evaluate it (Excel pulls the current chain)
-    // — but only while it is stale: within one pass every formula is evaluated
-    // at most once. Formula keys use "r,c" (see util/cell.cellId), not A1.
-    const scoped = scopedKey(`${y},${x}`, sheetId);
-    if (this.formulas.has(scoped)) {
-      if (this.evalStack.has(scoped)) return 0; // circular — Excel iteration-off
-      if (this.forcePull || this.dirty.has(scoped)) {
-        this.evaluateNow(scoped);
-        cell = this.store.getCell(y, x, sheetId);
-        if (cell === undefined) return null;
+    // Only formula cells take part in the engine's dirty/pull machinery —
+    // plain values answer straight from the store, without touching the maps
+    // or building keys. A cell carrying a value was never a formula (writing
+    // a formula drops the value), so the common read skips the text check.
+    // Formula keys use "r,c" (see util/cell.cellId), not A1.
+    if (cell.formula !== undefined || (cell.value === undefined && cell.text.startsWith('='))) {
+      const scoped = `${sheetId}:${y},${x}`;
+      if (this.formulas.has(scoped)) {
+        if (this.evalStack.has(scoped)) return 0; // circular — Excel iteration-off
+        if (this.forcePull || this.dirty.has(scoped)) {
+          this.evaluateNow(scoped);
+          cell = this.store.getCell(y, x, sheetId);
+          if (cell === undefined) return null;
+        }
       }
     }
-    const v = cell.value ?? cell.text;
+    // CellValue ⊆ FormulaValue; a NaN number is host garbage with no Excel
+    // meaning — the text is what the cell shows (typed FALSE, labels …).
+    const raw = cell.value;
+    const v = raw === undefined || (typeof raw === 'number' && Number.isNaN(raw)) ? cell.text : raw;
     if (typeof v === 'string' && v.startsWith('#')) return v; // keep error literals
     if (this.firstNumberRead === undefined && typeof v === 'number') {
-      const read = this.dateCells.get(scoped);
+      // Once per evaluation: the date display of the first number it reads.
+      const read = this.dateCells.get(`${sheetId}:${y},${x}`);
       this.firstNumberRead = read === undefined ? null : read;
     }
     // CellValue ⊆ FormulaValue; only undefined needs normalizing to null.
     return v ?? null;
   }
 
-  private sheetIdForName(name: string): string | undefined {
-    const wanted = name.toLowerCase();
-    for (const { id, name: n } of this.store.getSheets()) {
-      if (n.toLowerCase() === wanted) return id;
+  /**
+   * The cell the running stored-cell walk just delivered, consumed by the
+   * next resolve of the same address — one store lookup saved per walked
+   * cell. One carrier object per engine, mutated in place by the walk.
+   */
+  private walkCarrier = { sid: '', x: -1, y: -1, cell: undefined as Cell | undefined };
+
+  /**
+   * Sheet name/id lookups, cached between changes: every resolved reference
+   * and every cell change used to rebuild and scan the sheet list. The caches
+   * drop on any sheet event (add / rename / delete / copy — see
+   * onSheetsChanged) and on reset.
+   */
+  private sheetsDirty = true;
+  private readonly sheetIdsByName = new Map<string, string>();
+  private readonly sheetNamesById = new Map<string, string>();
+
+  private ensureSheetIndex(): void {
+    if (!this.sheetsDirty) return;
+    this.sheetsDirty = false;
+    this.sheetIdsByName.clear();
+    this.sheetNamesById.clear();
+    for (const { id, name } of this.store.getSheets()) {
+      this.sheetIdsByName.set(name.toLowerCase(), id);
+      this.sheetNamesById.set(id, name);
     }
-    return undefined;
+  }
+
+  private sheetIdForName(name: string): string | undefined {
+    this.ensureSheetIndex();
+    return this.sheetIdsByName.get(name.toLowerCase());
   }
 
   private sheetNameForId(sheetId: string): string | undefined {
-    for (const { id, name } of this.store.getSheets()) {
-      if (id === sheetId) return name;
-    }
-    return undefined;
+    this.ensureSheetIndex();
+    return this.sheetNamesById.get(sheetId);
   }
 
   /** Sheet-local name first, then any sheet that defines it (workbook fallback). */
@@ -553,7 +865,7 @@ export class FormulaEngine {
     const found = this.lookupName(name, formulaSheetId);
     if (found === undefined) return undefined;
     const area = parseInternalRange(found.def.range);
-    if (area === undefined) return undefined;
+    if (area === null) return undefined;
     const sheetName = this.sheetNameForId(found.def.sheetId ?? found.ownerId);
     return sheetName !== undefined ? { ...area, sheetName } : area;
   }
@@ -563,7 +875,7 @@ export class FormulaEngine {
     const found = this.lookupName(name, formulaSheetId);
     if (found === undefined) return null;
     const area = parseInternalRange(found.def.range);
-    if (area === undefined) return null;
+    if (area === null) return null;
     const sheetName = this.sheetNameForId(found.def.sheetId ?? found.ownerId);
     return {
       type: 'range',
@@ -738,19 +1050,6 @@ export class FormulaEngine {
   }
 }
 
-function parseInternalRange(range: string): { r1: number; c1: number; r2: number; c2: number } | undefined {
-  const parts = range.split(':');
-  const start = parts[0]?.split(',').map(Number) ?? [];
-  const end = parts[1]?.split(',').map(Number) ?? start;
-  const r1 = start[0];
-  const c1 = start[1];
-  if (r1 === undefined || c1 === undefined || !Number.isFinite(r1) || !Number.isFinite(c1)) return undefined;
-  const r2 = end[0] ?? r1;
-  const c2 = end[1] ?? c1;
-  if (!Number.isFinite(r2) || !Number.isFinite(c2)) return undefined;
-  return { r1, c1, r2, c2 };
-}
-
 function scopedKey(cellId: string, sheetId: string): string {
   return `${sheetId}:${cellId}`;
 }
@@ -770,6 +1069,7 @@ function parseScopedKey(scopedId: string): { sheetId: string; r: number; c: numb
 }
 
 function scalar(value: FormulaArgument): FormulaValue {
+  if (isSparseRange(value)) return '#VALUE!'; // a range too large to materialise is not one value
   if (isFormulaList(value)) return value[0] ?? null;
   if (isMatrix(value)) return value.data[0] ?? null;
   return value;

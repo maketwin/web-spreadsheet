@@ -1,4 +1,5 @@
 import { cellId, formulaText } from '../util/cell';
+import { TOTAL_COLS } from '../util/gridSize';
 import type { Cell } from '../types';
 import type { FormulaEngine } from './FormulaEngine';
 import type { Store } from '../store/Store';
@@ -27,19 +28,72 @@ export function createFormulaSync(store: Store, engine: FormulaEngine): { readon
     }
     // Deleted sheets take their formulas/dependency edges/spill bookkeeping with
     // them — nothing else tells the engine, and stale entries leak the maps.
-    if (event.type === 'sheet' && event.action === 'delete') {
-      engine.onSheetDeleted(event.sheetId);
+    // Any other sheet change (add / rename / copy / move) invalidates the
+    // engine's sheet name/id caches.
+    if (event.type === 'sheet') {
+      if (event.action === 'delete') engine.onSheetDeleted(event.sheetId);
+      else engine.onSheetsChanged();
       return;
     }
     // A named range moved: formulas resolve names when they register, so the
     // ones it touches have to register again.
-    if (event.type === 'style' && event.id.startsWith('nr:')) {
+    if (event.type === 'namedRanges') {
       engine.onNamedRangeChanged();
+      return;
+    }
+    // A structural insert/delete: the store holds the FINAL state already (the
+    // command body ran to completion before the batch flushed). Formulas on
+    // the moved half-plane remount at their new coordinates right here, and
+    // readers of the half-plane are queued and drained — no per-cell replay.
+    if (event.type === 'structure') {
+      if (replaced || syncing) return;
+      engine.onStructureShift(event.sheetId ?? store.getActiveSheetId(), event.axis, event.kind, event.start, event.count);
+      return;
+    }
+    // A batch of rewritten cells (a sparse clear, or the undo putting a
+    // deleted band back): same handling as per-cell events, once per batch —
+    // up to a point. A batch this side of the threshold is answered per key;
+    // a bigger one (a cleared million-cell column) would cost one deferred
+    // entry per cell, so the engine is handed the batch's bounding rectangle
+    // and does work proportional to the formulas that live in or read it.
+    if (event.type === 'cells') {
+      if (replaced || syncing) return;
+      syncing = true;
+      try {
+        const sheetId = event.sheetId;
+        if (event.keys.length > PER_KEY_CELLS_LIMIT) {
+          engine.onCellsReplaced(sheetId ?? store.getActiveSheetId(), boundsOfKeys(event.keys));
+          return;
+        }
+        const decode = (key: number): { r: number; c: number } => {
+          const r = Math.floor(key / TOTAL_COLS);
+          return { r, c: key - r * TOTAL_COLS };
+        };
+        if (store.isFlushing()) {
+          for (const key of event.keys) {
+            const { r, c } = decode(key);
+            deferred.set(`${sheetId ?? ''}:${cellId(r, c)}`, { r, c, sheetId });
+          }
+        } else {
+          engine.coalesce(() => {
+            for (const key of event.keys) {
+              const { r, c } = decode(key);
+              syncCellFormula(engine, r, c, store.getCell(r, c, sheetId), sheetId);
+              engine.onCellChanged(cellId(r, c), sheetId);
+            }
+          });
+        }
+      } finally {
+        syncing = false;
+      }
       return;
     }
     // The engine's own result writes are not edits: echoing them would
     // re-register and re-evaluate cells it has just brought up to date.
-    if (event.type !== 'cell' || syncing || engine.isSelfWrite(event.sheetId, event.r, event.c)) return;
+    // While `replaced`, the batch-end reload rebuilds every registration from
+    // the final state — per-cell events of the swapped-out workbook (or of the
+    // same flush) would only accumulate into `deferred` to be thrown away.
+    if (event.type !== 'cell' || replaced || syncing || engine.isSelfWrite(event.sheetId, event.r, event.c)) return;
     syncing = true;
     try {
       const sheetId = event.sheetId;
@@ -102,3 +156,23 @@ export function createFormulaSync(store: Store, engine: FormulaEngine): { readon
 }
 
 function syncCellFormula(engine: FormulaEngine, r: number, c: number, cell: Cell | undefined, sheetId?: string): void { const formula = formulaText(cell); const id = cellId(r, c); if (formula === undefined) engine.removeFormula(id, sheetId); else engine.setFormula(id, formula, [], sheetId); }
+
+/** Up to this many rewritten cells are answered per key; beyond it by the batch's bounding rectangle (see the `cells` handler). */
+const PER_KEY_CELLS_LIMIT = 256;
+
+/** The smallest rectangle around `keys` (`r * TOTAL_COLS + c` each). */
+function boundsOfKeys(keys: readonly number[]): { r1: number; c1: number; r2: number; c2: number } {
+  let r1 = Number.POSITIVE_INFINITY;
+  let c1 = Number.POSITIVE_INFINITY;
+  let r2 = 0;
+  let c2 = 0;
+  for (const key of keys) {
+    const r = Math.floor(key / TOTAL_COLS);
+    const c = key - r * TOTAL_COLS;
+    if (r < r1) r1 = r;
+    if (c < c1) c1 = c;
+    if (r > r2) r2 = r;
+    if (c > c2) c2 = c;
+  }
+  return { r1, c1, r2, c2 };
+}

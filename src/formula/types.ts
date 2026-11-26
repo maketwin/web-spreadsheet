@@ -7,10 +7,33 @@ export type FormulaValue = string | number | boolean | Date | null;
  * array (UNIQUE / SORT / FILTER keep the shape too).
  */
 export interface MatrixValue { readonly __matrix: true; readonly rows: number; readonly cols: number; readonly data: readonly FormulaValue[] }
-export type FormulaArgument = FormulaValue | readonly FormulaValue[] | MatrixValue;
+export type FormulaArgument = FormulaValue | readonly FormulaValue[] | MatrixValue | SparseRangeValue;
 export const matrix = (rows: number, cols: number, data: readonly FormulaValue[]): MatrixValue => ({ __matrix: true, rows, cols, data });
 export const isMatrix = (value: FormulaArgument | undefined): value is MatrixValue =>
   typeof value === 'object' && value !== null && !Array.isArray(value) && (value as MatrixValue).__matrix === true;
+
+/**
+ * A range reference whose area exceeds MAX_DENSE_RANGE_CELLS, evaluated
+ * without materialising it: the address space must never be walked, so the
+ * value carries its shape plus a walk of the rectangle's STORED cells only
+ * (values already through the resolver, row-major). Aggregates (SUM, COUNT,
+ * the criteria family …) consume the walk; anything that needs an index into
+ * the range or the full grid — INDEX, VLOOKUP, matrix arithmetic, UNIQUE —
+ * answers '#VALUE!' instead of allocating.
+ */
+export interface SparseRangeValue {
+  readonly __sparse: true;
+  /** 0-based top-left corner of the rectangle. */
+  readonly left: number;
+  readonly top: number;
+  readonly rows: number;
+  readonly cols: number;
+  readonly area: number;
+  /** Row-major walk of the rectangle's stored cells, values through the resolver. */
+  readonly forEachStored: (fn: (value: FormulaValue, y: number, x: number) => void) => void;
+}
+export const isSparseRange = (value: FormulaArgument | undefined): value is SparseRangeValue =>
+  typeof value === 'object' && value !== null && !Array.isArray(value) && (value as SparseRangeValue).__sparse === true;
 
 /**
  * The Excel error values — the only place they are listed. The classic seven,

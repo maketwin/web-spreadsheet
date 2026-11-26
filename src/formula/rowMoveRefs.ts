@@ -1,6 +1,7 @@
 import type { Store } from '../store/Store';
 import type { Cell } from '../types';
-import { cellIdCoords, formulaText, remapFormulaRows, type RemapScope } from '../util/cell';
+import { cellIdCoords, formulaText } from '../util/cell';
+import { remapFormulaRows, type RemapScope } from './refRewrite';
 
 /** [sheetId, r, c, previousCell] for a formula rewritten outside the moved domain. */
 export type OutsideRewrite = readonly [string, number, number, Cell | undefined];
