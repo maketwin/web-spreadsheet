@@ -4,7 +4,8 @@ import { SetCellText } from '../../src/commands/impl/SetCellText';
 import { createFormulaSync } from '../../src/components/Spreadsheet';
 import { FormulaEngine } from '../../src/formula/FormulaEngine';
 import { Store } from '../../src/store/Store';
-import { formulaDependencies, formulaText } from '../../src/util/cell';
+import { formulaText } from '../../src/util/cell';
+import { formulaDependencies } from '../../src/formula/precedents';
 
 function setup(): { store: Store; engine: FormulaEngine; unsubscribe: () => void } {
   const store = new Store();

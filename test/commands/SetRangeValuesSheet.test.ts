@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { executeRange } from '../../src/util/rangeValues';
+import { executeRange } from '../../src/commands/rangeValues';
 import { CommandManager } from '../../src/commands/CommandManager';
 import { Store } from '../../src/store/Store';
 

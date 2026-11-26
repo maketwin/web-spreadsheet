@@ -7,7 +7,7 @@ import { FillRangeCommand } from '../../src/commands/impl/FillRange';
 import { InsertColCommand } from '../../src/commands/impl/InsertCol';
 import { InsertRowCommand } from '../../src/commands/impl/InsertRow';
 import { RemoveDuplicatesCommand } from '../../src/commands/impl/RemoveDuplicates';
-import { captureSheet, type SheetSnapshot } from '../../src/commands/impl/sheetSnapshot';
+import { captureSheet } from '../../src/commands/impl/sheetSnapshot';
 import { Store } from '../../src/store/Store';
 import { TOTAL_COLS, TOTAL_ROWS } from '../../src/util/gridSize';
 
@@ -125,30 +125,42 @@ describe('structural band undo fidelity', () => {
     expect(stateOf(store)).toEqual(afterExec);
   });
 
-  it('a mid-sheet insert snapshots only the band (at most half the cells, all in-band)', () => {
+  it('a mid-sheet insert keeps a light undo record and still restores the region', () => {
+    // A fixed, small-vs-grid materialized region: a 2000x40 block would once
+    // have been held by a band snapshot of 40,000 cells; the move record now
+    // carries only what the undo actually needs (dropped cells, rewritten
+    // formulas) — here, nothing at all.
+    const regionRows = 2000;
+    const regionCols = 40;
     const store = new Store();
-    for (let r = 0; r < TOTAL_ROWS; r += 1) {
-      for (let c = 0; c < TOTAL_COLS; c += 1) store.setCell(r, c, { text: 'v', value: 1 });
+    for (let r = 0; r < regionRows; r += 1) {
+      for (let c = 0; c < regionCols; c += 1) store.setCell(r, c, { text: 'v', value: 1 });
     }
-    const cmd = new InsertRowCommand({ r: 500 });
+    const at = Math.floor(regionRows / 2);
+    const cmd = new InsertRowCommand({ r: at });
     cmd.execute(store);
-    const snap = (cmd as unknown as { oldSheet: SheetSnapshot }).oldSheet;
-    expect(snap.band).toEqual({ axis: 'row', from: 500 });
-    expect(snap.cells.length).toBeLessThanOrEqual((TOTAL_ROWS * TOTAL_COLS) / 2);
-    expect(snap.cells.every(([r]) => r >= 500)).toBe(true);
-    cmd.getUndo().execute(store);
-    expect(store.getCells()).toHaveLength(TOTAL_ROWS * TOTAL_COLS);
+    const undo = (cmd as unknown as { undoData: { spans: ReadonlyArray<readonly [number, number]>; removed: unknown[]; rewrites: unknown[] } }).undoData;
+    expect(undo.spans).toEqual([[at, 1]]);
+    expect(undo.removed).toHaveLength(0); // nothing pushed off the grid
+    expect(undo.rewrites).toHaveLength(0); // no formulas, nothing rewritten
+    expect(cmd.historyWeight()).toBeLessThan(10); // metadata + features only
+    cmd.getUndo().execute.bind(cmd.getUndo())(store);
+    expect(store.getCells()).toHaveLength(regionRows * regionCols);
   });
 
   it('undo resets row metadata only inside the band (no setRow above it)', () => {
     const store = richStore();
     const cmd = new InsertRowCommand({ r: 500 });
     cmd.execute(store);
+    // The band snapshot has no row metadata at/after 500, and resetting empty
+    // indices fires pointless events — give the undo one in-band row to reset.
+    store.setRow(600, { height: 55 });
     const spy = vi.spyOn(store, 'setRow');
     cmd.getUndo().execute(store);
     const touched = spy.mock.calls.map(([r]) => r);
     expect(touched.length).toBeGreaterThan(0);
     expect(touched.every((r) => r >= 500)).toBe(true);
+    expect(store.getRow(600)).toBeUndefined(); // the in-band row was reset
     vi.restoreAllMocks();
   });
 

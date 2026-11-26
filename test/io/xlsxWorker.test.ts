@@ -33,14 +33,16 @@ const garbage = (): ArrayBuffer => new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2,
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('xlsx worker request handling', () => {
-  it('reads a package and reports what it left out', async () => {
+  it('reads a package, dropping only beyond-space cells silently', async () => {
     const { worker } = await load();
-    const bytes = workbookBytes({ A1: { t: 'n', v: 7 }, [`A${TOTAL_ROWS + 1}`]: { t: 'n', v: 1 } }, { s: { r: 0, c: 0 }, e: { r: TOTAL_ROWS, c: 2 } });
+    const bytes = workbookBytes({ A1: { t: 'n', v: 7 }, [`A${TOTAL_ROWS + 1}`]: { t: 'n', v: 1 } }, { s: { r: 0, c: 0 }, e: { r: TOTAL_ROWS, c: 0 } });
     const response = worker.handleXlsxRequest({ id: 1, kind: 'import', buffer: bytes });
     expect(response.ok).toBe(true);
     if (!response.ok || typeof response.result === 'string' || response.result instanceof ArrayBuffer) throw new Error('not an import result');
+    // A1048577 lies past the address space (crafted garbage): dropped, and
+    // since real files cannot exceed the space there is no truncation warning.
     expect(response.result.workbook.sheets[0]!.data.cells.map(([key]) => key)).toEqual(['0,0']);
-    expect(response.result.warnings.some((warning) => warning.includes('1 个单元格'))).toBe(true);
+    expect(response.result.warnings).toEqual([]);
   });
 
   it('exports a serialized workbook and reads it back', async () => {
@@ -57,8 +59,8 @@ describe('xlsx worker request handling', () => {
 
   it('tells a refusal that names its reason from a broken file', async () => {
     const { worker } = await load();
-    // 33 MB of zeros: tiny compressed, over the entry limit once inflated.
-    const zipped = zipSync({ 'xl/workbook.xml': new Uint8Array(33 * 1024 * 1024) });
+    // 129 MB of zeros: tiny compressed, over the entry limit once inflated.
+    const zipped = zipSync({ 'xl/workbook.xml': new Uint8Array(129 * 1024 * 1024) });
     const tooLarge = worker.handleXlsxRequest({ id: 1, kind: 'import', buffer: zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength) as ArrayBuffer });
     expect(tooLarge).toEqual({ id: 1, ok: false, error: '文件解压后过大，已拒绝读取', userFacing: true });
     const broken = worker.handleXlsxRequest({ id: 2, kind: 'import', buffer: garbage() });
@@ -75,7 +77,7 @@ describe('xlsx worker client', () => {
     const imported = await client.importXlsxOffThread(workbookBytes({ A1: { t: 'n', v: 7 } }));
     expect(imported.workbook.sheets[0]!.data.cells[0]![1].value).toBe(7);
     await expect(client.importXlsxOffThread(garbage())).rejects.toThrow('xlsx 解析失败，请检查文件是否损坏');
-    const zipped = zipSync({ 'big.bin': new Uint8Array(33 * 1024 * 1024) });
+    const zipped = zipSync({ 'big.bin': new Uint8Array(129 * 1024 * 1024) });
     await expect(client.importXlsxOffThread(zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength) as ArrayBuffer)).rejects.toThrow('文件解压后过大，已拒绝读取');
   });
 

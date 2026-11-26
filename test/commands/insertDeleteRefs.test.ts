@@ -3,7 +3,8 @@ import { DeleteColCommand, DeleteRowCommand, InsertColCommand, InsertRowCommand 
 import { createFormulaSync } from '../../src/components/Spreadsheet';
 import { FormulaEngine } from '../../src/formula/FormulaEngine';
 import { Store } from '../../src/store/Store';
-import { shiftFormulaCols, shiftFormulaRows } from '../../src/util/cell';
+import { shiftFormulaCols, shiftFormulaRows } from '../../src/formula/refRewrite';
+import { TOTAL_COLS, TOTAL_ROWS } from '../../src/util/gridSize';
 
 describe('shiftFormulaRows', () => {
   it('shifts single refs at and below the insert', () => {
@@ -138,12 +139,23 @@ describe('insert/delete commands rewrite formulas', () => {
 
 describe('grid edge clamping (Excel)', () => {
   it('clamps refs that would move past the last row/col', () => {
-    expect(shiftFormulaRows('=A1000', 0, 1)).toBe('=A1000');
-    expect(shiftFormulaRows('=SUM(A1:A1000)', 999, 1)).toBe('=SUM(A1:A1000)');
-    expect(shiftFormulaCols('=Z1', 0, 1)).toBe('=Z1');
-    expect(shiftFormulaCols('=SUM(A1:Z1)', 25, 1)).toBe('=SUM(A1:Z1)');
+    expect(shiftFormulaRows(`=A${TOTAL_ROWS}`, 0, 1)).toBe(`=A${TOTAL_ROWS}`);
+    expect(shiftFormulaRows(`=SUM(A1:A${TOTAL_ROWS})`, TOTAL_ROWS - 1, 1)).toBe(`=SUM(A1:A${TOTAL_ROWS})`);
+    expect(shiftFormulaCols('=XFD1', 0, 1)).toBe('=XFD1');
+    expect(shiftFormulaCols(`=SUM(A1:${colName(TOTAL_COLS - 1)}1)`, TOTAL_COLS - 1, 1)).toBe(`=SUM(A1:${colName(TOTAL_COLS - 1)}1)`);
   });
 });
+
+/** 0-based column index → A1 letters (XFD for the last grid column). */
+function colName(c: number): string {
+  let name = '';
+  let n = c;
+  while (n >= 0) {
+    name = String.fromCharCode(65 + (n % 26)) + name;
+    n = Math.floor(n / 26) - 1;
+  }
+  return name;
+}
 
 describe('insert/delete shifts non-formula structures', () => {
   function setupSheet(): Store {

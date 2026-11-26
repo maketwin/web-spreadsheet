@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { AutoRowHeightsCommand } from '../../src/util/rowAutofit';
+import { AutoRowHeightsCommand } from '../../src/components/rowAutofit';
 import { ImportCellsCommand } from '../../src/commands/impl/ImportCells';
-import { styleWithAutofitCommand } from '../../src/util/styleAutofit';
+import { styleWithAutofitCommand } from '../../src/components/styleAutofit';
 import { CommandManager } from '../../src/commands/CommandManager';
 import { ROW_HEIGHT } from '../../src/renderer/coordinate';
 import { Store } from '../../src/store/Store';

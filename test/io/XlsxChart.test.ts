@@ -5,6 +5,7 @@ import { CreateChartCommand } from '../../src/commands/impl/CreateChart';
 import { exportXlsxBuffer } from '../../src/io/XlsxExporter';
 import { importXlsx } from '../../src/io/XlsxImporter';
 import { importChartsForSheet, parseChartXml, unionRangeOf } from '../../src/io/chartXmlImport';
+import { TOTAL_COLS, TOTAL_ROWS } from '../../src/util/gridSize';
 import type { ChartAnchor } from '../../src/charts/types';
 
 const barAnchor: ChartAnchor = {
@@ -75,9 +76,9 @@ describe('xlsx chart round-trip', () => {
     expect(chart.anchor?.to).toEqual({ r: 1, c: 2, offX: 2 + 200, offY: 1 + 100 });
   });
 
-  it('clamps crafted chart ranges and anchors to the fixed grid', () => {
-    // A hostile file referencing the full 1M×16K sheet must not survive import
-    // unclamped — readChartData walks the range and would freeze the page.
+  it('keeps crafted full-sheet chart ranges and anchors (import never walks the range)', () => {
+    // A hostile file referencing the whole 1M×16K sheet imports verbatim and
+    // instantly: chart import parses the xml, it never iterates the range.
     const files = new Map<string, string>([
       ['xl/worksheets/_rels/sheet1.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>'],
       ['xl/drawings/drawing1.xml',
@@ -100,14 +101,16 @@ describe('xlsx chart round-trip', () => {
     const chart = charts[0]!;
     const [r1, c1] = chart.range.split(':')[0]!.split(',').map(Number);
     const [r2, c2] = chart.range.split(':')[1]!.split(',').map(Number);
-    expect(r1).toBeLessThanOrEqual(999);
-    expect(r2).toBeLessThanOrEqual(999);
-    expect(c1).toBeLessThanOrEqual(25);
-    expect(c2).toBeLessThanOrEqual(25);
-    expect(chart.anchor?.from.r).toBeLessThanOrEqual(999);
-    expect(chart.anchor?.from.c).toBeLessThanOrEqual(25);
-    expect(chart.anchor?.to.r).toBeLessThanOrEqual(999);
-    expect(chart.anchor?.to.c).toBeLessThanOrEqual(25);
+    // The full-sheet reference is a legal address-space extent now: it comes
+    // through exact, not clamped.
+    expect(r1).toBe(0);
+    expect(c1).toBe(0);
+    expect(r2).toBe(TOTAL_ROWS - 1);
+    expect(c2).toBe(TOTAL_COLS - 1);
+    // Anchor edges keep their coordinates however far they reach (dirty ones
+    // included) — importing costs the xml, not the geometry.
+    expect(chart.anchor?.from).toEqual({ r: 1048570, c: 16383, offX: 0, offY: 0 });
+    expect(chart.anchor?.to).toEqual({ r: 2097152, c: 99999, offX: 0, offY: 0 });
   });
 
   it('quotes sheet names with spaces in exported chart refs (round-trips)', () => {

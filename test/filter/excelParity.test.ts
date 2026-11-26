@@ -6,7 +6,9 @@ import { SortRangeCommand } from '../../src/commands/impl/SortRange';
 import { CommandManager } from '../../src/commands/CommandManager';
 import { FormulaEngine } from '../../src/formula/FormulaEngine';
 import { createFormulaSync } from '../../src/components/Spreadsheet';
-import { cellId, formulaDependencies, formulaText } from '../../src/util/cell';
+import { cellId, formulaText } from '../../src/util/cell';
+import { formulaDependencies } from '../../src/formula/precedents';
+import { TOTAL_ROWS } from '../../src/util/gridSize';
 
 describe('Excel CurrentRegion inference', () => {
   it('infers a data block that does not start at A1', () => {
@@ -165,7 +167,7 @@ describe('store batch', () => {
 });
 
 describe('AutoFilter range for selections', () => {
-  const MAX_ROWS = 1000; // renderer grid: TOTAL_ROWS = 1000
+  const MAX_ROWS = TOTAL_ROWS; // the grid is Excel-sized; a header click selects the whole column
 
   function setupBlock(): Store {
     const store = new Store();

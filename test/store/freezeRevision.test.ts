@@ -9,10 +9,10 @@ describe('sheet freeze', () => {
     const store = new Store();
     expect(store.getFreeze()).toBeUndefined();
     const events: string[] = [];
-    store.subscribe((event) => { if (event.type === 'style') events.push(`${event.sheetId}:${event.id}`); });
+    store.subscribe((event) => { if (event.type === 'freeze') events.push(event.sheetId ?? ''); });
     store.setFreeze({ rows: 2, cols: 1 });
     expect(store.getFreeze()).toEqual({ rows: 2, cols: 1 });
-    expect(events).toEqual(['sheet-1:freeze']);
+    expect(events).toEqual(['sheet-1']);
 
     const other = store.addSheet('Other');
     expect(store.getFreeze(other)).toBeUndefined();

@@ -20,6 +20,16 @@ describe('Selection', () => {
     expect(selection.active).toEqual({ r: 3, c: 4 });
   });
 
+  it('a range selected without an explicit active cell starts at its top-left (the name box: the viewport follows the active cell)', () => {
+    const wholeColumn = rangeSelection({ r1: 0, c1: 0, r2: 1_048_575, c2: 0 });
+    expect(wholeColumn.active).toEqual({ r: 0, c: 0 });
+    expect(wholeColumn.anchor).toEqual({ r: 0, c: 0 });
+    const block = rangeSelection({ r1: 4, c1: 1, r2: 9, c2: 3 });
+    expect(block.active).toEqual({ r: 4, c: 1 });
+    // An explicit active cell still wins (drag and shift-extend rely on it).
+    expect(rangeSelection({ r1: 0, c1: 0, r2: 2, c2: 2 }, undefined, { r: 2, c: 2 }).active).toEqual({ r: 2, c: 2 });
+  });
+
   it('keeps sheet selection kind separate from a plain rectangular range', () => {
     const selection = sheetSelection({ r1: 0, c1: 0, r2: 999, c2: 25 });
 

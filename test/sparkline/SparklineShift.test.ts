@@ -3,6 +3,7 @@ import { shiftSheetSparklines, shiftSparklineSpec } from '../../src/sparkline/sh
 import { InsertRowCommand } from '../../src/commands/impl/InsertRow';
 import { DeleteRowCommand } from '../../src/commands/impl/DeleteRow';
 import { Store } from '../../src/store/Store';
+import { TOTAL_COLS, TOTAL_ROWS } from '../../src/util/gridSize';
 
 import type { SparklineSpec } from '../../src/sparkline/types';
 
@@ -28,8 +29,8 @@ describe('shiftSparklineSpec', () => {
   });
 
   it('insert: a host pushed past the grid edge is removed', () => {
-    expect(shiftSparklineSpec(spec({ row: 999 }), 'insert', 'row', 999, 1)).toBeNull();
-    expect(shiftSparklineSpec(spec({ col: 25 }), 'insert', 'col', 25, 1)).toBeNull();
+    expect(shiftSparklineSpec(spec({ row: TOTAL_ROWS - 1 }), 'insert', 'row', TOTAL_ROWS - 1, 1)).toBeNull();
+    expect(shiftSparklineSpec(spec({ col: TOTAL_COLS - 1 }), 'insert', 'col', TOTAL_COLS - 1, 1)).toBeNull();
   });
 
   it('delete: a host inside the deleted band is removed', () => {

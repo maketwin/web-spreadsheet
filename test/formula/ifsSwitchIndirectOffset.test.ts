@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { FormulaParser } from '../../src/formula/parser';
 import { evaluate } from '../../src/formula/evaluator';
-import type { AstNode, CellResolver, FormulaValue } from '../../src/formula/types';
+import type { AstNode, CellResolver, FormulaArgument, FormulaValue } from '../../src/formula/types';
 
-function run(formula: string, cells: Record<string, FormulaValue> = {}, resolveName?: (name: string) => AstNode | null): FormulaValue | readonly FormulaValue[] | import('../../src/formula/types').MatrixValue {
+function run(formula: string, cells: Record<string, FormulaValue> = {}, resolveName?: (name: string) => AstNode | null): FormulaArgument {
   const ast = new FormulaParser().parse(formula);
   expect(ast).not.toBeNull();
   const resolver: CellResolver = (x, y) => cells[`${x},${y}`] ?? null;

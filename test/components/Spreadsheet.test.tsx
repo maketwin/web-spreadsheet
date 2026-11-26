@@ -1,8 +1,9 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Spreadsheet, SpreadsheetComponent } from '../../src/index';
-import { CanvasRenderer, COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT } from '../../src/renderer/CanvasRenderer';
+import { CanvasRenderer, COL_HEADER_HEIGHT, COL_WIDTH, ROW_HEADER_WIDTH, ROW_HEIGHT, TOTAL_COLS, TOTAL_ROWS } from '../../src/renderer/CanvasRenderer';
 import { Store } from '../../src/store/Store';
+import { num2alpha } from '../../src/util/alphabet';
 
 function installCanvasContext(): void {
   const ctx: Partial<CanvasRenderingContext2D> = {
@@ -226,7 +227,8 @@ describe('Spreadsheet', () => {
 
     fireEvent.keyDown(document.querySelector('canvas') as HTMLCanvasElement, { key: 'Delete' });
 
-    expect(store.getCell(0, 0)?.text).toBe('');
+    // Clearing removes the stored cell — no `{ text: '' }` ghost is left behind.
+    expect(store.getCell(0, 0)).toBeUndefined();
   });
 
   it('column header click selects the column and Delete clears it', async () => {
@@ -242,7 +244,7 @@ describe('Spreadsheet', () => {
     fireEvent.keyDown(canvas, { key: 'Delete' });
 
     expect(screen.getByLabelText('Selected cell')).toHaveValue('A:A');
-    expect(store.getCell(0, 0)?.text).toBe('');
+    expect(store.getCell(0, 0)).toBeUndefined();
   });
 
   it('shift column header click selects multiple columns and Delete clears them', async () => {
@@ -259,8 +261,8 @@ describe('Spreadsheet', () => {
     await act(async () => undefined);
     fireEvent.keyDown(canvas, { key: 'Delete' });
 
-    expect(store.getCell(0, 0)?.text).toBe('');
-    expect(store.getCell(0, 1)?.text).toBe('');
+    expect(store.getCell(0, 0)).toBeUndefined();
+    expect(store.getCell(0, 1)).toBeUndefined();
   });
 
   it('drags across column headers as one continuous column selection', async () => {
@@ -286,7 +288,8 @@ describe('Spreadsheet', () => {
     fireEvent.mouseDown(canvas, { clientX: 5, clientY: 5 });
     await act(async () => undefined);
 
-    expect(screen.getByLabelText('Selected cell')).toHaveValue('A1:Z1000');
+    // Select-all covers the whole address space: A1 through the last column and row.
+    expect(screen.getByLabelText('Selected cell')).toHaveValue(`A1:${num2alpha(TOTAL_COLS - 1)}${TOTAL_ROWS}`);
   });
 
   it('drags across cells and shows the selected rectangular range', async () => {

@@ -411,7 +411,9 @@ describe('importXlsx: SheetJS-written workbook cross-check', () => {
     const data = importXlsx(buf).sheets[0]!.data;
     expect(data.merges).toEqual(['A1:B1']);
     expect(data.rows).toContainEqual([0, { hide: true }]);
-    expect(data.rows).toContainEqual([2, { height: 18 }]);
+    // SheetJS wrote ht="18" — 18 points, which the model stores as 24 px
+    // (4px per 3pt; the old importer misread the raw ht as px).
+    expect(data.rows).toContainEqual([2, { height: 24 }]);
     expect(data.freeze).toBeUndefined();
     expect(data.autoFilter).toBeUndefined();
     expect(data.conditionalRules).toEqual([]);

@@ -76,7 +76,8 @@ describe('importXlsx (full-featured fixture)', () => {
 
   it('imports merges, row heights and column widths', () => {
     expect(first.data.merges).toEqual(['A4:B4']);
-    expect(first.data.rows).toContainEqual([2, { height: 30 }]);
+    // ht="30" is 30 points → 40 px in the model (ht used to be misread as px).
+    expect(first.data.rows).toContainEqual([2, { height: 40 }]);
     const col = first.data.cols.find(([c]) => c === 1);
     expect(col?.[1].width).toBeGreaterThan(100);
   });
@@ -121,14 +122,20 @@ describe('replaceAll keeps formula recalculation alive', () => {
     sync.unsubscribe();
   });
 
-  it('replays content events (row/col sizes, merges) for renderer subscribers', () => {
+  it('announces the replacement once; the imported content is read from the store, not replayed cell by cell', () => {
     const store = new Store();
     const seen: string[] = [];
-    store.subscribe((e) => { seen.push(e.type); });
-    store.replaceAll(importXlsx(buildFixtureXlsx()));
-    for (const t of ['cell', 'row', 'col', 'style', 'merge']) {
-      expect(seen).toContain(t);
-    }
+    store.subscribe((e) => { seen.push(e.type === 'workbook' || e.type === 'sheet' ? `${e.type}:${e.action}` : e.type); });
+    const imported = importXlsx(buildFixtureXlsx());
+    store.replaceAll(imported);
+    // Subscribers reload on the workbook event (formula engine, renderer sizes); a
+    // million-cell workbook must not pay for one event per cell.
+    expect(seen[0]).toBe('workbook:replace');
+    expect(seen).toContain('sheet:add');
+    expect(seen).not.toContain('cell');
+    const sheet = imported.sheets[0]!.data;
+    expect(store.getCellCount()).toBe(sheet.cells.length);
+    expect(store.getMerges()).toHaveLength(sheet.merges.length);
   });
 });
 

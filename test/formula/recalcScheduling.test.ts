@@ -166,7 +166,7 @@ describe('workbook replacement', () => {
     expect(value(store, 0, 1)).toBe(12);
   });
 
-  it('announces the replacement before replaying the cells', () => {
+  it('announces the replacement; the sync layer reloads from the final state instead of per-cell events', () => {
     const { store } = setup();
     put(store, 0, 0, '2');
     put(store, 0, 1, '=A1*3');
@@ -175,7 +175,12 @@ describe('workbook replacement', () => {
     store.subscribe((event) => { types.push(event.type); });
     store.replaceAll(saved);
     expect(types[0]).toBe('workbook');
-    expect(types.slice(1)).toContain('cell');
+    // No per-cell replay: a million-cell import must not allocate a million
+    // events. The formula engine rebuilds on `workbook replace` (batch end).
+    expect(types).not.toContain('cell');
+    expect(types).toContain('sheet');
+    put(store, 0, 0, '4');
+    expect(value(store, 0, 1)).toBe(12);
   });
 
   it('keeps a spilled formula spilling in a copied sheet', () => {

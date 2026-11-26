@@ -3,7 +3,8 @@ import { createFormulaSync } from '../../src/components/Spreadsheet';
 import { FormulaEngine } from '../../src/formula/FormulaEngine';
 import { Store } from '../../src/store/Store';
 import { SetCellText } from '../../src/commands/impl/SetCellText';
-import { cellId, formulaDependencies, formulaText } from '../../src/util/cell';
+import { cellId, formulaText } from '../../src/util/cell';
+import { formulaDependencies } from '../../src/formula/precedents';
 
 /**
  * Excel dynamic-array spill (P0-1): SEQUENCE/FILTER/UNIQUE/SORT write

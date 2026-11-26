@@ -41,4 +41,30 @@ describe('FormulaBar', () => {
     fireEvent.keyDown(screen.getByLabelText('Formula bar'), { key: 'Escape' });
     expect(onCancel).toHaveBeenCalled();
   });
+
+  it('the first click into an unfocused name box selects its text on the next frame, without touching a cleared currentTarget', () => {
+    // React nulls `event.currentTarget` once the handler returns: the deferred
+    // select must run on the element the handler kept, or it throws.
+    const queued: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback): number => { queued.push(callback); return queued.length; });
+    const selected = cellSelection(0, 0);
+    render(<FormulaBar selected={selected} value="x" onChange={() => {}} onCommit={() => {}} />);
+    const nameBox = screen.getByLabelText('Selected cell') as HTMLInputElement;
+    const select = vi.spyOn(nameBox, 'select');
+
+    fireEvent.mouseDown(nameBox);
+    expect(select).not.toHaveBeenCalled();
+    expect(queued).toHaveLength(1);
+    expect(() => queued.splice(0).forEach((callback) => callback(0))).not.toThrow();
+    expect(select).toHaveBeenCalledTimes(1);
+
+    // A click on the already-focused name box places the caret instead: the
+    // mouse-down handler queues nothing (focusing it queues its own select-all).
+    nameBox.focus();
+    queued.splice(0).forEach((callback) => callback(0));
+    fireEvent.mouseDown(nameBox);
+    expect(queued).toHaveLength(0);
+    expect(select).toHaveBeenCalledTimes(2);
+    vi.unstubAllGlobals();
+  });
 });

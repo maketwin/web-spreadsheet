@@ -15,16 +15,20 @@ import { sampleOp } from '../../src/platform/opDetail';
 describe('sampleOp replay classification', () => {
   const store = new Store();
 
-  it('never makes a resize or hide command replayable', () => {
-    expect(sampleOp(new SetRowHeight({ r: 3, height: 30 }), store)).toEqual({ target: '第4行', value: null, replay: null });
-    expect(sampleOp(new SetColWidth({ c: 2, width: 120 }), store)).toEqual({ target: '第3列', value: null, replay: null });
-    for (const cmd of [new SetRowsHiddenCommand({ r1: 1, r2: 3, hidden: true }), new SetColsHiddenCommand({ c1: 1, c2: 3, hidden: true })]) {
-      const sample = sampleOp(cmd, store);
-      if (sample !== null) expect(sample.replay).toBeNull();
-    }
+  // 曾被记成 deleteRow（类名含 Row）的行高命令，现在按稳定身份记为 setRowHeight——
+  // 旧的 5 种载荷形状只属于结构命令和编辑命令，绝不会落到行高/列宽/隐藏头上。
+  it('resizes and hides replay by identity, never as legacy structural payloads', () => {
+    expect(sampleOp(new SetRowHeight({ r: 5, height: 40 }), store)).toEqual({
+      target: '第6行',
+      value: null,
+      replay: { kind: 'command', command: 'setRowHeight', args: { r: 5, height: 40 } },
+    });
+    expect(sampleOp(new SetColWidth({ c: 2, width: 120 }), store)?.replay).toEqual({ kind: 'command', command: 'setColWidth', args: { c: 2, width: 120 } });
+    expect(sampleOp(new SetRowsHiddenCommand({ r1: 1, r2: 3, hidden: true }), store)?.replay).toEqual({ kind: 'command', command: 'setRowsHidden', args: { r1: 1, r2: 3, hidden: true } });
+    expect(sampleOp(new SetColsHiddenCommand({ c1: 1, c2: 3, hidden: true }), store)?.replay).toEqual({ kind: 'command', command: 'setColsHidden', args: { c1: 1, c2: 3, hidden: true } });
   });
 
-  it('gives exactly the structural commands a replay payload', () => {
+  it('gives exactly the structural commands the legacy payload shapes', () => {
     expect(sampleOp(new InsertRowCommand({ r: 1, count: 2 }), store)?.replay).toEqual({ kind: 'insertRow', r: 1, count: 2 });
     expect(sampleOp(new DeleteRowCommand({ r: 3 }), store)?.replay).toEqual({ kind: 'deleteRow', r: 3, count: 1 });
     expect(sampleOp(new InsertColCommand({ c: 2, count: 3 }), store)?.replay).toEqual({ kind: 'insertCol', c: 2, count: 3 });

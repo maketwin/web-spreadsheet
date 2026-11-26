@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Store } from '../../src/store/Store';
 import { FormulaEngine } from '../../src/formula/FormulaEngine';
 import { createFormulaSync } from '../../src/formula/formulaSync';
-import { displayTextOf } from '../../src/util/cell';
+import { displayTextOf } from '../../src/format/displayText';
 
 // A date is its serial number (so it takes part in arithmetic), but a formula
 // whose result is a date shows a date — Excel does not print =TODAY() as 46349.

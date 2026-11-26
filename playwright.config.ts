@@ -5,6 +5,11 @@ import { defineConfig } from '@playwright/test';
  * context menus (right-click), sheet-tab menus, hover submenus and the
  * dialogs behind them. Reuses a running dev server on :5199 when present;
  * otherwise boots one for the run.
+ *
+ * The real-browser scale experiment (`e2e/scale.spec.ts`) is deliberately
+ * not part of this run: it loads a million-cell workbook into the page and
+ * measures, which is not a pass/fail smoke test for a shared runner. It has
+ * its own config and script: `pnpm e2e:scale`.
  */
 export default defineConfig({
   testDir: './e2e',
@@ -26,7 +31,7 @@ export default defineConfig({
         },
       }),
   projects: [
-    { name: 'chromium', use: { browserName: 'chromium' }, testIgnore: /mobile\.spec\.ts/ },
+    { name: 'chromium', use: { browserName: 'chromium' }, testIgnore: /(mobile|scale)\.spec\.ts/ },
     {
       // 触屏视口（手机竖屏）跑移动端手势剧本：点选/长按菜单/平移滚动/双击编辑。
       name: 'chromium-touch',

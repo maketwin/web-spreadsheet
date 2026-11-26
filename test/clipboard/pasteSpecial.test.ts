@@ -36,6 +36,24 @@ describe('paste special (Excel parity)', () => {
     expect(store.getCell(3, 3)).toMatchObject({ text: 'keep me', value: 9, styleId: 'fancy' });
   });
 
+  it('formats mode onto a blank target leaves a styled empty cell (not a ghost)', () => {
+    const store = new Store();
+    const m = buildPasteSpecialMatrix(store, makeSource('copy', [[{ text: 'x', styleId: 'fancy' }]]), 5, 5, undefined, opts({ mode: 'formats' }));
+    new SetRangeValues({ r1: 5, c1: 5, r2: 5, c2: 5, values: m }).execute(store);
+    // The styled blank is a real cell (Excel keeps formats-only paste results);
+    // ghost removal must not delete it.
+    expect(store.getCell(5, 5)).toEqual({ text: '', styleId: 'fancy' });
+    expect(store.getCellCount()).toBe(1);
+  });
+
+  it('formats mode from a blank source onto a blank target stores nothing', () => {
+    const store = new Store();
+    const m = buildPasteSpecialMatrix(store, makeSource('copy', [[{ text: '' }]]), 1, 1, undefined, opts({ mode: 'formats' }));
+    new SetRangeValues({ r1: 1, c1: 1, r2: 1, c2: 1, values: m }).execute(store);
+    expect(store.getCellCount()).toBe(0);
+    expect(store.getCell(1, 1)).toBeUndefined();
+  });
+
   it('all mode replaces the whole cell including style', () => {
     const store = new Store();
     store.setCell(0, 0, { text: 'a', value: 1, styleId: 's1', type: 'number' });

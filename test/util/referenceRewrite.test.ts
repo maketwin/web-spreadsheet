@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { remapFormulaRows, shiftFormulaCols, shiftFormulaRows } from '../../src/util/cell';
+import { remapFormulaRows, shiftFormulaCols, shiftFormulaRows } from '../../src/formula/refRewrite';
 import { shiftFormula } from '../../src/commands/impl/FillRange';
 import { FormulaEngine } from '../../src/formula/FormulaEngine';
 import { createFormulaSync } from '../../src/formula/formulaSync';
@@ -38,7 +38,8 @@ describe('reference rewriting', () => {
     expect(shiftFormula('=A1', 0, -1)).toBe('=#REF!');
     // A whole range dies with either endpoint; an anchored endpoint survives.
     expect(shiftFormula('=SUM($A$1:A5)', -1, 0)).toBe('=SUM($A$1:A4)');
-    expect(shiftFormula('=Z1', 0, 1)).toBe('=#REF!');
+    // XFD is the last column: one step right is off the grid.
+    expect(shiftFormula('=XFD1', 0, 1)).toBe('=#REF!');
   });
 
   it('keeps Excel delete semantics for ranges', () => {

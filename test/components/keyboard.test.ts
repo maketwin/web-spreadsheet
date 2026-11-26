@@ -85,7 +85,8 @@ describe('handleCanvasKeyDown dispatch', () => {
     const store = storeWithData();
     const calls = fire(store, { key: 'Delete' });
     expect(calls.preventDefault).toBe(1);
-    expect(store.getCell(5, 2)?.text).toBe('');
+    // Clearing removes the stored cell — no `{ text: '' }` ghost is left behind.
+    expect(store.getCell(5, 2)).toBeUndefined();
   });
 
   it('Ctrl+X / Ctrl+V route to the clipboard session (Ctrl+C is owned by the browser copy event)', () => {

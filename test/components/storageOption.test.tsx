@@ -3,9 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Store } from '../../src/store/Store';
 import type { Spreadsheet as SpreadsheetFacade, SpreadsheetOptions } from '../../src/components/Spreadsheet';
 import type * as AutoSaveModule from '../../src/db/autoSave';
+import type * as WorkbookDBModule from '../../src/db/WorkbookDB';
 
-const db = vi.hoisted(() => ({ saveWorkbook: vi.fn(), loadWorkbook: vi.fn(), deleteWorkbook: vi.fn() }));
-vi.mock('../../src/db/WorkbookDB', () => ({ ...db, DEFAULT_ID: 'default' }));
+const db = vi.hoisted(() => ({ saveWorkbook: vi.fn(), loadWorkbook: vi.fn(), deleteWorkbook: vi.fn(), putWorkbookRecord: vi.fn() }));
+vi.mock('../../src/db/WorkbookDB', async () => {
+  const actual = await vi.importActual<typeof WorkbookDBModule>('../../src/db/WorkbookDB');
+  return { ...actual, saveWorkbook: db.saveWorkbook, loadWorkbook: db.loadWorkbook, deleteWorkbook: db.deleteWorkbook, putWorkbookRecord: db.putWorkbookRecord };
+});
 const autoSave = vi.hoisted(() => ({ startAutoSave: vi.fn() }));
 vi.mock('../../src/db/autoSave', () => autoSave);
 
@@ -37,6 +41,7 @@ describe('storage option', () => {
     autoSave.startAutoSave.mockReset().mockReturnValue({ stop: vi.fn() });
     db.saveWorkbook.mockReset().mockResolvedValue(undefined);
     db.loadWorkbook.mockReset().mockResolvedValue(undefined);
+    db.putWorkbookRecord.mockReset().mockResolvedValue(undefined);
     localStorage.clear();
   });
   afterEach(() => { vi.restoreAllMocks(); document.body.innerHTML = ''; });
@@ -49,10 +54,12 @@ describe('storage option', () => {
       const handle = startAutoSave(store, 'oa-report');
       store.setCell(0, 0, { text: '1', value: 1 });
       store.setCell(0, 1, { text: '2', value: 2 });
-      vi.advanceTimersByTime(1500);
+      // The chunked encode yields one timer tick after the debounce fires.
+      await vi.advanceTimersByTimeAsync(1500);
+      await vi.advanceTimersByTimeAsync(1);
       handle.stop();
-      expect(db.saveWorkbook).toHaveBeenCalledTimes(1);
-      expect(db.saveWorkbook.mock.calls[0]?.[0]).toBe('oa-report');
+      expect(db.putWorkbookRecord).toHaveBeenCalledTimes(1);
+      expect(db.putWorkbookRecord.mock.calls[0]?.[0].id).toBe('oa-report');
     } finally {
       vi.useRealTimers();
     }

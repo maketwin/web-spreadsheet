@@ -22,6 +22,10 @@ const makeProject = (): MockProject => ({
 
 interface EditArgs { readonly r: number; readonly c: number; readonly text: string }
 class FakeEdit extends Command<EditArgs> {
+  // 采样按命令身份分派后，匿名命令不再被按形状猜——测试替身声明与 SetCellText
+  // 相同的身份（它就是模拟一个单元格编辑）
+  public override kind(): 'setCellText' { return 'setCellText'; }
+
   public execute(store: Store): void {
     store.setCell(this.args.r, this.args.c, { text: this.args.text, value: this.args.text });
   }

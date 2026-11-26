@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { sameRange, skipHiddenCells } from '../../src/selection/visibleStep';
 import { Store } from '../../src/store/Store';
+import { TOTAL_COLS } from '../../src/util/gridSize';
 
 const at = (r: number, c: number) => ({ r1: r, c1: c, r2: r, c2: c });
 
@@ -28,9 +29,12 @@ describe('skipHiddenCells (Excel: arrows never land on hidden rows/cols)', () =>
 
   it('stays put when the rest of the grid in that direction is hidden', () => {
     const store = new Store();
-    store.setCol(1, { hide: true });
-    for (let c = 1; c < 26; c += 1) store.setCol(c, { hide: true });
-    expect(skipHiddenCells(store, at(0, 0), at(0, 1), 0, 1)).toEqual(at(0, 0));
+    // Everything to the right of the second-to-last column is hidden, so the
+    // arrow has nowhere to land and the selection stays (a million hidden
+    // rows/cols cannot be materialised — the scene lives at the grid edge).
+    store.setCol(TOTAL_COLS - 1, { hide: true });
+    store.setCol(TOTAL_COLS - 2, { hide: true });
+    expect(skipHiddenCells(store, at(0, TOTAL_COLS - 3), at(0, TOTAL_COLS - 2), 0, 1)).toEqual(at(0, TOTAL_COLS - 3));
   });
 });
 

@@ -8,7 +8,7 @@ import { InsertRowCommand } from '../../src/commands/impl/InsertRow';
 import { FillRangeCommand } from '../../src/commands/impl/FillRange';
 import { MoveRange } from '../../src/commands/impl/MoveRange';
 import { snapshotCells, buildSessionPasteValues } from '../../src/clipboard/session';
-import { applyMatrix } from '../../src/util/rangeValues';
+import { applyMatrix } from '../../src/commands/rangeValues';
 
 /**
  * Spill × structural operations (P1 regression suite). Spill shadows are
