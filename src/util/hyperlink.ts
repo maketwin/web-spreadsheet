@@ -1,6 +1,6 @@
 import type { Store } from '../store/Store';
 import type { CellHyperlink } from '../types';
-import { parseRange } from './cell';
+import { parseRange } from './rangeNotation';
 
 export type HyperlinkOpenResult =
   | { readonly kind: 'external'; readonly url: string }
