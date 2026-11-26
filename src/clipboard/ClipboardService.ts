@@ -1,4 +1,5 @@
 import { cellFromText } from '../util/cell';
+import { makeCopyStyleInterner } from '../commands/impl/styleIdentity';
 import type { RangeAddress } from '../selection/Range';
 import type { Store } from '../store/Store';
 import type { Cell, RichTextRun, RunStyle, Style } from '../types';
@@ -18,6 +19,7 @@ export class ClipboardService {
     const html = toHtml(cells);
     return { text, html };
   }
+
 
   public static async copy(store: Store, range: RangeAddress, clipboard: Clipboard = navigator.clipboard): Promise<boolean> {
     const payload = ClipboardService.createPayload(store, range);
@@ -65,13 +67,44 @@ export class ClipboardService {
   }
 }
 
+/**
+ * The part of a copied selection worth reading: the bounding box of the cells
+ * actually stored inside the selection, anchored at the selection's own
+ * top-left so an empty or disjoint copy still yields one blank cell and the
+ * paste anchor stays put. The address space is Excel-sized — a stray cell in
+ * another column must not stretch this copy (a million-row matrix for a
+ * hundred-row column), so the box comes from one `forEachCellInRect` walk
+ * (already min(area, stored cells)) instead of the sheet-wide used bounds.
+ * Interior blank rows/columns keep their positions, only fully blank trailing
+ * ones are cut.
+ */
+export function copySourceRect(store: Store, range: RangeAddress): RangeAddress {
+  const r1 = Math.min(range.r1, range.r2);
+  const c1 = Math.min(range.c1, range.c2);
+  const r2 = Math.max(range.r1, range.r2);
+  const c2 = Math.max(range.c1, range.c2);
+  let lastR = r1 - 1;
+  let lastC = c1 - 1;
+  store.forEachCellInRect({ r1, c1, r2, c2 }, (r, c) => {
+    if (r > lastR) lastR = r;
+    if (c > lastC) lastC = c;
+  });
+  return { r1, c1, r2: Math.max(r1, lastR), c2: Math.max(c1, lastC) };
+}
+
 function readCellMatrix(store: Store, range: RangeAddress): ReadonlyArray<ReadonlyArray<Cell | undefined>> {
-  const rows: Array<Array<Cell | undefined>> = [];
-  for (let r = range.r1; r <= range.r2; r += 1) {
-    const row: Array<Cell | undefined> = [];
-    for (let c = range.c1; c <= range.c2; c += 1) row.push(store.getCell(r, c));
-    rows.push(row);
-  }
+  const rect = copySourceRect(store, range);
+  const rows: Array<Array<Cell | undefined>> = Array.from({ length: rect.r2 - rect.r1 + 1 }, () =>
+    Array.from({ length: rect.c2 - rect.c1 + 1 }, () => undefined));
+  // Excel copies the effective format: cells styled only through their
+  // row/column default get a materialized own styleId (content-interned).
+  const intern = makeCopyStyleInterner(store);
+  store.forEachCellInRect(rect, (r, c, cell) => {
+    if (cell.styleId !== undefined) { rows[r - rect.r1]![c - rect.c1] = cell; return; }
+    const effective = store.getCellStyle(r, c, cell);
+    if (effective === undefined) { rows[r - rect.r1]![c - rect.c1] = cell; return; }
+    rows[r - rect.r1]![c - rect.c1] = { ...cell, styleId: intern(effective) };
+  });
   return rows;
 }
 

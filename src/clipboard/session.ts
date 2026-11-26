@@ -2,11 +2,14 @@ import type { Store } from '../store/Store';
 import type { RangeAddress } from '../selection/Range';
 import type { Cell } from '../types';
 import { shiftFormula } from '../commands/impl/FillRange';
-import type { CellPatch } from '../commands/impl/SetRangeValues';
-import { ClipboardService } from './ClipboardService';
+import { type CellPatch } from '../commands/impl/SetRangeValues';
+import type { Command } from '../commands/Command';
+import { ClipboardService, copySourceRect } from './ClipboardService';
+import { makeCopyStyleInterner } from '../commands/impl/styleIdentity';
 import { mergeToString, parseMerge, rangesIntersect, sameRange } from '../util/merge';
-import { applyMatrix } from '../util/rangeValues';
+import { applyMatrix, ClearCellsCommand } from '../commands/rangeValues';
 import { isSpillShadow } from '../util/spillShadow';
+import { MAX_MATERIALIZED_CELLS } from '../util/limits';
 import type { CommandManager } from '../commands/CommandManager';
 
 /** `sheetId` is the sheet the block was copied from: a paste that lands on another sheet re-registers its styles there and, for a cut, clears the source there. */
@@ -101,17 +104,21 @@ export function planMergePaste(store: Store, sourceMerges: readonly RangeAddress
   return { ok: true, rect, add };
 }
 
-/** Deep-enough snapshot of the source block so the paste is value/style/formula-faithful. Spill shadows are skipped: the pasted anchor formula re-spills, and pasting shadow values would block it. */
+/** Deep-enough snapshot of the source block so the paste is value/style/formula-faithful. Only the used part of `range` is read (see copySourceRect) — an entire-column copy must not enumerate the grid. Spill shadows are skipped: the pasted anchor formula re-spills, and pasting shadow values would block it. Cells that only LOOK styled through the row/column default get a materialized own styleId (content-interned), so pasting them elsewhere carries the format like Excel. */
 export function snapshotCells(store: Store, range: RangeAddress): ReadonlyArray<ReadonlyArray<Cell | undefined>> {
-  const rows: Array<ReadonlyArray<Cell | undefined>> = [];
-  for (let r = range.r1; r <= range.r2; r += 1) {
-    const row: Array<Cell | undefined> = [];
-    for (let c = range.c1; c <= range.c2; c += 1) {
-      const cell = store.getCell(r, c);
-      row.push(cell === undefined || isSpillShadow(cell) ? undefined : { ...cell });
+  const rect = copySourceRect(store, range);
+  const rows: Array<Array<Cell | undefined>> = Array.from({ length: rect.r2 - rect.r1 + 1 }, () =>
+    Array.from({ length: rect.c2 - rect.c1 + 1 }, () => undefined));
+  const intern = makeCopyStyleInterner(store);
+  store.forEachCellInRect(rect, (r, c, cell) => {
+    if (isSpillShadow(cell)) return;
+    const snapshot: Cell = { ...cell };
+    if (snapshot.styleId === undefined) {
+      const effective = store.getCellStyle(r, c, cell);
+      if (effective !== undefined) snapshot.styleId = intern(effective);
     }
-    rows.push(row);
-  }
+    rows[r - rect.r1]![c - rect.c1] = snapshot;
+  });
   return rows;
 }
 
@@ -153,13 +160,16 @@ export function buildSessionPasteValues(session: ClipboardSessionState, r: numbe
 
 /**
  * Excel paste tiling: a target exactly N×M times the copied block gets filled
- * with repeats; anything else pastes a single copy at the anchor.
+ * with repeats; anything else pastes a single copy at the anchor. A target big
+ * enough that tiling would materialise more than MAX_MATERIALIZED_CELLS (an
+ * entire-column selection, say) pastes once at the anchor instead — the
+ * address space is not an allocation.
  */
 function tiledDims(srcRows: number, srcCols: number, target?: RangeAddress): [number, number] {
   if (target === undefined || srcRows === 0 || srcCols === 0) return [srcRows, srcCols];
   const tr = target.r2 - target.r1 + 1;
   const tc = target.c2 - target.c1 + 1;
-  if ((tr > srcRows || tc > srcCols) && tr % srcRows === 0 && tc % srcCols === 0) return [tr, tc];
+  if ((tr > srcRows || tc > srcCols) && tr % srcRows === 0 && tc % srcCols === 0 && tr * tc <= MAX_MATERIALIZED_CELLS) return [tr, tc];
   return [srcRows, srcCols];
 }
 
@@ -176,6 +186,7 @@ export function tilePlainCells(cells: Cell[][], target: RangeAddress): Cell[][] 
  * Combine a multi-selection into one rectangular block for copying.
  * Excel allows it only when every range shares the same rows (columns
  * concatenated) or the same columns (rows concatenated); otherwise null.
+ * Only the used part of each range is read (see copySourceRect).
  */
 export function combineMultiRanges(store: Store, ranges: readonly RangeAddress[]): { range: RangeAddress; cells: ReadonlyArray<ReadonlyArray<Cell | undefined>>; text: string } | null {
   const sorted = [...ranges].sort((a, b) => a.r1 - b.r1 || a.c1 - b.c1);
@@ -183,26 +194,60 @@ export function combineMultiRanges(store: Store, ranges: readonly RangeAddress[]
   const sameCols = sorted.every((rg) => rg.c1 === sorted[0]!.c1 && rg.c2 === sorted[0]!.c2);
   if (!sameRows && !sameCols) return null;
   const cellRows: Array<ReadonlyArray<Cell | undefined>> = [];
+  // Same materialization as snapshotCells: inherited formats travel with the copy.
+  const intern = makeCopyStyleInterner(store);
+  const snapshotAt = (r: number, c: number): Cell | undefined => {
+    const cell = store.getCell(r, c);
+    if (cell === undefined || isSpillShadow(cell)) return undefined;
+    if (cell.styleId !== undefined) return { ...cell };
+    const effective = store.getCellStyle(r, c, cell);
+    return effective === undefined ? { ...cell } : { ...cell, styleId: intern(effective) };
+  };
+  // Shared extent from the union of all ranges, so every line of the block is
+  // the same length even when the ranges' stored parts end at different rows
+  // or columns.
+  const union = sorted.reduce((acc, rg) => ({ r1: Math.min(acc.r1, rg.r1), c1: Math.min(acc.c1, rg.c1), r2: Math.max(acc.r2, rg.r2), c2: Math.max(acc.c2, rg.c2) }));
   if (sameRows) {
     const byCols = [...sorted].sort((a, b) => a.c1 - b.c1);
-    for (let r = sorted[0]!.r1; r <= sorted[0]!.r2; r += 1) {
+    const rowsRect = copySourceRect(store, union);
+    for (let r = rowsRect.r1; r <= rowsRect.r2; r += 1) {
       const line: Array<Cell | undefined> = [];
-      for (const rg of byCols) for (let c = rg.c1; c <= rg.c2; c += 1) { const cell = store.getCell(r, c); line.push(cell === undefined || isSpillShadow(cell) ? undefined : { ...cell }); }
+      for (const rg of byCols) {
+        const rect = copySourceRect(store, rg);
+        for (let c = rect.c1; c <= rect.c2; c += 1) { line.push(snapshotAt(r, c)); }
+      }
       cellRows.push(line);
     }
   } else {
     const byRows = [...sorted].sort((a, b) => a.r1 - b.r1);
+    const colsRect = copySourceRect(store, union);
     for (const rg of byRows) {
-      for (let r = rg.r1; r <= rg.r2; r += 1) {
+      const rect = copySourceRect(store, rg);
+      for (let r = rect.r1; r <= rect.r2; r += 1) {
         const line: Array<Cell | undefined> = [];
-        for (let c = sorted[0]!.c1; c <= sorted[0]!.c2; c += 1) { const cell = store.getCell(r, c); line.push(cell === undefined || isSpillShadow(cell) ? undefined : { ...cell }); }
+        for (let c = colsRect.c1; c <= colsRect.c2; c += 1) { line.push(snapshotAt(r, c)); }
         cellRows.push(line);
       }
     }
   }
-  const union = sorted.reduce((acc, rg) => ({ r1: Math.min(acc.r1, rg.r1), c1: Math.min(acc.c1, rg.c1), r2: Math.max(acc.r2, rg.r2), c2: Math.max(acc.c2, rg.c2) }));
   const text = cellRows.map((line) => line.map((cell) => cell?.text ?? '').join('\t')).join('\n');
   return { range: union, cells: cellRows, text };
+}
+
+/**
+ * Cut clears its source: a sparse clear that touches only the stored cells of
+ * the source range (an entire-column source must not enumerate the address
+ * space, let alone build a dense clear matrix over it). Undo restores exactly
+ * the cells that were there — the skipped blanks had nothing to restore.
+ */
+export function sparseClearCmd(store: Store, range: RangeAddress, sheetId?: string): Command {
+  return new ClearCellsCommand({ rect: store.limitToData(range, sheetId), ...(sheetId !== undefined ? { sheetId } : {}) });
+}
+
+/** Undoable sparse clear of the active sheet's `range` (the Delete-key / context-menu path). */
+export function sparseClearRange(store: Store, cmdManager: CommandManager | undefined, range: RangeAddress): void {
+  const cmd = sparseClearCmd(store, range);
+  if (cmdManager === undefined) cmd.execute.bind(cmd)(store); else cmdManager.execute.bind(cmdManager)(cmd);
 }
 
 export async function pasteFromClipboard(store: Store, cmdManager: CommandManager | undefined, target: RangeAddress): Promise<MergePastePlan> {

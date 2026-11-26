@@ -1,7 +1,7 @@
 import * as XLSX from 'xlsx';
 import { safeUnzip } from './safeUnzip';
-import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
-import type { AutoFilterState, Cell, Style, RichTextRun } from '../types';
+import { TOTAL_COLS, TOTAL_ROWS } from '../util/gridSize';
+import type { AutoFilterState, Cell, Style, RichTextRun, RowMeta, ColMeta } from '../types';
 import type { SerializedStore } from '../store/Store';
 import type { SerializedSheetData, SheetFreeze } from '../store/SheetData';
 import type { ChartSpec } from '../charts/types';
@@ -42,6 +42,26 @@ interface StyleTables {
   readonly borders: readonly BorderEntry[];
   /** styles.xml `<dxfs>` (dxfId → pre-mapped conditional-format rule style). */
   readonly dxfs: readonly Partial<Style>[];
+  /** styles.xml custom `<numFmt numFmtId formatCode>` table. */
+  readonly numFmts: Readonly<Record<number, string>>;
+}
+
+/**
+ * Excel's built-in numFmtId → format code (the subset a worksheet plausibly
+ * carries). Axis styles have no cell to carry the resolved format string, so
+ * their xf's numFmtId is resolved through this table or the custom one.
+ */
+const BUILT_IN_NUMFMT_IDS: Readonly<Record<number, string>> = {
+  1: '0', 2: '0.00', 3: '#,##0', 4: '#,##0.00', 9: '0%', 10: '0.00%', 11: '0.00E+00',
+  14: 'm/d/yy', 22: 'm/d/yy h:mm', 37: '#,##0;(#,##0)', 38: '#,##0;[Red](#,##0)',
+  39: '#,##0.00;(#,##0.00)', 40: '#,##0.00;[Red](#,##0.00)', 45: 'h:mm:ss', 46: 'h:mm', 47: 'h:mm:ss;@', 49: '@',
+};
+
+/** Number format a col/row xf carries: custom table first, then the built-ins. */
+function numFmtCodeOf(tables: StyleTables, xfIdx: number): string | undefined {
+  const id = tables.xfs[xfIdx]?.numFmtId;
+  if (id === undefined || id === 0) return undefined;
+  return tables.numFmts[id] ?? BUILT_IN_NUMFMT_IDS[id];
 }
 
 interface FontEntry {
@@ -59,6 +79,7 @@ interface FillEntry {
 }
 
 interface XfEntry {
+  readonly numFmtId?: number;
   readonly fontId?: number;
   readonly fillId?: number;
   readonly borderId?: number;
@@ -100,7 +121,7 @@ const BORDER_LINE_MAP: Readonly<Record<string, BorderLine>> = {
 };
 
 /** Empty worksheets still occupy a slot in SheetNames. */
-export function importXlsx(buffer: ArrayBuffer, onWarn?: (message: string) => void): SerializedStore {
+export function importXlsx(buffer: ArrayBuffer, _onWarn?: (message: string) => void): SerializedStore {
   // Unpack under the zip limits first: the SheetJS reader inflates the whole
   // package on its own, so a package bomb has to be stopped before it runs.
   const files = readZipEntries(buffer);
@@ -115,14 +136,13 @@ export function importXlsx(buffer: ArrayBuffer, onWarn?: (message: string) => vo
   const tables = readStyleTables(wb, files.get('xl/styles.xml') ?? '');
   const sheetPaths = resolveSheetPaths(files);
   const sst = parseSharedStrings(files.get('xl/sharedStrings.xml') ?? '');
-  const skipped = { cells: 0, merges: 0 };
 
   const sheets = wb.SheetNames.map((name, index) => {
     const ws = wb.Sheets[name];
     const sheetXml = files.get(sheetPaths.get(name) ?? '') ?? '';
     const data = ws === undefined
       ? emptySheetData()
-      : convertSheet(ws, tables, sheetStyleIndexes(sheetXml), sheetStringCells(sheetXml), sst, skipped);
+      : convertSheet(ws, tables, sheetStyleIndexes(sheetXml), sheetStringCells(sheetXml), sst, sheetXml);
     // Floating chart objects: geometry from the drawing part, type/range/title from the chart part.
     const sheetPath = sheetPaths.get(name);
     if (sheetPath !== undefined) {
@@ -137,13 +157,10 @@ export function importXlsx(buffer: ArrayBuffer, onWarn?: (message: string) => vo
     return { id: `sheet-${index + 1}`, name, data };
   });
   if (sheets.length === 0) sheets.push({ id: 'sheet-1', name: 'Sheet1', data: emptySheetData() });
-  // The grid is fixed-size: say what was left out instead of failing silently.
-  if (skipped.cells > 0) {
-    const note = `xlsx import: skipped ${skipped.cells} cells outside the ${TOTAL_ROWS}×${TOTAL_COLS} grid`;
-    console.warn(note);
-    onWarn?.(`有 ${skipped.cells} 个单元格超出 ${TOTAL_ROWS} 行 × ${TOTAL_COLS} 列的网格，未导入`);
-  }
-  if (skipped.merges > 0) onWarn?.(`有 ${skipped.merges} 个合并区域超出网格，已忽略`);
+  // No truncation reporting: the grid is Excel's whole address space, so a
+  // legal file never exceeds it and there is nothing left out to warn about.
+  // Coordinates past the space are crafted garbage and are dropped silently
+  // (see convertSheet). The onWarn parameter stays for callers' signatures.
   return { activeSheetId: sheets[0]!.id, sheets };
 }
 
@@ -163,7 +180,19 @@ function readStyleTables(wb: XLSX.WorkBook, stylesXml: string): StyleTables {
     xfs: styles?.CellXf ?? [],
     borders: readBorders(stylesXml),
     dxfs: readDxfs(stylesXml),
+    numFmts: readNumFmts(stylesXml),
   };
+}
+
+/** styles.xml custom formats (`numFmtId` → `formatCode`), attributes entity-decoded. */
+function readNumFmts(stylesXml: string): Readonly<Record<number, string>> {
+  const out: Record<number, string> = {};
+  for (const el of xmlElements(stylesXml, 'numFmt')) {
+    const id = Number(attr(el.head, 'numFmtId'));
+    const code = attr(el.head, 'formatCode');
+    if (Number.isInteger(id) && id > 0 && code !== undefined) out[id] = decodeXmlEntities(code);
+  }
+  return out;
 }
 
 /** One matched element: `head` is the open tag text, `body` the inner xml. */
@@ -301,21 +330,18 @@ function sheetStyleIndexes(xml: string): Map<string, number> {
   return out;
 }
 
-function convertSheet(ws: XLSX.WorkSheet, tables: StyleTables, styleIdx: Map<string, number>, stringCells: Map<string, { shared?: number; runs?: readonly RichTextRun[] }>, sst: readonly SharedStringEntry[], skipped: { cells: number; merges: number }): SerializedSheetData {
+function convertSheet(ws: XLSX.WorkSheet, tables: StyleTables, styleIdx: Map<string, number>, stringCells: Map<string, { shared?: number; runs?: readonly RichTextRun[] }>, sst: readonly SharedStringEntry[], sheetXml: string): SerializedSheetData {
   const data = emptySheetData();
   const cells = data.cells as Array<[string, Cell]>;
   const styles = data.styles as Array<[string, Style]>;
   const merges = data.merges as string[];
-  const rows = data.rows as Array<[number, { height?: number; hide?: boolean }]>;
-  const cols = data.cols as Array<[number, { width?: number; hide?: boolean }]>;
-  // The grid is fixed-size: coordinates beyond it are dropped, never silently
-  // invisible — importXlsx reports the count. A crafted far-away cell cannot
-  // inflate the workbook either.
-  const inGrid = (r: number, c: number): boolean => {
-    if (r >= 0 && r < TOTAL_ROWS && c >= 0 && c < TOTAL_COLS) return true;
-    skipped.cells += 1;
-    return false;
-  };
+  const rows = data.rows;
+  const cols = data.cols;
+  // The grid is Excel's whole address space, so a legal file never leaves it.
+  // Coordinates past it (only possible in a crafted file) are dirty data:
+  // skipped defensively, never warned about, and they cannot inflate the
+  // workbook — each is one skipped cell.
+  const inGrid = (r: number, c: number): boolean => r >= 0 && r < TOTAL_ROWS && c >= 0 && c < TOTAL_COLS;
   // Identical styles share one id (content-hash dedup) instead of one id per
   // cell — keeps serialized size proportional to distinct styles, not cells.
   const styleIds = new Map<string, string>();
@@ -391,26 +417,72 @@ function convertSheet(ws: XLSX.WorkSheet, tables: StyleTables, styleIdx: Map<str
   }
 
   for (const m of (ws as { '!merges'?: XLSX.Range[] })['!merges'] ?? []) {
-    // A merge reaching past the grid would cover cells that do not exist: drop it whole.
-    if (m.s.r < 0 || m.s.c < 0 || m.e.r >= TOTAL_ROWS || m.e.c >= TOTAL_COLS) { skipped.merges += 1; continue; }
+    // A merge reaching past the address space would cover cells that cannot
+    // exist: crafted garbage, dropped whole.
+    if (m.s.r < 0 || m.s.c < 0 || m.e.r >= TOTAL_ROWS || m.e.c >= TOTAL_COLS) continue;
     merges.push(`${XLSX.utils.encode_cell(m.s)}:${XLSX.utils.encode_cell(m.e)}`);
   }
+  // Row/column metadata lands in one map per axis so widths/heights (read by
+  // SheetJS) and default styles (read from the raw xml below) merge on the
+  // same entry, then emit ascending.
+  const rowMetas = new Map<number, RowMeta>();
+  const colMetas = new Map<number, ColMeta>();
   ((ws as { '!rows'?: Array<{ hpx?: number; hpt?: number; hidden?: boolean } | undefined> })['!rows'] ?? []).forEach((meta, r) => {
     if (meta === undefined) return;
-    const rm: { height?: number; hide?: boolean } = {};
-    const height = meta.hpx ?? (meta.hpt !== undefined ? Math.round(meta.hpt * 4 / 3) : undefined);
+    const rm: RowMeta = {};
+    // `ht` is in points (OOXML); the model stores px (4px per 3pt). SheetJS
+    // copies the raw value into both hpt and hpx, so hpt is the one to trust.
+    const height = meta.hpt !== undefined ? Math.round(meta.hpt * 4 / 3) : meta.hpx;
     if (height !== undefined) rm.height = height;
     if (meta.hidden === true) rm.hide = true;
-    if (Object.keys(rm).length > 0) rows.push([r, rm]);
+    if (Object.keys(rm).length > 0) rowMetas.set(r, rm);
   });
-  ((ws as { '!cols'?: Array<{ wch?: number; wpx?: number; hidden?: boolean } | undefined> })['!cols'] ?? []).forEach((meta, c) => {
+  ((ws as { '!cols'?: Array<{ width?: number; wch?: number; wpx?: number; hidden?: boolean } | undefined> })['!cols'] ?? []).forEach((meta, c) => {
     if (meta === undefined) return;
-    const cm: { width?: number; hide?: boolean } = {};
-    const width = meta.wpx ?? (meta.wch !== undefined ? Math.round(meta.wch * 7 + 5) : undefined);
+    const cm: ColMeta = {};
+    // The raw `width` attribute is canonical (chars, Calibri 11: 7px digit +
+    // 5px padding); SheetJS's wpx/wch are re-derived through a guessed max
+    // digit width and drift off it. Hidden-only cols carry a null/NaN width.
+    const width = typeof meta.width === 'number' && Number.isFinite(meta.width) && meta.width > 0
+      ? Math.round(meta.width * 7 + 5)
+      : meta.wpx;
     if (width !== undefined) cm.width = width;
     if (meta.hidden === true) cm.hide = true;
-    if (Object.keys(cm).length > 0) cols.push([c, cm]);
+    if (Object.keys(cm).length > 0) colMetas.set(c, cm);
   });
+  // Column default styles: `<col min max style="N">` ranges, expanded per
+  // column like SheetJS expands the widths.
+  for (const el of xmlElements(sheetXml, 'col')) {
+    const xfIdx = Number(attr(el.head, 'style'));
+    if (!Number.isInteger(xfIdx)) continue;
+    const style = axisStyleOf(tables, xfIdx);
+    if (style === undefined) continue;
+    const min = Number(attr(el.head, 'min'));
+    const max = Number(attr(el.head, 'max'));
+    if (!Number.isInteger(min) || !Number.isInteger(max)) continue;
+    const styleId = internStyle(style);
+    for (let c = Math.max(0, min - 1); c <= Math.min(max - 1, TOTAL_COLS - 1); c += 1) {
+      const meta = colMetas.get(c) ?? {};
+      meta.styleId = styleId;
+      colMetas.set(c, meta);
+    }
+  }
+  // Row default styles: OOXML applies the row's `s` index (note: `s=`, unlike
+  // `<col style=>`) to the whole row only when customFormat="1".
+  for (const m of sheetXml.matchAll(/<row\b[^>]*>/g)) {
+    if (attr(m[0], 'customFormat') !== '1') continue;
+    const xfIdx = Number(attr(m[0], 's'));
+    if (!Number.isInteger(xfIdx)) continue;
+    const style = axisStyleOf(tables, xfIdx);
+    if (style === undefined) continue;
+    const r = Number(attr(m[0], 'r'));
+    if (!Number.isInteger(r) || r < 1 || r > TOTAL_ROWS) continue;
+    const meta = rowMetas.get(r - 1) ?? {};
+    meta.styleId = internStyle(style);
+    rowMetas.set(r - 1, meta);
+  }
+  for (const [r, rm] of [...rowMetas].sort((a, b) => a[0] - b[0])) rows.push([r, rm]);
+  for (const [c, cm] of [...colMetas].sort((a, b) => a[0] - b[0])) cols.push([c, cm]);
   return data;
 }
 
@@ -419,9 +491,16 @@ function convertCell(raw: XLSX.CellObject): Cell {
   if (raw.f !== undefined) cell.formula = `=${raw.f}`;
   const link = (raw as XLSX.CellObject & { l?: { Target?: string; Tooltip?: string } }).l;
   if (link?.Target !== undefined && link.Target !== '') {
+    // SheetJS escapes `&` into the rels Target on write but reads attributes
+    // raw (parsexmltag never decodes entities), so the target arrives with
+    // `&amp;` still in it; internal links only carry a location, which
+    // SheetJS does decode — decoding here is idempotent for those.
+    const tooltip = link.Tooltip !== undefined && link.Tooltip !== ''
+      ? decodeXmlEntities(link.Tooltip)
+      : undefined;
     cell.hyperlink = {
-      target: link.Target,
-      ...(link.Tooltip !== undefined && link.Tooltip !== '' ? { tooltip: link.Tooltip } : {}),
+      target: decodeXmlEntities(link.Target),
+      ...(tooltip !== undefined ? { tooltip } : {}),
     };
   }
   return cell;
@@ -457,6 +536,19 @@ function numberFormatOf(z: unknown): string | undefined {
 
 function isDateFormat(nf: string): boolean {
   return nf === 'date' || nf === 'time' || /[ymdhs]/i.test(nf.replace(/\[[^\]]*\]/g, '').replace(/"[^"]*"/g, ''));
+}
+
+/**
+ * Style of a col/row xf. Unlike a cell, an axis style has no `<v>`/`z` to
+ * carry the resolved format string, so the number format is resolved from the
+ * xf's numFmtId (the custom table first, then the Excel built-ins).
+ */
+function axisStyleOf(tables: StyleTables, xfIdx: number): Style | undefined {
+  const code = numFmtCodeOf(tables, xfIdx);
+  const nf = code !== undefined && code !== 'General' ? REVERSE_NUMFMT[code] ?? code : undefined;
+  let style = convertStyle(tables, xfIdx);
+  if (nf !== undefined) style = { ...style, numberFormat: nf };
+  return style;
 }
 
 function convertStyle(tables: StyleTables, xfIdx: number): Style | undefined {
@@ -931,13 +1023,19 @@ function listValuesOf(f1: string | undefined, ws: XLSX.WorkSheet | undefined): r
   }
   const rect = rectOf(t);
   if (rect === undefined || ws === undefined) return undefined;
-  const values: string[] = [];
-  for (let r = rect.r1; r <= rect.r2; r += 1) {
-    for (let c = rect.c1; c <= rect.c2; c += 1) {
-      const cell = ws[XLSX.utils.encode_cell({ r, c })] as XLSX.CellObject | undefined;
-      const text = cell?.w ?? (cell?.v === undefined || cell?.v === null ? undefined : String(cell.v));
-      if (typeof text === 'string' && text.trim() !== '') values.push(text.trim());
-    }
+  // Stored cells only: the range is answered by filtering the worksheet's
+  // real cell keys — the rectangle itself is never walked (a list sourced
+  // from a whole-column reference costs the file, not the range).
+  const hits: Array<{ r: number; c: number; text: string }> = [];
+  for (const key of Object.keys(ws)) {
+    if (key.startsWith('!')) continue;
+    const { r, c } = XLSX.utils.decode_cell(key);
+    if (r < rect.r1 || r > rect.r2 || c < rect.c1 || c > rect.c2) continue;
+    const cell = ws[key] as XLSX.CellObject;
+    const text = cell?.w ?? (cell?.v === undefined || cell?.v === null ? undefined : String(cell.v));
+    if (typeof text === 'string' && text.trim() !== '') hits.push({ r, c, text: text.trim() });
   }
-  return values.length > 0 ? values : undefined;
+  // Row-major order, matching what a range walk would have read.
+  hits.sort((a, b) => a.r - b.r || a.c - b.c);
+  return hits.length > 0 ? hits.map((hit) => hit.text) : undefined;
 }

@@ -1,7 +1,15 @@
-import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
 import type { Store } from '../store/Store';
 import type { Cell, CellValue } from '../types';
-import { displayTextOf } from '../util/cell';
+import { displayTextOf } from '../format/displayText';
+import { MAX_DENSE_RANGE_CELLS } from '../util/limits';
+
+/** A package refused because its used-range rectangle is beyond a dense CSV walk; the message is shown to the user as is. */
+export class CsvRangeTooLargeError extends Error {
+  public constructor() {
+    super('已用区域过大，无法导出为 CSV；请删除远处孤立的单元格后重试');
+    this.name = 'CsvRangeTooLargeError';
+  }
+}
 
 /**
  * RFC 4180: quote a field containing the separator, a quote, CR or LF;
@@ -33,11 +41,12 @@ function formulaInjectionPrefix(value: string, typed: CellValue | undefined): st
 /**
  * Displayed-value text of a cell, matching Excel's CSV export (所见即所得):
  * number formats apply (e.g. `#,##0.00` → `1,234.50`), booleans are TRUE/FALSE.
+ * The style is the effective one (cell > row > column, Store.getCellStyle), so
+ * a column default format formats the cells sitting under it.
  */
-function cellText(store: Store, cell: Cell | undefined): string {
+function cellText(store: Store, r: number, c: number, cell: Cell | undefined): string {
   if (cell === undefined) return '';
-  const style = cell.styleId !== undefined ? store.getStyle(cell.styleId) : undefined;
-  const text = displayTextOf(cell, style);
+  const text = displayTextOf(cell, store.getCellStyle(r, c, cell));
   if (text !== '') return text;
   if (typeof cell.value === 'boolean') return cell.value ? 'TRUE' : 'FALSE';
   return text;
@@ -46,30 +55,38 @@ function cellText(store: Store, cell: Cell | undefined): string {
 /**
  * Active-sheet CSV: the used-range rectangle (dense rows × cols) as displayed
  * values, so formula cells export their result like Excel's CSV export.
+ * Stored cells are bucketed per row first — the walk tracks what exists, and
+ * the rectangle it spans is emitted as text rows, never materialised as a grid.
  */
 export function exportCsv(store: Store): string {
+  const stored = new Map<number, Map<number, Cell>>();
   let maxR = -1;
   let maxC = -1;
-  const cellMap = new Map<string, Cell>();
 
-  for (const [key, cell] of store.getCells()) {
-    const parts = key.split(',');
-    const r = Number(parts[0]);
-    const c = Number(parts[1]);
-    // Bounded by the fixed grid — a stray far-away key can never blow up the dense loop.
-    if (!Number.isInteger(r) || !Number.isInteger(c) || r < 0 || r >= TOTAL_ROWS || c < 0 || c >= TOTAL_COLS) continue;
-    if (cellText(store, cell) === '') continue;
-    cellMap.set(key, cell);
+  store.forEachCell((r, c, cell) => {
+    if (r < 0 || c < 0) return; // never a stored coordinate; defensive only
+    if (cellText(store, r, c, cell) === '') return;
+    let row = stored.get(r);
+    if (row === undefined) {
+      row = new Map();
+      stored.set(r, row);
+    }
+    row.set(c, cell);
     if (r > maxR) maxR = r;
     if (c > maxC) maxC = c;
-  }
+  });
 
+  // The loops below are dense over the used rectangle, so their area is
+  // bounded: two far-apart cells would otherwise turn one export into a
+  // walk over billions of empty addresses.
+  if ((maxR + 1) * (maxC + 1) > MAX_DENSE_RANGE_CELLS) throw new CsvRangeTooLargeError();
   const rows: string[] = [];
   for (let r = 0; r <= maxR; r += 1) {
+    const row = stored.get(r);
     const fields: string[] = [];
     for (let c = 0; c <= maxC; c += 1) {
-      const cell = cellMap.get(`${r},${c}`);
-      fields.push(csvQuote(cellText(store, cell), cell?.value));
+      const cell = row?.get(c);
+      fields.push(csvQuote(cellText(store, r, c, cell), cell?.value));
     }
     rows.push(fields.join(','));
   }

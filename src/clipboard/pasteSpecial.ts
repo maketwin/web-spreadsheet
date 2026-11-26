@@ -3,6 +3,7 @@ import type { CellPatch } from '../commands/impl/SetRangeValues';
 import type { RangeAddress } from '../selection/Range';
 import type { Store } from '../store/Store';
 import type { Cell } from '../types';
+import { MAX_MATERIALIZED_CELLS } from '../util/limits';
 
 /** Excel Paste Special modes (粘贴方式). */
 export type PasteMode = 'all' | 'formulas' | 'values' | 'formats';
@@ -96,7 +97,9 @@ export function buildPasteSpecialMatrix(store: Store, source: PasteSpecialSource
   if (target !== undefined && srcRows > 0 && srcCols > 0) {
     const tr = target.r2 - target.r1 + 1;
     const tc = target.c2 - target.c1 + 1;
-    if ((tr > srcRows || tc > srcCols) && tr % srcRows === 0 && tc % srcCols === 0) { rows = tr; cols = tc; }
+    // Tiling that would materialise more than MAX_MATERIALIZED_CELLS (an
+    // entire-column target) pastes once at the anchor instead.
+    if ((tr > srcRows || tc > srcCols) && tr % srcRows === 0 && tc % srcCols === 0 && tr * tc <= MAX_MATERIALIZED_CELLS) { rows = tr; cols = tc; }
   }
   // src offset (i, j) → source cell with formula shifted to target cell (tr, tc).
   const at = (i: number, j: number, tr: number, tc: number): Cell | undefined => {

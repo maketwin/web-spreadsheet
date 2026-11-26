@@ -1,13 +1,13 @@
-import { zipSync, strFromU8, strToU8 } from 'fflate';
-import { safeUnzip } from './safeUnzip';
+import { strFromU8, strToU8 } from 'fflate';
 import * as XLSX from 'xlsx';
 import type { Store } from '../store/Store';
-import type { RichTextRun, Style } from '../types';
+import type { ColMeta, RichTextRun, RowMeta, Style } from '../types';
+import { TOTAL_COLS, TOTAL_ROWS } from '../util/gridSize';
 import { isRich } from '../util/richText';
 
 /**
  * Style + rich-text export: SheetJS (community) writes no cell styles, so the
- * workbook zip is post-processed after XLSX.write — styles.xml is rebuilt from
+ * exported package's parts are patched in place — styles.xml is rebuilt from
  * the styles actually referenced by cells (interned fonts/fills/numFmts/xfs,
  * mirroring the importer's content-hash dedup) and every sheet's `<c>` elements
  * gain their `s=` index. Rich-text cells are rewritten as `t="inlineStr"` with
@@ -96,25 +96,37 @@ interface Tables {
   readonly cellXfs: Map<string, Map<string, number>>;
   /** sheetId → cell addr → rich runs */
   readonly richCells: Map<string, Map<string, readonly RichTextRun[]>>;
+  /** sheetId → axis styleId (col/row default) → xf index for the sheet part's style="N" */
+  readonly axisXfs: Map<string, Map<string, number>>;
 }
 
-export function appendStylesToXlsx(buf: ArrayBuffer, store: Store, sheetIds: readonly string[]): ArrayBuffer {
+/** Patch the file table in place: rebuild styles.xml and tag styled/rich cells. */
+export function applyStylesToXlsx(files: Record<string, Uint8Array>, store: Store, sheetIds: readonly string[]): void {
   const tables = collectTables(store, sheetIds);
+  const hasAxisStyles = [...tables.axisXfs.values()].some((m) => m.size > 0);
   const hasStyles = tables.xfs.length > 1 || tables.richCells.size > 0 || tables.dxfs.length > 0;
-  if (!hasStyles) return buf;
-
-  const files = safeUnzip(new Uint8Array(buf));
-  files['xl/styles.xml'] = strToU8(buildStylesXml(tables));
   for (const [index, sheetId] of sheetIds.entries()) {
     const sheetPath = `xl/worksheets/sheet${index + 1}.xml`;
     const part = files[sheetPath];
     if (part === undefined) continue;
-    const patched = patchSheetCells(strFromU8(part), tables.cellXfs.get(sheetId), tables.richCells.get(sheetId));
-    if (patched !== undefined) files[sheetPath] = strToU8(patched);
+    let xml = strFromU8(part);
+    // Column/row metadata (width, hidden, default style) shapes the worksheet
+    // part even when no cell carries a style, so it is patched before the
+    // styles.xml early-out below.
+    const axisCols = store.getColEntries(sheetId);
+    const axisRows = store.getRowEntries(sheetId);
+    if (axisCols.length > 0 || axisRows.length > 0) {
+      xml = patchSheetAxisMeta(xml, axisCols, axisRows, tables.axisXfs.get(sheetId)) ?? xml;
+    }
+    if (hasStyles) {
+      const patched = patchSheetCells(xml, tables.cellXfs.get(sheetId), tables.richCells.get(sheetId));
+      if (patched !== undefined) xml = patched;
+    }
+    if (xml !== strFromU8(part)) files[sheetPath] = strToU8(xml);
   }
+  if (!hasStyles && !hasAxisStyles) return;
 
-  const zipped = zipSync(files);
-  return zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength) as ArrayBuffer;
+  files['xl/styles.xml'] = strToU8(buildStylesXml(tables));
 }
 
 /**
@@ -124,6 +136,7 @@ export function appendStylesToXlsx(buf: ArrayBuffer, store: Store, sheetIds: rea
  */
 export function collectDxfTable(store: Store, sheetIds: readonly string[]): DxfTable {
   const items: DxfRef[] = [];
+  const keys = new Map<string, number>();
   const idOf = (style: Partial<Style>): number | undefined => {
     const dxf: DxfRef = {
       bold: style.bold === true ? true : undefined,
@@ -136,9 +149,12 @@ export function collectDxfTable(store: Store, sheetIds: readonly string[]): DxfT
     };
     const key = JSON.stringify(dxf);
     if (key === '{}') return undefined;
-    const found = items.findIndex((d) => JSON.stringify(d) === key);
-    if (found >= 0) return found;
+    // One map lookup per rule: re-stringifying every interned item per call
+    // made the walk O(cells × distinct styles).
+    const found = keys.get(key);
+    if (found !== undefined) return found;
     items.push(dxf);
+    keys.set(key, items.length - 1);
     return items.length - 1;
   };
   for (const sheetId of sheetIds) {
@@ -161,12 +177,18 @@ function collectTables(store: Store, sheetIds: readonly string[]): Tables {
   const dxfTable = collectDxfTable(store, sheetIds);
   const cellXfs = new Map<string, Map<string, number>>();
   const richCells = new Map<string, Map<string, readonly RichTextRun[]>>();
+  const axisXfs = new Map<string, Map<string, number>>();
 
+  // Every interning table is keyed by the item's serialized form: one map
+  // lookup per cell instead of re-stringifying each interned item per call
+  // (O(cells × distinct styles) before).
+  const fontKeys = new Map<string, number>();
   const fontIdOf = (font: FontRef): number => {
     const key = JSON.stringify(font);
-    const found = fonts.findIndex((f) => JSON.stringify(f) === key);
-    if (found >= 0) return found;
+    const found = fontKeys.get(key);
+    if (found !== undefined) return found;
     fonts.push(font);
+    fontKeys.set(key, fonts.length - 1);
     return fonts.length - 1;
   };
   const fillIdOf = (bgcolor: string | undefined): number => {
@@ -182,6 +204,7 @@ function collectTables(store: Store, sheetIds: readonly string[]): Tables {
     numFmts.set(code, id);
     return id;
   };
+  const borderKeys = new Map<string, number>();
   const borderIdOf = (border: Style['border']): number => {
     const ref: BorderRef = {
       top: BORDER_LINE[border?.top ?? ''],
@@ -191,53 +214,71 @@ function collectTables(store: Store, sheetIds: readonly string[]): Tables {
     };
     const key = JSON.stringify(ref);
     if (key === '{}') return 0;
-    const found = borders.findIndex((b) => JSON.stringify(b) === key);
-    if (found >= 0) return found;
+    const found = borderKeys.get(key);
+    if (found !== undefined) return found;
     borders.push(ref);
+    borderKeys.set(key, borders.length - 1);
     return borders.length - 1;
   };
+  const xfKeys = new Map<string, number>();
   const xfIdOf = (xf: XfRef): number => {
     const key = JSON.stringify(xf);
-    const found = xfs.findIndex((f) => JSON.stringify(f) === key);
-    if (found >= 0) return found;
+    const found = xfKeys.get(key);
+    if (found !== undefined) return found;
     xfs.push(xf);
+    xfKeys.set(key, xfs.length - 1);
     return xfs.length - 1;
+  };
+  /** One interned cellXf for a Style — shared by cells and col/row defaults. */
+  const xfIdForStyle = (style: Style): number => {
+    const nfCode = style.numberFormat !== undefined && style.numberFormat !== 'general'
+      ? BUILT_IN_NUMFMT[style.numberFormat] ?? style.numberFormat
+      : undefined;
+    return xfIdOf({
+      fontId: fontIdOf({
+        bold: style.bold === true,
+        italic: style.italic === true,
+        underline: style.underline === true,
+        strike: false,
+        fontSize: style.fontSize,
+        fontFamily: style.fontFamily,
+        color: normalizeColor(style.color),
+      }),
+      fillId: fillIdOf(normalizeColor(style.bgcolor)),
+      numFmtId: nfCode === undefined ? 0 : numFmtIdOf(nfCode),
+      borderId: borderIdOf(style.border),
+      align: style.align,
+      valign: style.valign === 'middle' ? 'center' : style.valign,
+      wrap: style.wrap === true,
+    });
   };
 
   for (const sheetId of sheetIds) {
     const sheetXfs = new Map<string, number>();
     const sheetRich = new Map<string, readonly RichTextRun[]>();
-    for (const [key, cell] of store.getCells(sheetId)) {
-      const addr = XLSX.utils.encode_cell({ r: Number(key.split(',')[0]), c: Number(key.split(',')[1]) });
+    store.forEachCell((r, c, cell) => {
+      const addr = XLSX.utils.encode_cell({ r, c });
       if (cell.formula === undefined && isRich(cell.richText)) sheetRich.set(addr, cell.richText);
-      if (cell.styleId === undefined) continue;
+      if (cell.styleId === undefined) return;
       const style = store.getStyle(cell.styleId, sheetId);
-      if (style === undefined) continue;
-      const nfCode = style.numberFormat !== undefined && style.numberFormat !== 'general'
-        ? BUILT_IN_NUMFMT[style.numberFormat] ?? style.numberFormat
-        : undefined;
-      sheetXfs.set(addr, xfIdOf({
-        fontId: fontIdOf({
-          bold: style.bold === true,
-          italic: style.italic === true,
-          underline: style.underline === true,
-          strike: false,
-          fontSize: style.fontSize,
-          fontFamily: style.fontFamily,
-          color: normalizeColor(style.color),
-        }),
-        fillId: fillIdOf(normalizeColor(style.bgcolor)),
-        numFmtId: nfCode === undefined ? 0 : numFmtIdOf(nfCode),
-        borderId: borderIdOf(style.border),
-        align: style.align,
-        valign: style.valign === 'middle' ? 'center' : style.valign,
-        wrap: style.wrap === true,
-      }));
-    }
+      if (style === undefined) return;
+      sheetXfs.set(addr, xfIdForStyle(style));
+    }, sheetId);
     if (sheetXfs.size > 0) cellXfs.set(sheetId, sheetXfs);
     if (sheetRich.size > 0) richCells.set(sheetId, sheetRich);
+    // Column/row default styles intern into the same tables so the sheet
+    // part's `<col style="N">` / `<row s="N">` point into cellXfs.
+    const sheetAxis = new Map<string, number>();
+    const internAxis = (meta: { styleId?: string | undefined }): void => {
+      if (meta.styleId === undefined || sheetAxis.has(meta.styleId)) return;
+      const style = store.getStyle(meta.styleId, sheetId);
+      if (style !== undefined) sheetAxis.set(meta.styleId, xfIdForStyle(style));
+    };
+    for (const [, meta] of store.getColEntries(sheetId)) internAxis(meta);
+    for (const [, meta] of store.getRowEntries(sheetId)) internAxis(meta);
+    if (sheetAxis.size > 0) axisXfs.set(sheetId, sheetAxis);
   }
-  return { fonts, fills, numFmts, borders, dxfs: dxfTable.items, xfs, cellXfs, richCells };
+  return { fonts, fills, numFmts, borders, dxfs: dxfTable.items, xfs, cellXfs, richCells, axisXfs };
 }
 
 /** '#RRGGBB' → 'FFRRGGBB'; anything else passes through untouched. */
@@ -368,4 +409,131 @@ function escapeText(s: string): string {
 
 function escapeAttr(s: string): string {
   return escapeText(s).replaceAll('"', '&quot;');
+}
+
+/**
+ * Column/row metadata (width, hidden, default style) into a sheet part.
+ * SheetJS's own `!cols`/`!rows` are not used for this: its community writer
+ * merges adjacent same-width columns, never writes `style`, and only dresses
+ * rows that hold cells — while the packed path regroups rows. Everything is
+ * written from the store's axis entries instead, ascending, one `<col>` per
+ * metadata column, `<row>` attributes patched onto the existing row tags
+ * (or new self-closing rows for metadata-only rows). Undefined when the
+ * sheet has no axis metadata to write.
+ */
+function patchSheetAxisMeta(
+  xml: string,
+  colEntries: readonly [number, ColMeta][],
+  rowEntries: readonly [number, RowMeta][],
+  axisXfs: Map<string, number> | undefined,
+): string | undefined {
+  let out = xml;
+  const cols = buildColsXml(colEntries, axisXfs);
+  if (cols !== undefined) {
+    // `<cols>` has one fixed schema slot: immediately before `<sheetData>`.
+    if (out.includes('<cols>')) out = out.replace(/<cols>[\s\S]*?<\/cols>/, cols);
+    else {
+      const at = out.indexOf('<sheetData');
+      if (at < 0) return undefined;
+      out = out.slice(0, at) + cols + out.slice(at);
+    }
+  }
+  out = patchSheetDataRows(out, rowEntries, axisXfs);
+  return out === xml ? undefined : out;
+}
+
+/** Pixels → Excel column width (max digit width 7px, 5px padding), 2 decimals like Excel writes. */
+function pxToColWidth(px: number): number {
+  return Math.trunc(((px - 5) / 7) * 100 + 0.5) / 100;
+}
+
+/** Pixels → row height in points (Excel: 4px per 3pt). */
+function pxToRowHeight(px: number): number {
+  return px * 0.75;
+}
+
+function buildColsXml(colEntries: readonly [number, ColMeta][], axisXfs: Map<string, number> | undefined): string | undefined {
+  const items: string[] = [];
+  for (const [c, meta] of [...colEntries].sort((a, b) => a[0] - b[0])) {
+    if (c < 0 || c >= TOTAL_COLS) continue;
+    let attrs = `min="${c + 1}" max="${c + 1}"`;
+    if (meta.width !== undefined) attrs += ` width="${pxToColWidth(meta.width)}" customWidth="1"`;
+    if (meta.hide === true) attrs += ' hidden="1"';
+    const xf = meta.styleId !== undefined ? axisXfs?.get(meta.styleId) : undefined;
+    if (xf !== undefined) attrs += ` style="${xf}"`;
+    if (attrs !== `min="${c + 1}" max="${c + 1}"`) items.push(`<col ${attrs}/>`);
+  }
+  return items.length > 0 ? `<cols>${items.join('')}</cols>` : undefined;
+}
+
+/** Extra attributes a row's `<row>` open tag gains; '' when the row carries no metadata. */
+function rowAttrsXml(meta: RowMeta, axisXfs: Map<string, number> | undefined): string {
+  let attrs = '';
+  if (meta.height !== undefined) attrs += ` ht="${pxToRowHeight(meta.height)}" customHeight="1"`;
+  if (meta.hide === true) attrs += ' hidden="1"';
+  const xf = meta.styleId !== undefined ? axisXfs?.get(meta.styleId) : undefined;
+  if (xf !== undefined) attrs += ` s="${xf}" customFormat="1"`;
+  return attrs;
+}
+
+const ROW_OPEN = /<row\b[^>]*>/g;
+const ROW_NUMBER = /\br="(\d+)"/;
+
+/** Patch `<row>` attributes inside `<sheetData>`; metadata-only rows become new self-closing rows in ascending position. */
+function patchSheetDataRows(xml: string, rowEntries: readonly [number, RowMeta][], axisXfs: Map<string, number> | undefined): string {
+  const wanted = new Map<number, string>();
+  for (const [r, meta] of rowEntries) {
+    if (r < 0 || r >= TOTAL_ROWS) continue;
+    const attrs = rowAttrsXml(meta, axisXfs);
+    if (attrs !== '') wanted.set(r, attrs);
+  }
+  if (wanted.size === 0) return xml;
+
+  const selfClosing = xml.indexOf('<sheetData/>');
+  if (selfClosing >= 0) {
+    // No rows at all: every wanted row is new, ascending.
+    const rows = [...wanted.entries()].sort((a, b) => a[0] - b[0])
+      .map(([r, attrs]) => `<row r="${r + 1}"${attrs}/>`)
+      .join('');
+    return xml.slice(0, selfClosing) + `<sheetData>${rows}</sheetData>` + xml.slice(selfClosing + '<sheetData/>'.length);
+  }
+
+  const head = '<sheetData>';
+  const start = xml.indexOf(head);
+  const end = xml.indexOf('</sheetData>', start);
+  if (start < 0 || end < start) return xml;
+  const body = xml.slice(start + head.length, end);
+
+  const pending = [...wanted.keys()].sort((a, b) => a - b);
+  let pi = 0;
+  const pieces: string[] = [];
+  let pos = 0;
+  for (const match of body.matchAll(ROW_OPEN)) {
+    const tag = match[0];
+    const at = match.index ?? 0;
+    const idx = Number(tag.match(ROW_NUMBER)?.[1]) - 1;
+    if (!Number.isInteger(idx) || idx < 0) continue;
+    // New rows sorting before this one slot in ahead of it (Excel wants
+    // ascending row numbers).
+    while (pi < pending.length && pending[pi]! < idx) {
+      const nr = pending[pi++]!;
+      pieces.push(body.slice(pos, at), `<row r="${nr + 1}"${wanted.get(nr)}/>`);
+      pos = at;
+    }
+    const extra = wanted.get(idx);
+    if (extra !== undefined) {
+      pi += 1; // this pending entry is patched below, not inserted
+      // The open tag ends with '>' or '/>'; slide the attributes in front of it.
+      pieces.push(body.slice(pos, at), tag.endsWith('/>') ? `${tag.slice(0, -2)}${extra}/>` : `${tag.slice(0, -1)}${extra}>`);
+    } else {
+      pieces.push(body.slice(pos, at), tag);
+    }
+    pos = at + tag.length;
+  }
+  const tail = [body.slice(pos)];
+  while (pi < pending.length) {
+    const nr = pending[pi++]!;
+    tail.push(`<row r="${nr + 1}"${wanted.get(nr)}/>`);
+  }
+  return xml.slice(0, start + head.length) + pieces.join('') + tail.join('') + xml.slice(end);
 }

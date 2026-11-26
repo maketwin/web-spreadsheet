@@ -1,11 +1,11 @@
-import { zipSync, strFromU8, strToU8 } from 'fflate';
-import { safeUnzip } from './safeUnzip';
+import { strFromU8, strToU8 } from 'fflate';
 import * as XLSX from 'xlsx';
 import type { Store } from '../store/Store';
 import type { SheetFreeze } from '../store/SheetData';
 import type { Style } from '../types';
 import type { CellValueOperator, ConditionalRule, IconSetName } from '../conditional/ConditionalRule';
 import type { ValidationRule } from '../validation/types';
+import { parseInternalRange } from '../util/rangeNotation';
 import { collectDxfTable, normalizeColor } from './styleXmlExport';
 
 /**
@@ -60,8 +60,8 @@ interface SheetPatch {
   readonly elements: readonly WorksheetElement[];
 }
 
-/** Rebuild the xlsx zip with freeze panes / autofilter / conditional formats / validations. */
-export function appendSheetFeaturesToXlsx(buf: ArrayBuffer, store: Store, sheetIds: readonly string[]): ArrayBuffer {
+/** Patch the file table in place: freeze panes / autofilter / conditional formats / validations. */
+export function applySheetFeaturesToXlsx(files: Record<string, Uint8Array>, store: Store, sheetIds: readonly string[]): void {
   const dxfIdOf = collectDxfTable(store, sheetIds).idOf;
   const patches = new Map<number, SheetPatch>();
 
@@ -80,9 +80,7 @@ export function appendSheetFeaturesToXlsx(buf: ArrayBuffer, store: Store, sheetI
     if (elements.length === 0 && !hasFreeze) continue;
     patches.set(index, { freeze: hasFreeze ? freeze : undefined, elements });
   }
-  if (patches.size === 0) return buf;
 
-  const files = safeUnzip(new Uint8Array(buf));
   for (const [index, patch] of patches) {
     const sheetPath = `xl/worksheets/sheet${index + 1}.xml`;
     const part = files[sheetPath];
@@ -92,9 +90,6 @@ export function appendSheetFeaturesToXlsx(buf: ArrayBuffer, store: Store, sheetI
     if (patch.freeze !== undefined) xml = patchFreezePane(xml, patch.freeze);
     files[sheetPath] = strToU8(xml);
   }
-
-  const zipped = zipSync(files);
-  return zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength) as ArrayBuffer;
 }
 
 /**
@@ -179,7 +174,11 @@ function buildConditionalFormattingXml(
   // Rule precedence is sheet-wide: Excel expects unique ascending priorities.
   let priority = 0;
   for (const [rangeKey, rules] of store.getConditionalRules(sheetId)) {
-    const range = parseRangeKey(rangeKey);
+    // Keys are written by SetConditionalFormat as "r1,c1:r2,c2"; a key that
+    // does not parse (never produced by the app) exports no rule at all
+    // instead of a degenerate sqref.
+    const range = parseInternalRange(rangeKey);
+    if (range === null) continue;
     const sqref = a1Range(range);
     const topLeft = XLSX.utils.encode_cell({ r: range.r1, c: range.c1 });
     const ruleXml = rules
@@ -244,7 +243,9 @@ function cfRuleXml(
 function buildDataValidationsXml(store: Store, sheetId: string): WorksheetElement[] {
   const items: string[] = [];
   for (const [rangeKey, rule] of store.getValidationRules(sheetId)) {
-    const sqref = a1Range(parseRangeKey(rangeKey));
+    const range = parseInternalRange(rangeKey);
+    if (range === null) continue; // unparsable key (never app-written) exports no rule
+    const sqref = a1Range(range);
     const xml = dataValidationXml(rule, sqref);
     if (xml !== undefined) items.push(xml);
   }
@@ -315,19 +316,6 @@ function dateSerial(iso: string): number | undefined {
 /** Internal zero-based range → A1-style reference. */
 function a1Range(range: { readonly r1: number; readonly c1: number; readonly r2: number; readonly c2: number }): string {
   return XLSX.utils.encode_range({ s: { r: range.r1, c: range.c1 }, e: { r: range.r2, c: range.c2 } });
-}
-
-/** "r,c:r,c" (internal range key) → normalized zero-based corners. */
-function parseRangeKey(key: string): { r1: number; c1: number; r2: number; c2: number } {
-  const [from, to] = key.split(':');
-  const [r1, c1] = (from ?? '').split(',').map(Number);
-  const [r2, c2] = (to ?? from ?? '').split(',').map(Number);
-  return {
-    r1: Math.min(r1 ?? 0, r2 ?? 0),
-    c1: Math.min(c1 ?? 0, c2 ?? 0),
-    r2: Math.max(r1 ?? 0, r2 ?? 0),
-    c2: Math.max(c1 ?? 0, c2 ?? 0),
-  };
 }
 
 function escapeText(s: string): string {

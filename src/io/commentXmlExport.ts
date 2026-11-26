@@ -1,14 +1,14 @@
-import { zipSync, strFromU8, strToU8 } from 'fflate';
-import { safeUnzip } from './safeUnzip';
+import { strFromU8, strToU8 } from 'fflate';
 import { num2alpha } from '../util/alphabet';
 import type { Store } from '../store/Store';
 import type { CellComment } from '../types';
 
 /**
- * Comment (note) export: SheetJS cannot write comments, so the workbook zip is
- * post-processed — per sheet with comments we add `xl/commentsN.xml` plus a
- * legacy `xl/drawings/vmlDrawingN.vml` (the note shape Excel requires), wire
- * the sheet rels, `<legacyDrawing>` and content types.
+ * Comment (note) export: SheetJS cannot write comments, so the exported
+ * package's parts are patched in place — per sheet with comments we add
+ * `xl/commentsN.xml` plus a legacy `xl/drawings/vmlDrawingN.vml` (the note
+ * shape Excel requires), wire the sheet rels, `<legacyDrawing>` and content
+ * types.
  */
 
 const REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
@@ -27,26 +27,19 @@ interface SheetComments {
   readonly items: readonly { readonly ref: string; readonly row: number; readonly col: number; readonly comment: CellComment }[];
 }
 
-/** Rebuild the xlsx zip with comment parts for every sheet that has comments. */
-export function appendCommentsToXlsx(buf: ArrayBuffer, store: Store, sheetIds: readonly string[]): ArrayBuffer {
+/** Patch the file table in place: add comment parts for every sheet that has comments. */
+export function applyCommentsToXlsx(files: Record<string, Uint8Array>, store: Store, sheetIds: readonly string[]): void {
   const withComments: SheetComments[] = [];
   for (let index = 0; index < sheetIds.length; index += 1) {
     const id = sheetIds[index]!;
     const items: { ref: string; row: number; col: number; comment: CellComment }[] = [];
-    for (const [key, cell] of store.getSheetData(id)?.getCells() ?? []) {
-      if (cell.comment === undefined) continue;
-      const parts = key.split(',').map(Number);
-      const r = parts[0];
-      const c = parts[1];
-      if (r === undefined || c === undefined || !Number.isInteger(r) || !Number.isInteger(c)) continue;
+    store.forEachCell((r, c, cell) => {
+      if (cell.comment === undefined) return;
       items.push({ ref: `${num2alpha(c)}${r + 1}`, row: r, col: c, comment: cell.comment });
-    }
+    }, id);
     if (items.length > 0) withComments.push({ sheetNo: index + 1, items });
   }
-  if (withComments.length === 0) return buf;
 
-  const files = safeUnzip(new Uint8Array(buf));
-  const newParts: Record<string, Uint8Array> = {};
   const overrides: string[] = [];
   let partNo = 0;
 
@@ -54,8 +47,8 @@ export function appendCommentsToXlsx(buf: ArrayBuffer, store: Store, sheetIds: r
     partNo += 1;
     const commentsPath = `xl/comments${partNo}.xml`;
     const vmlPath = `xl/drawings/vmlDrawing${partNo}.vml`;
-    newParts[commentsPath] = strToU8(buildCommentsXml(sheet.items));
-    newParts[vmlPath] = strToU8(buildCommentVml(sheet.items, partNo));
+    files[commentsPath] = strToU8(buildCommentsXml(sheet.items));
+    files[vmlPath] = strToU8(buildCommentVml(sheet.items, partNo));
     overrides.push(`<Override PartName="/${commentsPath}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.comments+xml"/>`);
     ensureVmlDefault(files);
 
@@ -67,11 +60,7 @@ export function appendCommentsToXlsx(buf: ArrayBuffer, store: Store, sheetIds: r
     patchLegacyDrawing(files, sheetPath, vmlRid);
   }
 
-  patchContentTypes(files, overrides.join(''));
-
-  const out: Record<string, Uint8Array> = { ...files, ...newParts };
-  const zipped = zipSync(out);
-  return zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength) as ArrayBuffer;
+  if (overrides.length > 0) patchContentTypes(files, overrides.join(''));
 }
 
 function buildCommentsXml(items: SheetComments['items']): string {

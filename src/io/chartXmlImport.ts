@@ -1,5 +1,5 @@
 import type { ChartSpec, ChartType } from '../charts/types';
-import { TOTAL_COLS, TOTAL_ROWS } from '../renderer/coordinate';
+import { parseInternalRange } from '../util/rangeNotation';
 import { decodeXmlEntities } from '../util/xmlEntities';
 import * as XLSX from 'xlsx';
 
@@ -32,11 +32,11 @@ export function importChartsForSheet(files: Map<string, string>, sheetPath: stri
     specs.push({
       id: `imp-chart-${counter}`,
       type: parsed.type,
-      range: clampRangeToGrid(parsed.range),
+      range: normalizeRange(parsed.range),
       title: parsed.title,
       anchor: {
-        from: clampAnchorEdge(anchor.from),
-        to: clampAnchorEdge(anchor.to),
+        from: normalizeAnchorEdge(anchor.from),
+        to: normalizeAnchorEdge(anchor.to),
       },
     });
   }
@@ -44,33 +44,28 @@ export function importChartsForSheet(files: Map<string, string>, sheetPath: stri
 }
 
 /**
- * Crafted chart XML may reference the full 1M×16K sheet; the UI grid is
- * 1000×26. Clamping keeps readChartData's label/series loops bounded — same
- * posture as convertSheet dropping cells outside the grid.
+ * Crafted chart XML may carry negative or non-numeric coordinates; those are
+ * dirty data and normalize to 0. Everything else stays verbatim: the grid is
+ * Excel's whole address space, so even a full-sheet reference is a legal
+ * extent, and importing a chart parses xml — it never walks its range.
  */
-function clampRangeToGrid(range: string): string {
-  const parts = range.split(':');
-  const start = parts[0]?.split(',').map(Number) ?? [0, 0];
-  const end = parts[1]?.split(',').map(Number) ?? start;
-  const r1 = clampToGrid(start[0] ?? 0, TOTAL_ROWS - 1);
-  const c1 = clampToGrid(start[1] ?? 0, TOTAL_COLS - 1);
-  const r2 = clampToGrid(end[0] ?? 0, TOTAL_ROWS - 1);
-  const c2 = clampToGrid(end[1] ?? 0, TOTAL_COLS - 1);
-  return `${r1},${c1}:${r2},${c2}`;
+function normalizeRange(range: string): string {
+  const parsed = parseInternalRange(range);
+  if (parsed === null) return '0,0:0,0'; // crafted XML garbage clamps to the sheet origin
+  return `${floorCoord(parsed.r1)},${floorCoord(parsed.c1)}:${floorCoord(parsed.r2)},${floorCoord(parsed.c2)}`;
 }
 
-function clampAnchorEdge(edge: { r: number; c: number; offX: number; offY: number }): { r: number; c: number; offX: number; offY: number } {
+function normalizeAnchorEdge(edge: { r: number; c: number; offX: number; offY: number }): { r: number; c: number; offX: number; offY: number } {
   return {
-    r: clampToGrid(edge.r, TOTAL_ROWS - 1),
-    c: clampToGrid(edge.c, TOTAL_COLS - 1),
+    r: floorCoord(edge.r),
+    c: floorCoord(edge.c),
     offX: edge.offX,
     offY: edge.offY,
   };
 }
 
-function clampToGrid(v: number, max: number): number {
-  if (!Number.isFinite(v)) return 0;
-  return Math.min(Math.max(0, Math.floor(v)), max);
+function floorCoord(v: number): number {
+  return Number.isFinite(v) ? Math.max(0, Math.floor(v)) : 0;
 }
 
 interface AnchorInfo {

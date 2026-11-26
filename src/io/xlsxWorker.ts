@@ -5,10 +5,9 @@ import { ZipTooLargeError } from './safeUnzip';
 
 /**
  * xlsx import and export off the main thread. Reading a workbook is paid for
- * by the file, not by the grid: a large sheet takes SheetJS seconds even
- * though only 1000 × 26 cells of it are kept, and the page is frozen for
- * every one of them. The work is the same as on the main thread (the very
- * same functions), so the two paths cannot drift.
+ * by the file, not by the grid: a large sheet takes SheetJS seconds, and the
+ * page would be frozen for every one of them. The work is the same as on the
+ * main thread (the very same functions), so the two paths cannot drift.
  *
  * The bundle is loaded only when an xlsx is first opened or saved, and
  * xlsxWorkerClient falls back to the main thread wherever a worker cannot be
@@ -16,7 +15,11 @@ import { ZipTooLargeError } from './safeUnzip';
  */
 export interface XlsxImportResult {
   readonly workbook: SerializedStore;
-  /** What the import left out (cells beyond the grid, …), worded for the user. */
+  /**
+   * Imports keep everything a legal file can hold (the grid is Excel's whole
+   * address space), so this is empty today; the field stays as the user-facing
+   * channel should an import ever have something to report.
+   */
   readonly warnings: readonly string[];
 }
 

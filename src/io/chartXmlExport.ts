@@ -1,15 +1,17 @@
-import { zipSync, strFromU8, strToU8 } from 'fflate';
-import { safeUnzip } from './safeUnzip';
+import { strFromU8, strToU8 } from 'fflate';
 import { num2alpha } from '../util/alphabet';
+import { parseInternalRange } from '../util/rangeNotation';
 import type { Store } from '../store/Store';
+import type { Cell } from '../types';
 import type { ChartSpec } from '../charts/types';
 
 /**
- * Chart export: SheetJS cannot write drawings, so the workbook zip is
- * post-processed — per sheet with charts we add `xl/drawings/drawingN.xml`
- * (twoCellAnchor geometry, editAs="twoCell" = move & size with cells) and
- * `xl/charts/chartN.xml` (type/title/series with cached values), then wire
- * the rels and content types. Excel opens the result as native chart objects.
+ * Chart export: SheetJS cannot write drawings, so the exported package's
+ * parts are patched in place — per sheet with charts we add
+ * `xl/drawings/drawingN.xml` (twoCellAnchor geometry, editAs="twoCell" =
+ * move & size with cells) and `xl/charts/chartN.xml` (type/title/series with
+ * cached values), then wire the rels and content types. Excel opens the
+ * result as native chart objects.
  */
 
 const EMU_PER_PX = 9525;
@@ -25,17 +27,15 @@ const esc = (s: string): string => s
   .replaceAll('"', '&quot;')
   .replaceAll("'", '&apos;');
 
-/** Rebuild the xlsx zip with chart drawings for every sheet that has charts. */
-export function appendChartsToXlsx(buf: ArrayBuffer, store: Store, sheetIds: readonly string[]): ArrayBuffer {
+/** Patch the file table in place: add chart drawings for every sheet that has charts. */
+export function applyChartsToXlsx(files: Record<string, Uint8Array>, store: Store, sheetIds: readonly string[]): void {
   const withCharts = sheetIds
     .map((id, index) => ({ id, sheetNo: index + 1, charts: store.getCharts(id) }))
     .filter((sheet) => sheet.charts.length > 0);
-  if (withCharts.length === 0) return buf;
+  if (withCharts.length === 0) return;
 
-  const files = safeUnzip(new Uint8Array(buf));
   let drawingNo = 0;
   let chartNo = 0;
-  const newParts: Record<string, Uint8Array> = {};
   const overrides: string[] = [];
 
   for (const sheet of withCharts) {
@@ -51,24 +51,20 @@ export function appendChartsToXlsx(buf: ArrayBuffer, store: Store, sheetIds: rea
       chartNo += 1;
       const rid = `rId${i + 1}`;
       chartRels.push(`<Relationship Id="${rid}" Type="${REL_CHART}" Target="../charts/chart${chartNo}.xml"/>`);
-      newParts[`xl/charts/chart${chartNo}.xml`] = strToU8(buildChartXml(store, spec, sheetName));
+      files[`xl/charts/chart${chartNo}.xml`] = strToU8(buildChartXml(store, spec, sheetName, sheet.id));
       overrides.push(`<Override PartName="/xl/charts/chart${chartNo}.xml" ContentType="application/vnd.openxmlformats-officedocument.drawingml.chart+xml"/>`);
       anchors.push(buildAnchorXml(spec, i + 1, rid));
     }
 
-    newParts[drawingPath] = strToU8(buildDrawingXml(anchors));
+    files[drawingPath] = strToU8(buildDrawingXml(anchors));
     overrides.push(`<Override PartName="/${drawingPath}" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>`);
-    newParts[`xl/drawings/_rels/drawing${drawingNo}.xml.rels`] = strToU8(relsXml(chartRels.join('')));
+    files[`xl/drawings/_rels/drawing${drawingNo}.xml.rels`] = strToU8(relsXml(chartRels.join('')));
 
     const drawingRid = addSheetDrawingRel(files, sheetPath, drawingPath);
     patchSheetXml(files, sheetPath, drawingRid);
   }
 
   patchContentTypes(files, overrides.join(''));
-
-  const out: Record<string, Uint8Array> = { ...files, ...newParts };
-  const zipped = zipSync(out);
-  return zipped.buffer.slice(zipped.byteOffset, zipped.byteOffset + zipped.byteLength) as ArrayBuffer;
 }
 
 /** Declaration + root open tag every .rels part starts with. */
@@ -132,11 +128,12 @@ function anchorEdgeXml(tag: string, r: number, c: number, offX: number, offY: nu
 }
 
 function buildAnchorXml(spec: ChartSpec, objectIndex: number, rid: string): string {
-  // Legacy anchorless specs park below/right of their data (same rule as the UI fallback).
+  // Legacy anchorless specs park below/right of their data (same rule as the
+  // UI fallback); an unparsable range (never app-written) parks at (1,1).
   const anchor = spec.anchor ?? (() => {
-    const end = spec.range.split(':')[1]?.split(',').map(Number) ?? [0, 0];
-    const r = (end[0] ?? 0) + 1;
-    const c = (end[1] ?? 0) + 1;
+    const end = parseInternalRange(spec.range);
+    const r = (end === null ? 0 : end.r2) + 1;
+    const c = (end === null ? 0 : end.c2) + 1;
     return { from: { r, c, offX: 0, offY: 0 }, to: { r: r + 12, c: c + 7, offX: 0, offY: 0 } };
   })();
   return `<xdr:twoCellAnchor editAs="twoCell">`
@@ -149,8 +146,9 @@ function buildAnchorXml(spec: ChartSpec, objectIndex: number, rid: string): stri
 }
 
 /** Minimal-but-valid chart part mirroring what readChartData renders: labels row + one series per data row. */
-function buildChartXml(store: Store, spec: ChartSpec, sheetName: string): string {
-  const { r1, c1, r2, c2 } = parseRange(spec.range);
+function buildChartXml(store: Store, spec: ChartSpec, sheetName: string, sheetId: string): string {
+  // spec.range is app-written; an unparsable range yields an empty chart body.
+  const { r1, c1, r2, c2 } = parseInternalRange(spec.range) ?? { r1: 0, c1: 0, r2: 0, c2: 0 };
   const prefix = sheetRefPrefix(sheetName);
   const q = (addr: { r: number; c: number }): string => `${prefix}$${num2alpha(addr.c)}$${addr.r + 1}`;
 
@@ -158,19 +156,38 @@ function buildChartXml(store: Store, spec: ChartSpec, sheetName: string): string
     ? '<c:autoTitleDeleted val="1"/>'
     : `<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r><a:t>${esc(spec.title)}</a:t></a:r></a:p></c:rich></c:tx><c:overlay val="0"/></c:title><c:autoTitleDeleted val="0"/>`;
 
+  // Stored cells only: the range's cells are bucketed by row in one pass, so
+  // reading the data costs what exists, not the rectangle's area. The series
+  // blocks and the caches' point counts (the shape) stay the range's, and
+  // each cached point sits at its column offset — a dense range serializes
+  // exactly as before, a sparse one omits the empty points instead of
+  // inventing `0`/`''` fillers for cells that were never stored.
+  const rowCells = new Map<number, Map<number, Cell>>();
+  store.forEachCellInRect({ r1, c1, r2, c2 }, (r, c, cell) => {
+    let row = rowCells.get(r);
+    if (row === undefined) {
+      row = new Map();
+      rowCells.set(r, row);
+    }
+    row.set(c, cell);
+  }, sheetId);
+  const ascending = (a: number, b: number): number => a - b;
+  const labelRow = rowCells.get(r1);
+  const labelCols = labelRow === undefined ? [] : [...labelRow.keys()].filter((c) => c >= c1 && c <= c2).sort(ascending);
+
   const series: string[] = [];
   for (let r = r1 + 1; r <= r2; r += 1) {
     const idx = r - r1 - 1;
-    const name = store.getCell(r, c1)?.text ?? `系列 ${idx + 1}`;
-    const cats: string[] = [];
-    const vals: string[] = [];
-    for (let c = c1; c <= c2; c += 1) {
-      cats.push(store.getCell(r1, c)?.text ?? '');
-      const cell = store.getCell(r, c);
-      vals.push(String(typeof cell?.value === 'number' ? cell.value : Number(cell?.text ?? 0)));
-    }
-    const numCache = `<c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${vals.length}"/>${vals.map((v, i) => `<c:pt idx="${i}"><c:v>${esc(v)}</c:v></c:pt>`).join('')}</c:numCache>`;
-    const strCache = `<c:strCache><c:ptCount val="${cats.length}"/>${cats.map((v, i) => `<c:pt idx="${i}"><c:v>${esc(v)}</c:v></c:pt>`).join('')}</c:strCache>`;
+    const name = rowCells.get(r)?.get(c1)?.text ?? `系列 ${idx + 1}`;
+    const cats: string[] = labelCols.map((c) => labelRow!.get(c)!.text);
+    const dataRow = rowCells.get(r);
+    const valCols = dataRow === undefined ? [] : [...dataRow.keys()].filter((c) => c >= c1 && c <= c2).sort(ascending);
+    const vals: string[] = valCols.map((c) => {
+      const cell = dataRow!.get(c)!;
+      return String(typeof cell.value === 'number' ? cell.value : Number(cell.text ?? 0));
+    });
+    const numCache = `<c:numCache><c:formatCode>General</c:formatCode><c:ptCount val="${c2 - c1 + 1}"/>${vals.map((v, i) => `<c:pt idx="${valCols[i]! - c1}"><c:v>${esc(v)}</c:v></c:pt>`).join('')}</c:numCache>`;
+    const strCache = `<c:strCache><c:ptCount val="${c2 - c1 + 1}"/>${cats.map((v, i) => `<c:pt idx="${labelCols[i]! - c1}"><c:v>${esc(v)}</c:v></c:pt>`).join('')}</c:strCache>`;
     series.push(`<c:ser><c:idx val="${idx}"/><c:order val="${idx}"/>`
       + `<c:tx><c:strRef><c:f>${q({ r, c: c1 })}</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>${esc(name)}</c:v></c:pt></c:strCache></c:strRef></c:tx>`
       + `<c:cat><c:strRef><c:f>${q({ r: r1, c: c1 })}:${q({ r: r1, c: c2 })}</c:f>${strCache}</c:strRef></c:cat>`
@@ -190,13 +207,6 @@ function buildChartXml(store: Store, spec: ChartSpec, sheetName: string): string
 
   const legend = spec.type === 'pie' ? '<c:legend><c:legendPos val="r"/><c:overlay val="0"/></c:legend>' : '';
   return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<c:chartSpace xmlns:c="${CHART_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${REL_NS}"><c:chart>${title}<c:plotArea><c:layout/>${plot}${axes}</c:plotArea>${legend}<c:plotVisOnly val="1"/></c:chart></c:chartSpace>`;
-}
-
-function parseRange(range: string): { r1: number; c1: number; r2: number; c2: number } {
-  const parts = range.split(':');
-  const start = parts[0]?.split(',').map(Number) ?? [0, 0];
-  const end = parts[1]?.split(',').map(Number) ?? start;
-  return { r1: start[0] ?? 0, c1: start[1] ?? 0, r2: end[0] ?? 0, c2: end[1] ?? 0 };
 }
 
 const PLAIN_SHEET_NAME = /^[_A-Za-z][_A-Za-z0-9]*$/;
