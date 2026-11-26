@@ -127,4 +127,40 @@ export default [
       'no-restricted-imports': 'off',
     },
   },
+  // 分层强制③：网格常量（TOTAL_ROWS/TOTAL_COLS/ROW_HEIGHT/COL_WIDTH/
+  // ROW_HEADER_WIDTH/COL_HEADER_HEIGHT）唯一定义在 util/gridSize；
+  // renderer/coordinate 只是转发。渲染器之外不得为此依赖 renderer/coordinate。
+  {
+    files: ['src/**/*.ts', 'src/**/*.tsx'],
+    ignores: ['src/renderer/**'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [
+          {
+            group: ['**/renderer/coordinate'],
+            importNames: ['TOTAL_ROWS', 'TOTAL_COLS', 'ROW_HEIGHT', 'COL_WIDTH', 'ROW_HEADER_WIDTH', 'COL_HEADER_HEIGHT'],
+            message: '网格常量请从 util/gridSize 取；渲染器之外不得为此依赖 renderer/coordinate。',
+          },
+        ],
+      }],
+    },
+  },
+  // 分层强制④：util/ 是整张依赖图的最底层，值导入只允许 util 内部
+  //（./…、../util/…）与 ../types；不得向上依赖 commands/formula/format/
+  // renderer/selection/components 等模块，也不得引入任何三方库。
+  // 类型导入（import type）不受限。
+  {
+    files: ['src/util/**/*.ts'],
+    rules: {
+      'no-restricted-imports': ['error', {
+        patterns: [
+          {
+            regex: '^(?!\\./|\\.\\./types|\\.\\./util/)',
+            allowTypeImports: true,
+            message: '分层违规：util/ 是最底层，值导入只允许 util 内部（./…、../util/…）与 ../types；不得依赖 commands/formula/renderer/selection/components 等上层模块或任何三方库（类型导入不受限）。',
+          },
+        ],
+      }],
+    },
+  },
 ];

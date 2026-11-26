@@ -87,5 +87,9 @@ export default defineConfig(({ command }) => ({
     globals: true,
     include: ['test/**/*.test.ts', 'test/**/*.test.tsx', 'test/**/*.spec.ts', 'test/**/*.spec.tsx'],
     setupFiles: ['@testing-library/jest-dom/vitest', './test/setupEnv.ts'],
+    // What `pnpm coverage` reports: the shipped source only. Without this the
+    // table also averages in the demos, the proxy and the build scripts, which
+    // no unit test loads.
+    coverage: { include: ['src/**'] },
   },
 }));

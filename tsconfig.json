@@ -42,7 +42,9 @@
     "e2e/**/*.ts",
     "vite.config.ts",
     "vite.core.config.ts",
-    "playwright.config.ts"
+    "vitest.scale.config.ts",
+    "playwright.config.ts",
+    "playwright.scale.config.ts"
   ],
   "exclude": ["node_modules", "dist"]
 }

@@ -1,8 +1,9 @@
 {
   "name": "web-spreadsheet",
   "version": "2.1.0",
-  "description": "A modern TypeScript spreadsheet SDK with 4-layer architecture",
+  "description": "A modern TypeScript spreadsheet SDK with a layered, command-driven architecture",
   "type": "module",
+  "packageManager": "pnpm@11.25.0",
   "main": "./dist/web-spreadsheet.umd.cjs",
   "module": "./dist/web-spreadsheet.es.js",
   "types": "./dist/index.d.ts",
@@ -30,13 +31,15 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "coverage": "vitest run --coverage",
+    "bench:scale": "vitest run --config vitest.scale.config.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "typecheck:js": "tsc --noEmit -p tsconfig.checkjs.json",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "e2e:scale": "playwright test --config playwright.scale.config.ts"
   },
   "keywords": [
     "spreadsheet",
